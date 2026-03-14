@@ -1,0 +1,503 @@
+"""England 集群运行时仓储。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from pathlib import Path
+from typing import Any
+
+from psycopg.types.json import Jsonb
+
+from england_crawler.cluster.config import ClusterConfig
+from england_crawler.cluster.db import ClusterDb
+from england_crawler.cluster.task_ops import ClusterTaskOpsMixin
+from england_crawler.companies_house.client import normalize_company_name
+from england_crawler.companies_house.input_xlsx import iter_company_names_from_xlsx
+from england_crawler.dnb.catalog import build_industry_seed_segments
+from england_crawler.snov.client import extract_domain
+
+
+DNB_PIPELINE = "england_dnb"
+CH_PIPELINE = "england_companies_house"
+FIRECRAWL_WAIT_SECONDS = 15.0
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_after(seconds: float) -> datetime:
+    return _utc_now() + timedelta(seconds=max(float(seconds), 0.0))
+
+
+def _build_task_id(pipeline: str, task_type: str, entity_id: str) -> str:
+    return f"{pipeline}:{task_type}:{entity_id}"
+
+
+def _clip_text(value: object, limit: int = 500) -> str:
+    text = str(value or "").strip()
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _parse_json_list(raw: object) -> list[str]:
+    if isinstance(raw, list):
+        source = raw
+    else:
+        try:
+            source = json.loads(str(raw or "[]"))
+        except json.JSONDecodeError:
+            source = []
+    if not isinstance(source, list):
+        return []
+    values: list[str] = []
+    for item in source:
+        text = str(item or "").strip().lower()
+        if text and text not in values:
+            values.append(text)
+    return values
+
+
+def _dump_json_list(items: list[str]) -> Jsonb:
+    cleaned: list[str] = []
+    for item in items:
+        text = str(item or "").strip().lower()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return Jsonb(cleaned)
+
+
+def _merge_text(current: object, incoming: object) -> str:
+    fresh = str(incoming or "").strip()
+    return fresh or str(current or "").strip()
+
+
+def _build_comp_id(company_name: str) -> str:
+    normalized = normalize_company_name(company_name)
+    return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+
+
+@dataclass(slots=True)
+class ClaimedTask:
+    task_id: str
+    pipeline: str
+    task_type: str
+    entity_id: str
+    retries: int
+    payload: dict[str, object]
+
+
+@dataclass(slots=True)
+class FirecrawlKeyLease:
+    key_hash: str
+    key_value: str
+
+
+class ClusterRepository(ClusterTaskOpsMixin):
+    """England 集群核心仓储。"""
+
+    _utc_now = staticmethod(_utc_now)
+    _utc_after = staticmethod(_utc_after)
+    _build_task_id = staticmethod(_build_task_id)
+    _clip_text = staticmethod(_clip_text)
+    _parse_json_list = staticmethod(_parse_json_list)
+    _dump_json_list = staticmethod(_dump_json_list)
+    _merge_text = staticmethod(_merge_text)
+
+    def __init__(self, db: ClusterDb, config: ClusterConfig) -> None:
+        self._db = db
+        self._config = config
+
+    def register_worker(
+        self,
+        *,
+        worker_id: str,
+        host_name: str,
+        platform: str,
+        capabilities: list[str],
+        git_commit: str,
+        python_version: str,
+    ) -> None:
+        now = _utc_now()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO cluster_workers(
+                        worker_id, host_name, platform, capabilities_json, git_commit, python_version,
+                        status, last_heartbeat_at, created_at, updated_at
+                    ) VALUES(%s, %s, %s, %s, %s, %s, 'online', %s, %s, %s)
+                    ON CONFLICT(worker_id) DO UPDATE SET
+                        host_name = excluded.host_name,
+                        platform = excluded.platform,
+                        capabilities_json = excluded.capabilities_json,
+                        git_commit = excluded.git_commit,
+                        python_version = excluded.python_version,
+                        status = 'online',
+                        last_heartbeat_at = excluded.last_heartbeat_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        worker_id,
+                        host_name.strip(),
+                        platform.strip(),
+                        Jsonb(capabilities),
+                        git_commit.strip(),
+                        python_version.strip(),
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+
+    def heartbeat(self, worker_id: str) -> None:
+        now = _utc_now()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE cluster_workers
+                    SET status = 'online', last_heartbeat_at = %s, updated_at = %s
+                    WHERE worker_id = %s
+                    """,
+                    (now, now, worker_id),
+                )
+
+    def requeue_expired_tasks(self) -> int:
+        now = _utc_now()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE england_cluster_tasks
+                    SET status = 'pending', lease_owner = '', lease_expires_at = NULL, next_run_at = %s, updated_at = %s
+                    WHERE status = 'leased' AND lease_expires_at IS NOT NULL AND lease_expires_at <= %s
+                    """,
+                    (now, now, now),
+                )
+                task_rows = cur.rowcount
+                cur.execute(
+                    """
+                    UPDATE england_firecrawl_domain_cache
+                    SET status = 'pending', lease_owner = '', lease_expires_at = NULL, next_retry_at = %s, updated_at = %s
+                    WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= %s
+                    """,
+                    (now, now, now),
+                )
+                cur.execute(
+                    """
+                    UPDATE england_firecrawl_keys
+                    SET in_flight = 0, lease_owner = '', lease_expires_at = NULL, updated_at = %s
+                    WHERE lease_expires_at IS NOT NULL AND lease_expires_at <= %s
+                    """,
+                    (now, now),
+                )
+        return task_rows
+
+    def claim_task(self, worker_id: str, capabilities: list[str]) -> ClaimedTask | None:
+        supported = {item.strip() for item in capabilities if str(item).strip()}
+        self.requeue_expired_tasks()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                for _ in range(64):
+                    row = self._select_claimable_task(cur)
+                    if row is None:
+                        return None
+                    task = ClaimedTask(
+                        task_id=str(row["task_id"]),
+                        pipeline=str(row["pipeline"]),
+                        task_type=str(row["task_type"]),
+                        entity_id=str(row["entity_id"]),
+                        retries=int(row["retries"]),
+                        payload=dict(row["payload_json"] or {}),
+                    )
+                    if supported and task.task_type not in supported and task.pipeline not in supported:
+                        cur.execute(
+                            "UPDATE england_cluster_tasks SET next_run_at = %s, updated_at = %s WHERE task_id = %s",
+                            (_utc_after(5.0), _utc_now(), task.task_id),
+                        )
+                        continue
+                    if task.task_type in {"dnb_firecrawl", "ch_firecrawl"}:
+                        action = self._prepare_firecrawl_domain_for_task(cur, task, worker_id)
+                        if action != "claim":
+                            continue
+                    cur.execute(
+                        """
+                        UPDATE england_cluster_tasks
+                        SET status = 'leased', lease_owner = %s, lease_expires_at = %s, updated_at = %s
+                        WHERE task_id = %s
+                        """,
+                        (worker_id, _utc_after(self._config.task_lease_seconds), _utc_now(), task.task_id),
+                    )
+                    return task
+        return None
+
+    def complete_task(self, *, task_id: str, worker_id: str, result: dict[str, object]) -> None:
+        now = _utc_now()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                row = self._load_leased_task(cur, task_id, worker_id)
+                if row is None:
+                    raise RuntimeError("任务不存在或不属于当前 worker。")
+                task = ClaimedTask(
+                    task_id=str(row["task_id"]),
+                    pipeline=str(row["pipeline"]),
+                    task_type=str(row["task_type"]),
+                    entity_id=str(row["entity_id"]),
+                    retries=int(row["retries"]),
+                    payload=dict(row["payload_json"] or {}),
+                )
+                task_state = self._apply_task_completion(cur, task, result)
+                cur.execute(
+                    """
+                    INSERT INTO england_cluster_task_attempts(task_id, worker_id, result_status, error_text, started_at, finished_at)
+                    VALUES(%s, %s, %s, '', %s, %s)
+                    """,
+                    (task.task_id, worker_id, task_state, now, now),
+                )
+                if task_state == "done":
+                    self._mark_task_done_locked(cur, task.task_id)
+
+    def fail_task(self, *, task_id: str, worker_id: str, error_text: str, retry_delay_seconds: float, fatal: bool) -> None:
+        now = _utc_now()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                row = self._load_leased_task(cur, task_id, worker_id)
+                if row is None:
+                    raise RuntimeError("任务不存在或不属于当前 worker。")
+                task = ClaimedTask(
+                    task_id=str(row["task_id"]),
+                    pipeline=str(row["pipeline"]),
+                    task_type=str(row["task_type"]),
+                    entity_id=str(row["entity_id"]),
+                    retries=int(row["retries"]),
+                    payload=dict(row["payload_json"] or {}),
+                )
+                attempt = task.retries + 1
+                terminal = fatal or attempt >= self._task_retry_limit(task.task_type)
+                self._apply_task_failure_side_effect(cur, task, error_text, retry_delay_seconds, terminal)
+                cur.execute(
+                    """
+                    INSERT INTO england_cluster_task_attempts(task_id, worker_id, result_status, error_text, started_at, finished_at)
+                    VALUES(%s, %s, %s, %s, %s, %s)
+                    """,
+                    (task.task_id, worker_id, "failed" if terminal else "retry", _clip_text(error_text), now, now),
+                )
+                if terminal:
+                    cur.execute(
+                        """
+                        UPDATE england_cluster_tasks
+                        SET status = 'failed', retries = %s, lease_owner = '', lease_expires_at = NULL, last_error = %s, updated_at = %s
+                        WHERE task_id = %s
+                        """,
+                        (attempt, _clip_text(error_text), _utc_now(), task.task_id),
+                    )
+                else:
+                    self._reschedule_task_locked(cur, task.task_id, retries=attempt, delay_seconds=retry_delay_seconds, error_text=error_text, payload=task.payload)
+
+    def acquire_firecrawl_key(self, worker_id: str) -> FirecrawlKeyLease:
+        now = _utc_now()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE england_firecrawl_keys
+                    SET state = 'active', cooldown_until = NULL, updated_at = %s
+                    WHERE state = 'cooldown' AND cooldown_until IS NOT NULL AND cooldown_until <= %s
+                    """,
+                    (now, now),
+                )
+                cur.execute(
+                    """
+                    SELECT key_hash, key_value
+                    FROM england_firecrawl_keys
+                    WHERE state != 'disabled' AND (cooldown_until IS NULL OR cooldown_until <= %s) AND in_flight < %s
+                    ORDER BY in_flight ASC, COALESCE(last_used_at, '1970-01-01'::timestamptz) ASC, key_hash ASC
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    (now, self._config.firecrawl_key_per_limit),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError("没有可用 firecrawl key。")
+                cur.execute(
+                    """
+                    UPDATE england_firecrawl_keys
+                    SET in_flight = in_flight + 1, lease_owner = %s, lease_expires_at = %s, last_used_at = %s, updated_at = %s
+                    WHERE key_hash = %s
+                    """,
+                    (worker_id, _utc_after(self._config.task_lease_seconds), now, now, str(row["key_hash"])),
+                )
+                return FirecrawlKeyLease(key_hash=str(row["key_hash"]), key_value=str(row["key_value"]))
+
+    def release_firecrawl_key(self, *, key_hash: str, outcome: str, retry_after_seconds: float = 0.0, reason: str = "") -> None:
+        now = _utc_now()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                row = cur.execute("SELECT failure_count FROM england_firecrawl_keys WHERE key_hash = %s", (key_hash,)).fetchone()
+                if row is None:
+                    return
+                failure_count = int(row["failure_count"] or 0)
+                in_flight_sql = "GREATEST(in_flight - 1, 0)"
+                if outcome == "success":
+                    cur.execute(
+                        f"UPDATE england_firecrawl_keys SET in_flight = {in_flight_sql}, state = 'active', failure_count = 0, cooldown_until = NULL, lease_owner = '', lease_expires_at = NULL, disabled_reason = '', updated_at = %s WHERE key_hash = %s",
+                        (now, key_hash),
+                    )
+                elif outcome == "rate_limited":
+                    cur.execute(
+                        f"UPDATE england_firecrawl_keys SET in_flight = {in_flight_sql}, state = 'cooldown', failure_count = failure_count + 1, cooldown_until = %s, lease_owner = '', lease_expires_at = NULL, updated_at = %s WHERE key_hash = %s",
+                        (_utc_after(retry_after_seconds or self._config.firecrawl_key_cooldown_seconds), now, key_hash),
+                    )
+                elif outcome == "disable":
+                    cur.execute(
+                        f"UPDATE england_firecrawl_keys SET in_flight = {in_flight_sql}, state = 'disabled', cooldown_until = NULL, lease_owner = '', lease_expires_at = NULL, disabled_reason = %s, updated_at = %s WHERE key_hash = %s",
+                        (_clip_text(reason, 200), now, key_hash),
+                    )
+                else:
+                    next_failure = failure_count + 1
+                    if next_failure >= self._config.firecrawl_key_failure_threshold:
+                        cur.execute(
+                            f"UPDATE england_firecrawl_keys SET in_flight = {in_flight_sql}, state = 'cooldown', failure_count = %s, cooldown_until = %s, lease_owner = '', lease_expires_at = NULL, updated_at = %s WHERE key_hash = %s",
+                            (next_failure, _utc_after(self._config.firecrawl_key_cooldown_seconds), now, key_hash),
+                        )
+                    else:
+                        cur.execute(
+                            f"UPDATE england_firecrawl_keys SET in_flight = {in_flight_sql}, failure_count = %s, lease_owner = '', lease_expires_at = NULL, updated_at = %s WHERE key_hash = %s",
+                            (next_failure, now, key_hash),
+                        )
+
+    def submit_dnb_seed_tasks(self) -> int:
+        count = 0
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                for segment in build_industry_seed_segments("gb"):
+                    cur.execute(
+                        """
+                        INSERT INTO england_dnb_discovery_nodes(
+                            segment_id, industry_path, country_iso_two_code, region_name, city_name,
+                            expected_count, task_status, task_retries, updated_at
+                        ) VALUES(%s, %s, %s, %s, %s, %s, 'pending', 0, %s)
+                        ON CONFLICT(segment_id) DO NOTHING
+                        """,
+                        (segment.segment_id, segment.industry_path, segment.country_iso_two_code, segment.region_name, segment.city_name, segment.expected_count, _utc_now()),
+                    )
+                    count += self._upsert_task_locked(cur, pipeline=DNB_PIPELINE, task_type="dnb_discovery", entity_id=segment.segment_id, payload=segment.to_dict(), force_pending=True)
+        return count
+
+    def submit_companies_house_input(self, input_xlsx: Path, max_companies: int = 0) -> int:
+        names = iter_company_names_from_xlsx(input_xlsx, max_companies=max_companies)
+        inserted = 0
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                for company_name in names:
+                    normalized_name = normalize_company_name(company_name)
+                    if not normalized_name:
+                        continue
+                    comp_id = _build_comp_id(company_name)
+                    cur.execute(
+                        """
+                        INSERT INTO england_ch_companies(comp_id, company_name, normalized_name, updated_at)
+                        VALUES(%s, %s, %s, %s)
+                        ON CONFLICT(comp_id) DO UPDATE SET
+                            company_name = CASE WHEN england_ch_companies.company_name = '' THEN EXCLUDED.company_name ELSE england_ch_companies.company_name END,
+                            updated_at = EXCLUDED.updated_at
+                        """,
+                        (comp_id, company_name.strip(), normalized_name, _utc_now()),
+                    )
+                    inserted += self._upsert_task_locked(cur, pipeline=CH_PIPELINE, task_type="ch_lookup", entity_id=comp_id, payload={"comp_id": comp_id, "company_name": company_name.strip(), "company_number": "", "homepage": "", "domain": ""}, force_pending=True)
+                    self._upsert_task_locked(cur, pipeline=CH_PIPELINE, task_type="ch_gmap", entity_id=comp_id, payload={"comp_id": comp_id, "company_name": company_name.strip(), "company_number": "", "homepage": "", "domain": ""}, force_pending=True)
+        return inserted
+
+    def _select_claimable_task(self, cur) -> dict[str, Any] | None:
+        cur.execute(
+            """
+            SELECT task_id, pipeline, task_type, entity_id, retries, payload_json
+            FROM england_cluster_tasks
+            WHERE status = 'pending' AND next_run_at <= %s
+            ORDER BY next_run_at ASC, updated_at ASC, task_id ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """,
+            (_utc_now(),),
+        )
+        return cur.fetchone()
+
+    def _load_leased_task(self, cur, task_id: str, worker_id: str) -> dict[str, Any] | None:
+        cur.execute(
+            """
+            SELECT task_id, pipeline, task_type, entity_id, retries, payload_json
+            FROM england_cluster_tasks
+            WHERE task_id = %s AND status = 'leased' AND lease_owner = %s
+            FOR UPDATE
+            """,
+            (task_id, worker_id),
+        )
+        return cur.fetchone()
+
+    def _task_retry_limit(self, task_type: str) -> int:
+        policy = self._config.retry_policy
+        return {
+            "dnb_discovery": 6,
+            "dnb_list_segment": 6,
+            "dnb_detail": policy.dnb_detail_max_retries,
+            "dnb_gmap": policy.dnb_gmap_max_retries,
+            "dnb_firecrawl": policy.dnb_firecrawl_max_retries,
+            "ch_lookup": policy.ch_lookup_max_retries,
+            "ch_gmap": policy.ch_gmap_max_retries,
+            "ch_firecrawl": policy.ch_firecrawl_max_retries,
+        }.get(task_type, 5)
+
+    def _prepare_firecrawl_domain_for_task(self, cur, task: ClaimedTask, worker_id: str) -> str:
+        domain = str(task.payload.get("domain", "")).strip().lower() or extract_domain(str(task.payload.get("homepage", "")).strip())
+        if not domain:
+            self._mark_entity_firecrawl_failed_locked(cur, task, "缺少域名")
+            self._mark_task_done_locked(cur, task.task_id)
+            return "done"
+        task.payload["domain"] = domain
+        cur.execute("SELECT * FROM england_firecrawl_domain_cache WHERE domain = %s FOR UPDATE", (domain,))
+        row = cur.fetchone()
+        if row is not None and str(row["status"]) == "done":
+            self._apply_firecrawl_done_locked(cur, task, _parse_json_list(row["emails_json"]))
+            self._mark_task_done_locked(cur, task.task_id)
+            return "done"
+        if row is not None and str(row["status"]) == "running":
+            if row["lease_expires_at"] is None or row["lease_expires_at"] > _utc_now():
+                self._reschedule_task_locked(cur, task.task_id, retries=task.retries, delay_seconds=FIRECRAWL_WAIT_SECONDS, error_text="等待同域名查询完成", payload=task.payload)
+                return "wait"
+        cur.execute(
+            """
+            INSERT INTO england_firecrawl_domain_cache(domain, status, emails_json, next_retry_at, lease_owner, lease_expires_at, last_error, updated_at)
+            VALUES(%s, 'running', '[]'::jsonb, NULL, %s, %s, '', %s)
+            ON CONFLICT(domain) DO UPDATE SET
+                status = 'running',
+                lease_owner = EXCLUDED.lease_owner,
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                next_retry_at = NULL,
+                updated_at = EXCLUDED.updated_at,
+                last_error = ''
+            """,
+            (domain, worker_id, _utc_after(self._config.task_lease_seconds), _utc_now()),
+        )
+        cur.execute("UPDATE england_cluster_tasks SET payload_json = %s WHERE task_id = %s", (Jsonb(task.payload), task.task_id))
+        return "claim"
+
+    def _apply_task_completion(self, cur, task: ClaimedTask, result: dict[str, object]) -> str:
+        handler = {
+            "dnb_discovery": self._complete_dnb_discovery_locked,
+            "dnb_list_segment": self._complete_dnb_list_segment_locked,
+            "dnb_detail": self._complete_dnb_detail_locked,
+            "dnb_gmap": self._complete_dnb_gmap_locked,
+            "dnb_firecrawl": self._complete_dnb_firecrawl_locked,
+            "ch_lookup": self._complete_ch_lookup_locked,
+            "ch_gmap": self._complete_ch_gmap_locked,
+            "ch_firecrawl": self._complete_ch_firecrawl_locked,
+        }.get(task.task_type)
+        if handler is None:
+            raise RuntimeError(f"不支持的任务类型：{task.task_type}")
+        return handler(cur, task, result)

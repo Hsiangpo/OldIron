@@ -5,3 +5,4 @@ requests>=2.31.0
 openpyxl>=3.1.0
 websocket-client>=1.8.0
 openai>=1.68.0
+psycopg[binary]>=3.2.0

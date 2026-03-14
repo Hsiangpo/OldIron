@@ -1,0 +1,518 @@
+"""England 集群 worker。"""
+
+from __future__ import annotations
+
+import logging
+import platform
+import random
+import re
+import socket
+import sys
+import time
+from dataclasses import dataclass
+from urllib.parse import urlparse
+
+import requests
+
+from england_crawler.cluster.config import ClusterConfig
+from england_crawler.companies_house.client import CompaniesHouseClient
+from england_crawler.companies_house.client import select_best_candidate
+from england_crawler.dnb.browser_cookie import DnbCookieProvider
+from england_crawler.dnb.client import DnbClient
+from england_crawler.dnb.client import extract_child_segments
+from england_crawler.dnb.client import parse_company_listing
+from england_crawler.dnb.client import parse_company_profile
+from england_crawler.dnb.models import CompanyRecord
+from england_crawler.dnb.models import Segment
+from england_crawler.fc_email.client import FirecrawlClient
+from england_crawler.fc_email.client import FirecrawlClientConfig
+from england_crawler.fc_email.client import FirecrawlError
+from england_crawler.fc_email.key_pool import KeyLease
+from england_crawler.fc_email.llm_client import EmailUrlLlmClient
+from england_crawler.google_maps import GoogleMapsClient
+from england_crawler.google_maps import GoogleMapsConfig
+from england_crawler.google_maps import GoogleMapsPlaceResult
+from england_crawler.snov.client import extract_domain
+
+
+logger = logging.getLogger(__name__)
+URL_KEYWORDS = {
+    "contact": 100,
+    "support": 95,
+    "help": 90,
+    "customer": 85,
+    "about": 80,
+    "team": 78,
+    "leadership": 76,
+    "management": 74,
+    "director": 72,
+    "board": 70,
+    "privacy": 68,
+    "legal": 66,
+    "imprint": 64,
+    "career": 62,
+    "job": 60,
+    "press": 58,
+    "media": 56,
+    "terms": 54,
+    "policy": 52,
+    ".pdf": 50,
+}
+IGNORE_LOCAL_PARTS = {
+    "x",
+    "xx",
+    "xxx",
+    "test",
+    "example",
+    "sample",
+    "yourname",
+    "youremail",
+    "email",
+    "noreply",
+    "no-reply",
+    "donotreply",
+    "do-not-reply",
+}
+CORP_SUFFIX_PATTERNS = (
+    r"\bco\.?\s*,?\s*ltd\.?\b",
+    r"\bcorporation\b",
+    r"\bcorp\.?\b",
+    r"\bcompany\b",
+    r"\blimited\b",
+    r"\bltd\.?\b",
+)
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _strip_company_suffix(name: str) -> str:
+    value = _normalize_text(name)
+    lowered = value
+    for pattern in CORP_SUFFIX_PATTERNS:
+        lowered = re.sub(pattern, "", lowered, flags=re.I).strip(" ,()-")
+    return _normalize_text(lowered)
+
+
+def _build_gmap_queries(task: dict[str, object]) -> list[str]:
+    parts = [str(task.get("city", "")), str(task.get("region", "")), str(task.get("country", "")) or "United Kingdom"]
+    names = [str(task.get("company_name_en", "")), _strip_company_suffix(str(task.get("company_name_en", "")))]
+    queries: list[str] = []
+    for name in names:
+        for suffix in (
+            " ".join(part for part in parts if part),
+            f"{task.get('region', '')} {task.get('country', '')}".strip(),
+            str(task.get("country", "")),
+        ):
+            query = _normalize_text(" ".join(part for part in [name, suffix] if part))
+            if query and query not in queries:
+                queries.append(query)
+    return queries
+
+
+def _merge_place_results(current: GoogleMapsPlaceResult, incoming: GoogleMapsPlaceResult) -> GoogleMapsPlaceResult:
+    return GoogleMapsPlaceResult(
+        company_name=current.company_name or incoming.company_name,
+        phone=current.phone or incoming.phone,
+        website=current.website or incoming.website,
+        score=max(int(current.score), int(incoming.score)),
+    )
+
+
+@dataclass(slots=True)
+class ClaimedTaskPayload:
+    task_id: str
+    task_type: str
+    retries: int
+    payload: dict[str, object]
+
+
+class ClusterApiClient:
+    """协调器 HTTP 客户端。"""
+
+    def __init__(self, config: ClusterConfig) -> None:
+        self._config = config
+        self._session = requests.Session()
+
+    def register_worker(self, capabilities: list[str]) -> None:
+        self._post(
+            "/api/v1/workers/register",
+            {
+                "worker_id": self._config.worker_id,
+                "host_name": socket.gethostname(),
+                "platform": platform.platform(),
+                "capabilities": capabilities,
+                "git_commit": "",
+                "python_version": sys.version.split()[0],
+            },
+        )
+
+    def heartbeat(self) -> None:
+        self._post("/api/v1/workers/heartbeat", {"worker_id": self._config.worker_id})
+
+    def claim_task(self, capabilities: list[str]) -> ClaimedTaskPayload | None:
+        payload = self._post(
+            "/api/v1/tasks/claim",
+            {"worker_id": self._config.worker_id, "capabilities": capabilities},
+        )
+        task = payload.get("task")
+        if not isinstance(task, dict):
+            return None
+        return ClaimedTaskPayload(
+            task_id=str(task["task_id"]),
+            task_type=str(task["task_type"]),
+            retries=int(task["retries"]),
+            payload=dict(task.get("payload", {}) or {}),
+        )
+
+    def complete_task(self, task_id: str, result: dict[str, object]) -> None:
+        self._post(
+            f"/api/v1/tasks/{task_id}/complete",
+            {"worker_id": self._config.worker_id, "result": result},
+        )
+
+    def fail_task(self, task_id: str, *, error_text: str, retry_delay_seconds: float, fatal: bool) -> None:
+        self._post(
+            f"/api/v1/tasks/{task_id}/fail",
+            {
+                "worker_id": self._config.worker_id,
+                "error_text": error_text,
+                "retry_delay_seconds": retry_delay_seconds,
+                "fatal": fatal,
+            },
+        )
+
+    def acquire_firecrawl_key(self) -> dict[str, str]:
+        payload = self._post("/api/v1/firecrawl/lease", {"worker_id": self._config.worker_id})
+        return {"key_hash": str(payload["key_hash"]), "key_value": str(payload["key_value"])}
+
+    def release_firecrawl_key(
+        self,
+        *,
+        key_hash: str,
+        outcome: str,
+        retry_after_seconds: float = 0.0,
+        reason: str = "",
+    ) -> None:
+        self._post(
+            "/api/v1/firecrawl/release",
+            {
+                "key_hash": key_hash,
+                "outcome": outcome,
+                "retry_after_seconds": retry_after_seconds,
+                "reason": reason,
+            },
+        )
+
+    def _post(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+        headers = {"Content-Type": "application/json"}
+        if self._config.cluster_token:
+            headers["X-OldIron-Token"] = self._config.cluster_token
+        response = self._session.post(
+            self._config.coordinator_base_url + path,
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError(f"协调器返回非法响应：{path}")
+        if data.get("error"):
+            raise RuntimeError(str(data["error"]))
+        return data
+
+
+class CoordinatorKeyPool:
+    """借助协调器租约 Firecrawl key。"""
+
+    def __init__(self, api: ClusterApiClient) -> None:
+        self._api = api
+        self._leases: dict[int, str] = {}
+        self._lease_index = 0
+
+    def acquire(self) -> KeyLease:
+        key = self._api.acquire_firecrawl_key()
+        self._lease_index += 1
+        self._leases[self._lease_index] = key["key_hash"]
+        return KeyLease(key=key["key_value"], index=self._lease_index)
+
+    def release(self, lease: KeyLease) -> None:
+        return None
+
+    def mark_success(self, lease: KeyLease) -> None:
+        key_hash = self._leases.pop(lease.index, "")
+        if key_hash:
+            self._api.release_firecrawl_key(key_hash=key_hash, outcome="success")
+
+    def mark_rate_limited(self, lease: KeyLease, retry_after: float | None = None) -> None:
+        key_hash = self._leases.pop(lease.index, "")
+        if key_hash:
+            self._api.release_firecrawl_key(
+                key_hash=key_hash,
+                outcome="rate_limited",
+                retry_after_seconds=float(retry_after or 0.0),
+            )
+
+    def mark_failure(self, lease: KeyLease) -> None:
+        key_hash = self._leases.pop(lease.index, "")
+        if key_hash:
+            self._api.release_firecrawl_key(key_hash=key_hash, outcome="failure")
+
+    def disable(self, lease: KeyLease, reason: str) -> None:
+        key_hash = self._leases.pop(lease.index, "")
+        if key_hash:
+            self._api.release_firecrawl_key(key_hash=key_hash, outcome="disable", reason=reason)
+
+
+class ClusterEmailService:
+    """复用 Firecrawl + LLM 的集群版邮箱发现。"""
+
+    def __init__(self, config: ClusterConfig, api: ClusterApiClient) -> None:
+        self._config = config
+        self._firecrawl = FirecrawlClient(
+            key_pool=CoordinatorKeyPool(api),
+            config=FirecrawlClientConfig(
+                timeout_seconds=config.firecrawl_timeout_seconds,
+                max_retries=config.firecrawl_max_retries,
+            ),
+        )
+        self._llm = EmailUrlLlmClient(
+            api_key=config.llm_api_key,
+            base_url=config.llm_base_url,
+            model=config.llm_model,
+            reasoning_effort=config.llm_reasoning_effort,
+            timeout_seconds=config.llm_timeout_seconds,
+        )
+
+    def discover_emails(self, *, company_name: str, homepage: str, domain: str) -> list[str]:
+        start_url = str(homepage or "").strip()
+        if not start_url and domain:
+            start_url = f"https://{domain.strip().lower()}"
+        if not start_url:
+            return []
+        mapped_urls = self._firecrawl.map_site(start_url, limit=200)
+        ranked_urls = self._prefilter_urls(start_url, mapped_urls)
+        llm_urls = self._llm.pick_candidate_urls(
+            company_name=company_name,
+            domain=extract_domain(start_url),
+            homepage=start_url,
+            candidate_urls=ranked_urls,
+            target_count=self._config.firecrawl_llm_pick_count,
+        )
+        final_urls = self._build_final_urls(start_url, llm_urls, ranked_urls)
+        emails = self._extract_emails_with_fallback(final_urls)
+        same_domain = self._filter_same_domain_emails(start_url, emails)
+        return self._clean_emails(same_domain or emails)
+
+    def _prefilter_urls(self, start_url: str, mapped_urls: list[str]) -> list[str]:
+        host = urlparse(start_url).netloc.lower()
+        ranked: list[tuple[int, str]] = []
+        seen: set[str] = set()
+        for raw in [start_url, *mapped_urls]:
+            url = str(raw or "").strip()
+            if not url or url in seen or not url.startswith("http"):
+                continue
+            if not self._same_host(host, url):
+                continue
+            seen.add(url)
+            ranked.append((self._score_url(start_url, url), url))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        return [url for _score, url in ranked[: max(self._config.firecrawl_prefilter_limit, 1)]]
+
+    def _build_final_urls(self, start_url: str, llm_urls: list[str], ranked_urls: list[str]) -> list[str]:
+        urls: list[str] = []
+        for raw in [start_url, *llm_urls, *ranked_urls]:
+            url = str(raw or "").strip()
+            if url and url not in urls:
+                urls.append(url)
+            if len(urls) >= max(self._config.firecrawl_extract_max_urls, 1):
+                break
+        return urls
+
+    def _extract_emails_with_fallback(self, urls: list[str]) -> list[str]:
+        try:
+            return self._firecrawl.extract_emails(urls).emails
+        except FirecrawlError as exc:
+            if exc.code not in {"firecrawl_extract_failed", "firecrawl_extract_timeout", "firecrawl_http_404"}:
+                raise
+        merged: list[str] = []
+        for url in urls:
+            try:
+                result = self._firecrawl.extract_emails([url])
+            except FirecrawlError as exc:
+                if exc.code in {"firecrawl_http_404", "firecrawl_extract_failed", "firecrawl_extract_timeout"}:
+                    continue
+                raise
+            for email in result.emails:
+                value = str(email or "").strip().lower()
+                if value and value not in merged:
+                    merged.append(value)
+        return merged
+
+    def _filter_same_domain_emails(self, start_url: str, emails: list[str]) -> list[str]:
+        domain = extract_domain(start_url)
+        if not domain:
+            return []
+        matched: list[str] = []
+        for email in emails:
+            value = str(email or "").strip().lower()
+            if "@" not in value:
+                continue
+            email_domain = value.split("@", 1)[1]
+            if email_domain == domain or email_domain.endswith(f".{domain}"):
+                if value not in matched:
+                    matched.append(value)
+        return matched
+
+    def _clean_emails(self, emails: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for email in emails:
+            value = str(email or "").strip().lower()
+            if "@" not in value:
+                continue
+            if value.split("@", 1)[0] in IGNORE_LOCAL_PARTS:
+                continue
+            if value not in cleaned:
+                cleaned.append(value)
+        return cleaned
+
+    def _score_url(self, start_url: str, url: str) -> int:
+        if url == start_url:
+            return 1000
+        lowered = url.lower()
+        score = sum(weight for keyword, weight in URL_KEYWORDS.items() if keyword in lowered)
+        return score - min(lowered.count("/"), 10)
+
+    def _same_host(self, host: str, url: str) -> bool:
+        target = urlparse(url).netloc.lower()
+        return bool(target and (target == host or target.endswith(f".{host}") or host.endswith(f".{target}")))
+
+
+class ClusterWorkerRuntime:
+    """England 集群 worker 主循环。"""
+
+    def __init__(self, config: ClusterConfig) -> None:
+        self._config = config
+        self._api = ClusterApiClient(config)
+        self._email_service = ClusterEmailService(config, self._api)
+        self._gmap_client = GoogleMapsClient(GoogleMapsConfig(hl="en", gl="gb"))
+        provider = DnbCookieProvider(project_root=config.project_root, logger=logger)
+        self._dnb_client = DnbClient(cookie_header=provider.get(force_refresh=True), cookie_provider=provider)
+        self._ch_client = CompaniesHouseClient(worker_label=config.worker_id)
+        self._last_heartbeat = 0.0
+        self._capabilities = [
+            "dnb_discovery",
+            "dnb_list_segment",
+            "dnb_detail",
+            "dnb_gmap",
+            "dnb_firecrawl",
+            "ch_lookup",
+            "ch_gmap",
+            "ch_firecrawl",
+        ]
+
+    def run_forever(self) -> None:
+        self._config.validate_worker_runtime()
+        self._api.register_worker(self._capabilities)
+        while True:
+            self._maybe_heartbeat()
+            task = self._api.claim_task(self._capabilities)
+            if task is None:
+                time.sleep(self._config.worker_poll_seconds)
+                continue
+            self._handle_task(task)
+
+    def _maybe_heartbeat(self) -> None:
+        now = time.monotonic()
+        if now - self._last_heartbeat < self._config.worker_heartbeat_seconds:
+            return
+        self._api.heartbeat()
+        self._last_heartbeat = now
+
+    def _handle_task(self, task: ClaimedTaskPayload) -> None:
+        try:
+            result = self._execute_task(task)
+            self._api.complete_task(task.task_id, result)
+        except FirecrawlError as exc:
+            fatal = exc.code in {"firecrawl_401", "firecrawl_402"}
+            delay = max(float(exc.retry_after or 0.0), 5.0) if exc.code == "firecrawl_429" else 30.0
+            self._api.fail_task(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=fatal)
+        except Exception as exc:  # noqa: BLE001
+            delay = min((2 ** max(task.retries, 1)) * 5.0, 180.0)
+            self._api.fail_task(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=False)
+
+    def _execute_task(self, task: ClaimedTaskPayload) -> dict[str, object]:
+        payload = task.payload
+        if task.task_type == "dnb_discovery":
+            segment = Segment.from_dict(payload)
+            result = self._dnb_client.fetch_company_listing_page(segment=segment, page_number=1)
+            return {
+                "expected_count": int(result.get("candidatesMatchedQuantityInt", 0) or 0),
+                "children": [item.to_dict() for item in extract_child_segments(segment.industry_path, result, segment.country_iso_two_code)],
+            }
+        if task.task_type == "dnb_list_segment":
+            segment = Segment.from_dict(payload)
+            page_number = int(payload.get("next_page", 1) or 1)
+            raw = self._dnb_client.fetch_company_listing_page(segment=segment, page_number=page_number)
+            rows = [item.to_dict() for item in parse_company_listing(raw)]
+            page_count = int(raw.get("pageCount", 1) or 1)
+            done = page_number >= page_count or not rows
+            return {
+                "rows": rows,
+                "next_page": page_number + 1,
+                "total_pages": page_count,
+                "done": done,
+            }
+        if task.task_type == "dnb_detail":
+            company = parse_company_profile(
+                record=CompanyRecord.from_dict(payload),
+                payload=self._dnb_client.fetch_company_profile(str(payload.get("company_name_url", ""))),
+            )
+            return company.to_dict()
+        if task.task_type == "dnb_gmap":
+            result = GoogleMapsPlaceResult()
+            for query in _build_gmap_queries(payload):
+                candidate = self._gmap_client.search_company_profile(query, company_name=str(payload.get("company_name_en", "")))
+                result = _merge_place_results(result, candidate)
+                if result.website:
+                    break
+            return {
+                "website": result.website or str(payload.get("dnb_website", "")),
+                "source": "gmap" if result.website else ("dnb" if str(payload.get("dnb_website", "")) else ""),
+                "phone": result.phone,
+                "company_name_local_gmap": result.company_name,
+            }
+        if task.task_type == "dnb_firecrawl":
+            emails = self._email_service.discover_emails(
+                company_name=str(payload.get("company_name_en_dnb", "")),
+                homepage=str(payload.get("homepage", "")),
+                domain=str(payload.get("domain", "")),
+            )
+            return {"emails": emails}
+        if task.task_type == "ch_lookup":
+            candidates = self._ch_client.search_companies(str(payload.get("company_name", "")))
+            candidate = select_best_candidate(str(payload.get("company_name", "")), candidates)
+            if candidate is None:
+                return {"company_number": "", "company_status": "not_found", "ceo": ""}
+            ceo = self._ch_client.fetch_first_active_director(candidate.company_number)
+            return {
+                "company_number": candidate.company_number,
+                "company_status": candidate.status_text,
+                "ceo": ceo,
+            }
+        if task.task_type == "ch_gmap":
+            profile = self._gmap_client.search_company_profile(
+                str(payload.get("company_name", "")),
+                str(payload.get("company_name", "")),
+            )
+            return {"homepage": profile.website, "phone": profile.phone}
+        if task.task_type == "ch_firecrawl":
+            emails = self._email_service.discover_emails(
+                company_name=str(payload.get("company_name", "")),
+                homepage=str(payload.get("homepage", "")),
+                domain=str(payload.get("domain", "")),
+            )
+            return {"emails": emails}
+        raise RuntimeError(f"未知任务类型：{task.task_type}")

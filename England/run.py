@@ -22,6 +22,7 @@ USAGE_TEXT = """用法：
 站点：
   dnb               — dnb.com 英国全站行业目录（邮箱阶段默认 Firecrawl）
   companies-house   — 英国.xlsx -> Companies House + GMap + Firecrawl
+  cluster           — England 集群模式（Postgres + coordinator + worker）
 """
 
 REQUIRED_MODULES = (
@@ -32,6 +33,7 @@ REQUIRED_MODULES = (
     ("openpyxl", "openpyxl"),
     ("websocket", "websocket-client"),
     ("openai", "openai"),
+    ("psycopg", "psycopg[binary]"),
 )
 
 
@@ -68,6 +70,12 @@ def _dispatch(argv: list[str]) -> int:
         from england_crawler.companies_house.cli import run_companies_house
 
         return run_companies_house(rest)
+    if site.startswith("cluster"):
+        from england_crawler.cluster.cli import run_cluster
+
+        cluster_args = [site.removeprefix("cluster").strip("-_")] + rest if site != "cluster" else rest
+        cluster_args = [item for item in cluster_args if item]
+        return run_cluster(cluster_args)
 
     print(f"不支持的网站: {argv[0]}")
     print(USAGE_TEXT)
