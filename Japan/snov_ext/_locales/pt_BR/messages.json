@@ -1,0 +1,479 @@
+{
+    "appName": {
+        "message": "Localizador de e-mails do Snov.io",
+        "description": "Maximum of 45 characters. The title of the application, displayed in the web store and in install dialog."
+    },
+    "appShortName": {
+        "message": "Snov.io",
+        "description": "Maximum of 12 characters recommended. Is a short version of the app's name."
+    },
+    "appDesc": {
+        "message": "Encontre endereços de e-mail em qualquer site. Com o nosso Localizador de e-mails, você pode coletar leads e aumentar suas vendas em qualquer lugar.",
+        "description": "The description of the application, displayed in the web store."
+    },
+    "rateUs_title": {
+        "message": "O quanto você está gostando do Localizador de e-mails?"
+    },
+    "rateUs_text": {
+        "message": "Obrigado por nos avaliar! Todos os dias, o Snov.io é aprimorado com o seu feedback."
+    },
+    "rateUs_badEval": {
+        "message": "Agradecemos seu feedback! Você pode nos ajudar a melhorar enviando suas sugestões para <a href=\"mailto:suporte@snov.io\">suporte@snov.io</a>."
+    },
+    "loading": {
+        "message": "carregando"
+    },
+    "refreshList": {
+        "message": "Atualizar lista"
+    },
+    "goToList": {
+        "message": "Ir para a lista <img src='../img/svg/arrow-corner.svg' alt='go-to-list-arrow'>"
+    },
+    "saveSelected": {
+        "message": "Salvar"
+    },
+    "save": {
+        "message": "Salvar"
+    },
+    "select_all": {
+        "message": "Selecionar tudo"
+    },
+    "saving": {
+        "message": "Salvando"
+    },
+    "selectAll": {
+        "message": "Selecionar/Cancelar seleção de todos"
+    },
+    "upgradePlan": {
+        "message": "Atualizar meu plano"
+    },
+    "nothingFound": {
+        "message": "Nada encontrado"
+    },
+    "error": {
+        "message": "Erro"
+    },
+    "send": {
+        "message": "Enviar"
+    },
+    "emailsNotFound": {
+        "message": "E-mails não encontrados"
+    },
+    "deletedProfile": {
+        "message": "Não é possível salvar este perfil devido à solicitação do proprietário"
+    },
+    "selected": {
+        "message": "selecionado(s)"
+    },
+    "login": {
+        "message": "Entrar"
+    },
+    "signUp": {
+        "message": "Inscrever-se"
+    },
+    "help": {
+        "message": "Ajuda"
+    },
+    "f5": {
+        "message": "Tente atualizar a página no seu navegador"
+    },
+    "creditsUsed": {
+        "message": "Créditos usados"
+    },
+    "creditFreeLimit": {
+        "message": "Desculpe, você atingiu o seu limite de conta de 10 créditos/dia"
+    },
+    "unreadMessage": {
+        "message": "Novidades e atualizações"
+    },
+    "myAccount": {
+        "message": "Minha conta"
+    },
+    "searchHistory": {
+        "message": "Histórico de pesquisa de empresas"
+    },
+    "trialMessage1": {
+        "message": "Parece que o seu teste de 30 dias terminou hoje!"
+    },
+    "trialMessage2": {
+        "message": "Você ainda pode usar o serviço gratuitamente ou explorar todo o poder do Snov.io com nossos planos mensais e anuais."
+    },
+    "trialMessage3": {
+        "message": "Visite https://app.snov.io para continuar com uma avaliação gratuita ou um plano pago para melhorar o seu desempenho!"
+    },
+    "google_domainCosts": {
+        "message": "Uma pesquisa de domínios para e-mails custa 2 créditos."
+    },
+    "google_exportCost": {
+        "message": "A exportação custará $1 créditos."
+    },
+    "google_descr": {
+        "message": "Use a Extensão do Snov.io com os resultados de pesquisa do Google para encontrar rapidamente endereços de e-mail e clientes potenciais a partir de domínios."
+    },
+    "google_neverShow": {
+        "message": "Não mostre esta dica novamente"
+    },
+    "css_update": {
+        "message": "atualizar"
+    },
+    "css_savingError": {
+        "message": "Erro ao salvar"
+    },
+    "css_unsavable": {
+        "message": "Impossível salvar"
+    },
+    "css_no_credits": {
+        "message": "Sem créditos"
+    },
+    "newVersion_contextMessage": {
+        "message": "Atualize sua extensão."
+    },
+    "newVersion_message": {
+        "message": "Já está disponível uma versão nova e atualizada do Localizador de e-mails da Snov.io. Baixe agora mesmo."
+    },
+    "newVersion_buttonUpdate": {
+        "message": "Baixar"
+    },
+    "newVersion_buttonClose": {
+        "message": "Fechar"
+    },
+    "newVersion_updateUrl": {
+        "message": "https://snov.io/knowledgebase/how-to-manually-update-snov-io-email-finder-chrome-extension/"
+    },
+    "update_title": {
+        "message": "Esta versão da extensão é obsoleta"
+    },
+    "update_text": {
+        "message": "Esta versão não funciona mais. Atualize a extensão do Localizador de e-mails para continuar coletando clientes potenciais."
+    },
+    "update_button": {
+        "message": "Atualizar agora"
+    },
+    "howToUseExtensionUrl": {
+        "message": "https://snov.io/knowledgebase/knowledgebase/how-to-use-snovio-extension-for-chrome/"
+    },
+    "company_foundOnPage": {
+        "message": "Empresas encontradas nesta página"
+    },
+    "findContacts": {
+        "message": "Encontrar contatos <img src='../img/svg/arrow-corner.svg' alt='go-to-list-arrow'>"
+    },
+    "saveCompanies": {
+        "message": "Salvar empresas"
+    },
+    "startSearch": {
+        "message": "Iniciar pesquisa"
+    },
+    "tryDifferentSearch": {
+        "message": "Tente fazer outra pesquisa no Google ou encontre mais clientes potenciais com base no cargo, setor, tamanho da empresa e outros filtros com a Pesquisa de banco de dados no aplicativo web do Snov.io."
+    },
+    "prospectNotFound": {
+        "message": "Clientes potenciais não encontrados"
+    },
+    "prospectsNotFoundText": {
+        "message": "Não há nenhum cliente potencial relacionado a esta empresa. Tente pesquisar e-mails ou usar a <a href='https://app.snov.io/database-search/' target='_blank'>Pesquisa de banco de dados</a> para coletar contatos mais completos no aplicativo web do Snov.io."
+    },
+    "emailsNotFoundText": {
+        "message": "Não há e-mails conectados a esta empresa. Tente pesquisar seu lead perfeito com mais de uma dúzia de outras <a href='https://snov.io/knowledgebase/prospecting_tools/' target='_blank'>ferramentas de prospecção</a> do Snov.io no nosso aplicativo web."
+    },
+    "back": {
+        "message": "Voltar"
+    },
+    "showAll": {
+        "message": "Mostrar tudo"
+    },
+    "prospects": {
+        "message": "Clientes potenciais"
+    },
+    "prospectsCount": {
+        "message": "Clientes potenciais"
+    },
+    "createNewList": {
+        "message": "Criar nova lista"
+    },
+    "allDomainEmails": {
+        "message": "Todos os e-mails do domínio"
+    },
+    "emailsOnly": {
+        "message": "Somente e-mails"
+    },
+    "searching": {
+        "message": "Pesquisando..."
+    },
+    "searchingAlertTextEmails": {
+        "message": "Estamos procurando por e-mails. Pode demorar um pouco."
+    },
+    "searchingAlertTextProspects": {
+        "message": "Estamos procurando por clientes potenciais. Pode demorar um pouco."
+    },
+    "doesntWorkOnFbTitle": {
+        "message": "Esta extensão não funciona no Facebook"
+    },
+    "doesntWorkOnFbText": {
+        "message": "Tente pesquisar seu lead perfeito com mais de uma dúzia de outras <a href='https://snov.io/knowledgebase/br/ferramentas_de_prospeccao-br/' target='_blank'>ferramentas de prospecção</a> do Snov.io no nosso aplicativo web."
+    },
+    "doesntWorkOnLiTitle": {
+        "message": "Esta extensão não funciona no LinkedIn"
+    },
+    "doesntWorkOnLiText": {
+        "message": "Confira as outras <a href=\"https://snov.io/extension\" target=\"_blank\">extensões</a> do Snov.io para encontrar o lead perfeito!"
+    },
+    "useAlternativeTools": {
+        "message": "Use nossas ferramentas alternativas"
+    },
+    "getRelevantEmails": {
+        "message": "Obtenha e-mails relevantes a partir dos resultados de pesquisa do Google"
+    },
+    "collectContactsWebsite": {
+        "message": "Colete contatos de qualquer site visitado"
+    },
+    "findIndEmails": {
+        "message": "Localize e-mails individuais"
+    },
+    "collectCompYelp": {
+        "message": "Colete empresas do Yelp.com"
+    },
+    "somethingWentWrong": {
+        "message": "Ops! Algo deu errado"
+    },
+    "somethingWentWrongText": {
+        "message": "Não foi possível coletar resultados desta página. Tente atualizar a página ou pesquisar outro perfil. Se o problema continuar, entre em contato conosco: <a href='mailto:suporte@snov.io'>suporte@snov.io</a>."
+    },
+    "somethingWentWrongGoogleSearch": {
+        "message": "Não foi possível coletar resultados desta página. Atualize a página ou experimente fazer outra solicitação de pesquisa. Se o problema continuar, entre em contato conosco: <a href='mailto:suporte@snov.io'>suporte@snov.io</a>."
+    },
+    "somethingWentWrongYelp": {
+        "message": "Não foi possível coletar os resultados. Tente atualizar a página ou entrar em contato conosco pelo e-mail <a href=\"mailto:suporte@snov.io\" target=\"_blank\">suporte@snov.io</a> se o problema continuar."
+    },
+    "somethingWentWrongTextShort": {
+        "message": "Tente atualizar a página. Se o problema continuar, entre em contato conosco pelo e-mail <a href=\"mailto:suporte@snov.io\">suporte@snov.io</a>."
+    },
+    "loginToStart": {
+        "message": "Entre para começar 👋"
+    },
+    "logInAlertText": {
+        "message": "Contatos pré-verificados a um clique de distância! <a href='#' class='loginLink' target='_blank'>Entre</a>. <br>Não tem conta ainda? <a class='regLink' href='#' target='_blank'>Inscreva-se. É gratuito.</a>"
+    },
+    "loginToTwitter": {
+        "message": "Entre no Twitter"
+    },
+    "loginToTwitterText": {
+        "message": "Para coletar clientes potenciais, <a href=\"https://twitter.com/i/flow/login\" target=\"_blank\">entre na sua conta</a>."
+    },
+    "chooseWhatNeed": {
+        "message": "Escolha o que você precisa:"
+    },
+    "emailsPerDomain": {
+        "message": "E-mails por domínio:"
+    },
+    "prospectsPerDomain": {
+        "message": "Clientes potenciais por domínio:"
+    },
+    "emailType": {
+        "message": "Tipo de e-mail:"
+    },
+    "departmentEmails": {
+        "message": "E-mails de departamentos"
+    },
+    "employeeEmails": {
+        "message": "E-mails de funcionários"
+    },
+    "allOther": {
+        "message": "Todos os outros"
+    },
+    "emailsFound": {
+        "message": "E-mails encontrados"
+    },
+    "prospectsFound": {
+        "message": "Clientes potenciais encontrados"
+    },
+    "trySearchingHere": {
+        "message": "Tente pesquisar aqui:"
+    },
+    "google": {
+        "message": "Google"
+    },
+    "websites": {
+        "message": "Sites"
+    },
+    "twitter": {
+        "message": "Twitter"
+    },
+    "yelp": {
+        "message": "Yelp"
+    },
+    "googleText": {
+        "message": "Encontre leads em massa nos resultados de pesquisa do Google"
+    },
+    "websitesText": {
+        "message": "Inicie a extensão em sites de empresas para ver e-mails de funcionários"
+    },
+    "twitterText": {
+        "message": "Obtenha e-mails de influenciadores e tomadores de decisão a partir dos perfis deles"
+    },
+    "yelpText": {
+        "message": "Colete perfis de empresas completos a partir das páginas do Yelp delas"
+    },
+    "googleKnowledgeLink": {
+        "message": "https://snov.io/knowledgebase/br/como-encontrar-leads-nos-resultados-de-pesquisa-do-google/"
+    },
+    "websiteKnowledgeLink": {
+        "message": "https://snov.io/knowledgebase/br/como-encontrar-leads-em-sites-de-empresas/"
+    },
+    "prospectFound": {
+        "message": "Cliente potencial encontrado"
+    },
+    "prospectFoundText": {
+        "message": "Clique em <b>Salvar</b> para coletar este cliente potencial, com dados como localização, cargo etc., e pesquisar e-mails de contato verificados."
+    },
+    "emailsSaved": {
+        "message": "Emails salvos!"
+    },
+    "prospectSaved": {
+        "message": "Cliente potencial salvo!"
+    },
+    "prospectsSaved": {
+        "message": "Clientes potenciais salvos!"
+    },
+    "prospectSavedText": {
+        "message": "Clique em <b>Ir para a lista</b> para ver os dados que você coletou."
+    },
+    "collectingProspects": {
+        "message": "Coletando clientes potenciais..."
+    },
+    "collectingProspectsText": {
+        "message": "Só feche a janela quando todos os clientes potenciais forem salvos."
+    },
+    "alreadySavedProspect": {
+        "message": "Você já salvou este cliente potencial"
+    },
+    "alreadySavedProspectText": {
+        "message": "Clique no perfil dele para ver todos os dados que você coletou ou clique em <b>Salvar</b> para salvar este cliente potencial em outra lista."
+    },
+    "youCanLeavePage": {
+        "message": "Pode sair da página que a gente cuida do resto. O cliente potencial estará na sua lista."
+    },
+    "errorSaveTwitter": {
+        "message": "Não foi possível salvar o cliente potencial. Saia do Twitter e tente novamente."
+    },
+    "backToCompanies": {
+        "message": "Voltar às empresas"
+    },
+    "tryDBSearch": {
+        "message": "Pesquisar no banco de dados"
+    },
+    "tryDBSearchText": {
+        "message": "Encontre clientes potenciais com base no cargo, setor, tamanho da empresa e outros filtros no aplicativo web do Snov.io."
+    },
+    "howSearchProspTwitter": {
+        "message": "Como pesquisar clientes potenciais no Twitter"
+    },
+    "searchTwitter_step1": {
+        "message": "Etapa 1"
+    },
+    "searchTwitter_text1": {
+        "message": "Digite uma das palavras-chave desejadas (por exemplo, nome, nome da pessoa, cargo ou outras) na pesquisa do Twitter."
+    },
+    "searchTwitter_step2": {
+        "message": "Etapa 2"
+    },
+    "searchTwitter_text2": {
+        "message": "Escolha a seção Pessoas na página de resultados."
+    },
+    "searchTwitter_step3": {
+        "message": "Etapa 3"
+    },
+    "searchTwitter_text3": {
+        "message": "Inicie a extensão para coletar clientes potenciais em massa."
+    },
+    "save_emails": {
+        "message": "Salvar e-mails"
+    },
+    "save_prospects": {
+        "message": "Salvar clientes potenciais"
+    },
+    "employees": {
+        "message": "funcionários"
+    },
+    "whatAreProspects": {
+        "message": "O que são clientes potenciais?"
+    },
+    "whatAreProspectsText": {
+        "message": "Os clientes potenciais contêm e-mails verificados, cargo, localização, setor e outras informações."
+    },
+    "whatAreEmails": {
+        "message": "E se eu escolher apenas e-mails?"
+    },
+    "whatAreEmailsText": {
+        "message": "Você obterá e-mails de funcionários e departamentos de empresas selecionadas."
+    },
+    "gotIt": {
+        "message": "Entendi"
+    },
+    "titleFindContacts": {
+        "message": "Pesquise dados de funcionários de empresas selecionadas"
+    },
+    "hintDisabledStartSearch": {
+        "message": "Selecione pelo menos um tipo de e-mail"
+    },
+    "hintFreeTariffBS": {
+        "message": "A pesquisa em massa só está disponível para usuários premium"
+    },
+    "createSelectList": {
+        "message": "Criar ou selecionar lista"
+    },
+    "viewAllResults": {
+        "message": "Ver todos os resultados"
+    },
+    "cantFindList": {
+        "message": "Não foi possível encontrar a lista"
+    },
+    "selectAnotherList": {
+        "message": "Não foi possível encontrar esta lista na sua conta. Selecione outra lista e tente de novo."
+    },
+    "emails": {
+        "message": "e-mails"
+    },
+    "viewAll": {
+        "message": "Ver todos os"
+    },
+    "results": {
+        "message": "resultados"
+    },
+    "selectAllBtn": {
+        "message": "Selecionar todos os"
+    },
+    "viewAllBtn": {
+        "message": "Ver todos os"
+    },
+    "nameYourList": {
+        "message": "Dê nome à sua lista"
+    },
+    "addToList": {
+        "message": "Adicionar à lista"
+    },
+    "messageForFreeUser": {
+        "message": "Desbloqueie a pesquisa em massa e colete milhares de leads a mais!"
+    },
+    "goPremium": {
+        "message": "Torne-se premium"
+    },
+    "BulkTitleAvailable": {
+        "message": "A pesquisa em massa só está disponível para usuários premium"
+    },
+    "saveCompaniesTitle": {
+        "message": "Clique para salvar os perfis de empresa selecionados para uma lista de empresas."
+    },
+    "selected_of": {
+        "message": "Selecionado(s) {selectedCount} de {totalSub}"
+    },
+    "restricted_company": {
+        "message": "Empresa restrita"
+    },
+    "unfortunately_we_are_unable_to_provide_emails": {
+        "message": "Por solicitação desta empresa, infelizmente não podemos fornecer e-mails dela."
+    },
+    "unfortunately_we_are_unable_to_provide_data": {
+        "message": "Por solicitação desta empresa, infelizmente não podemos fornecer dados dela."
+    }
+}

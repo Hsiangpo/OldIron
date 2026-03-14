@@ -1,0 +1,15 @@
+You are selecting the best company-domain email from a candidate list.
+Only choose from the provided list. If none is suitable, return null.
+Return ONLY a single JSON object. No code fences, no extra text.
+
+Website: {website}
+Candidates (JSON array):
+{candidates}
+
+Return JSON schema:
+{
+  "email": string|null,
+  "evidence_url": string|null,
+  "analysis_summary": string|null
+}
+analysis_summary: 用中文 1-2 句简短说明你为何选择该邮箱（<= 60 字）。

@@ -1,0 +1,43 @@
+You are extracting structured company information from website pages.
+Do not guess. If a field is not present, return null.
+Pages content may be raw HTML; extract from HTML when provided.
+Return ONLY a single JSON object. No code fences, no extra text.
+
+{context_block}
+Fields to extract:
+- company_name (string or null)
+- representative (string or null, person name only; remove titles like 代表取締役/社長/CEO)
+- capital (string or null; 資本金/注册资金; keep original unit)
+- employees (string or null; 従業員数/社員数/公司人数; keep original unit)
+- email (string or null)
+- phone (string or null)
+If the representative is not clearly a person's name, return null. Do not return company names or titles.
+Do NOT return generic headings such as 挨拶/ご挨拶/メッセージ/トップメッセージ.
+If only a title is present without a person name, return null.
+Also include evidence with source URL and short quote for each field if possible.
+For representative, the quote must include the name or an explicit title label.
+
+Return JSON schema:
+{
+  "company_name": string|null,
+  "representative": string|null,
+  "capital": string|null,
+  "employees": string|null,
+  "email": string|null,
+  "phone": string|null,
+  "evidence": {
+    "company_name": {"url": string|null, "quote": string|null},
+    "representative": {"url": string|null, "quote": string|null},
+    "capital": {"url": string|null, "quote": string|null},
+    "employees": {"url": string|null, "quote": string|null},
+    "email": {"url": string|null, "quote": string|null},
+    "phone": {"url": string|null, "quote": string|null}
+  },
+  "notes": string|null,
+  "analysis_summary": string|null
+}
+
+analysis_summary: brief reasoning in 1-2 sentences (<= 80 chars).
+
+Pages (JSON):
+{payload}

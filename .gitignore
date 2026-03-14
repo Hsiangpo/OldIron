@@ -1,0 +1,38 @@
+# 根目录运行态目录
+.codex/
+.omx/
+.pytest_cache/
+output/
+
+# 通用 Python 缓存
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/*.pyc
+**/*.pyo
+**/*.egg-info/
+
+# 虚拟环境与依赖
+**/.venv/
+**/venv/
+**/node_modules/
+
+# 运行产物与缓存
+**/output/
+**/tmp/
+**/tmp_maps_preview_*.json
+**/.sisyphus/
+**/.chrome-profile/
+**/snov_profile/
+
+# 凭据与本地配置
+**/.env
+**/.env.local
+**/.env.*.local
+!**/.env.example
+**/cookies.json
+**/cookies/
+**/snov_extension_cookies.json
+
+# Git 元数据
+**/.git/

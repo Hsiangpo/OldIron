@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <link rel="stylesheet" href="../css/plugin.css">
+    <link rel="stylesheet" href="../css/stars.css">
+    <link rel="stylesheet" href="../css/animation.css">
+</head>
+
+<body class="pfe-scroll">
+    <div id="top">
+        <header class="main-header">
+        </header>
+    
+        <div class="credits-bar" id="userBalanceBlock">
+            <div class="credits-bar__back"></div>
+            <div class="credits-bar__progress hidden" id="userBalanceBar"></div>
+            <div id="userBalance" class="credits-bar__used"></div>
+        </div>
+    
+        <section id="stars" class="stars-container hidden"></section>
+
+        <section class="main-body pb-0" id="errorTemplates">
+            <div id="error" class="pfe-alert pfe-alert--secondary alert-status alert-status--error mb-15">
+                <div class="pfe-alert--flex-center">
+                    <span class="pfe-icon pfe-icon--warning"></span>
+                    <div>
+                        <div class="pfe-alert__title">
+                            <span data-translate="somethingWentWrong">Oops, something went wrong </span>
+                        </div>
+                        <p class="pfe-alert__text" data-translate="somethingWentWrongText">
+                            We couldn't collect results from this page. Please try refreshing the page or searching
+                            another profile. If the issue persists, contact us at <a class="regLink" href="mailto:help@snov.io">help@snov.io</a>.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pfe-alert pfe-alert--primary alert-status alert-status--warning">
+                <div class="pfe-alert--flex-center">
+                    <span class="pfe-icon pfe-icon--warning"></span>
+                    <div>
+                        <div class="pfe-alert__title">
+                            <span data-translate="somethingWentWrong">Oops! Something went wrong</span>
+                            <img class="emoji-img" width="20" src="../img/face-with-monocle.png" alt="emodji-flushed">
+                        </div>
+                        <p data-translate="somethingWentWrongTextShort" id="warningMessage" class="pfe-alert__text"></p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="notFoundTemplate" class="pfe-alert pfe-alert--primary pfe-alert--flex-center hidden">
+                <span class="pfe-icon pfe-icon--warning"></span>
+                <div>
+                    <div class="pfe-alert__title">
+                        <span data-translate="somethingWentWrong">Oops, something went wrong </span>
+                    </div>
+                    <p class="pfe-alert__text" data-translate="somethingWentWrongText">
+                        We couldn't collect results from this page. Please try refreshing the page or searching
+                        another profile. If the issue persists, contact us at <a class="regLink" href="mailto:help@snov.io">help@snov.io</a>.
+                    </p>
+                </div>
+            </div>
+
+            <div class="pfe-alert pfe-alert--thirdy alert-status alert-status--no_login mb-0">
+                <div class="pfe-alert__title">
+                    <span data-translate="loginToStart">Log in to start 👋 </span>
+                </div>
+                <p class="pfe-alert__text" data-translate="logInAlertText">
+                    Pre-verified contacts are just a click away! <a href="#" class="loginLink">Log in</a>. <br>
+                    Don't have an account yet? <a class="regLink" href="#">Sign up, it's free.</a>
+                </p>
+            </div>
+
+            <div id="warningLoginTwitter" class="pfe-alert pfe-alert--thirdy hidden">
+                <div class="pfe-alert__title">
+                    <span data-translate="loginToTwitter">Log into Twitter</span>
+                </div>
+                <p class="pfe-alert__text" data-translate="loginToTwitterText">
+                    To collect prospects, please <a href="https://twitter.com/i/flow/login" target="_blank">log into your account</a>.
+                </p>
+            </div>
+
+            <div id="warning2" class="pfe-alert pfe-alert--secondary hidden mb-15">
+                <div class="pfe-alert__title">
+                    <span data-translate="collectingProspects">Collecting prospects...</span>
+                </div>
+                <p class="pfe-alert__text" data-translate="collectingProspectsText">
+                    Don't close the window until all prospects are saved.
+                </p>
+            </div>
+
+            <div id="savedProspects" class="pfe-alert pfe-alert--thirdy hidden mb-15">
+                <div class="pfe-alert--flex-center">
+                    <span class="pfe-icon pfe-icon--success"></span>
+                    <div>
+                        <div class="pfe-alert__title" data-translate="prospectsSaved">Prospects saved!</div>
+                        <p class="pfe-alert__text" data-translate="prospectSavedText">
+                            Click <b>Go to list</b> to see the data you've collected.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+    </div>
+
+    <section id="contentPage"></section>
+
+    <div class="tab-content">
+        <div id="LinkedInSearchPeople">
+
+            <form>
+
+                <section id="peopleList" class="main-body">
+                    <div class="people-list pfe-scroll"></div>
+                </section>
+
+                <div id="errorMessage" class="alert alert-danger" style="margin: 5px 17px 0px 17px; display:none" data-translate="errorSaveTwitter">Unable to save the prospect. Log out of Twitter and try again.</div>
+
+                <section class="main-footer footer-body js-footer" id="footer">
+                    <div id="dropdownListContainer" class="pfe-select">
+                        <div class="pfe-select__static js-toggle-new-list">
+                            <span id="selectedItemUsersPeopleList" class="pfe-select__selected"></span>
+                            <div id="refreshPeopleSelect" class="pfe-select__refresh" data-translate-title="refreshList"></div>
+                        </div>
+                        <div class="pfe-select__dropdown hidden js-dropdown-list-container">
+                            <div class="pfe-select__create-list-button js-show-add-new-list" data-translate="createNewList">
+                                Create new list
+                            </div>
+                            <div class="pfe-select__dropdown-divider"></div>
+                            <div class="pfe-select__dropdown-container pfe-scroll" id="userPeopleSelect"></div>
+                        </div>
+                        <div class="pfe-select__create-list-input hidden js-add-new-list-container">
+                            <input type="text" placeholder="Name your list" maxlength="50" id="listNameInput">
+                            <div class="pfe-select__create-list-input-close js-close-add-new-list"></div>
+                        </div>
+                    </div>
+                    <button id="sendPeople" class="pfe-button pfe-button--secondary" data-toggle="button" data-translate-load-text="saving" data-translate="save">Save</button>
+                    <a class="pfe-button pfe-button--with-icon pfe-button--thirdy hidden" target="_blank" data-section="prospects" href="#" data-translate="goToList">Go to list
+                        <img src="../img/svg/arrow-corner.svg" alt=""></a>
+                </section>
+            </form>
+        </div>
+
+    </div>
+
+    <div class="hidden">
+        <div id="personTemplate">
+            <div class="person-found__list-item js-list-item">
+                <label class="pfe-checkbox">
+                    <input type="checkbox" name="people[]" checked value="">
+                    <span></span>
+                    <div class="js-contact-avatar js-contact-avatar--rounded">
+                        <img src="" alt="">
+                    </div>
+                    <div class="js-contact-name">{{company.name}}</div>
+                </label>
+                <div class="person-found__list-tag js-contact-saved-list"></div>
+            </div>
+        </div>
+
+        <div id="selectAllTemplate">
+            <label class="pfe-checkbox pfe-checkbox--select-all mt-0">
+                <input type="checkbox" name="selectAll" checked value="" class="">
+                <span></span>
+                <span id="selectAll" data-translate="select_all">Select All</span>
+            </label>
+        </div>
+        <div id="currentHostEmptyTemplate">
+            <div class="main-body host-empty-template">
+                <div class="link-list">
+                    <div class="link-list__head" data-translate="howSearchProspTwitter">How to search for prospects on Twitter</div>
+                    <div class="link-list__item">
+                        <div class="link-list__title" data-translate="searchTwitter_step1">Step 1</div>
+                        <div class="link-list__content">
+                            <p class="link-list__text" data-translate="searchTwitter_text1">Type one of your target keywords (for example, person's name, job title or others) in Twitter search. </p>
+                        </div>
+                    </div>
+                    <div class="link-list__item">
+                        <div class="link-list__title" data-translate="searchTwitter_step2">Step 2</div>
+                        <div class="link-list__content">
+                            <p class="link-list__text" data-translate="searchTwitter_text2">Choose People section on the results page. </p>
+                        </div>
+                    </div>
+                    <div class="link-list__item">
+                        <div class="link-list__title" data-translate="searchTwitter_step3">Step 3</div>
+                        <div class="link-list__content">
+                            <p class="link-list__text" data-translate="searchTwitter_text3">Launch the extension to collect prospects in bulk. </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <script src="../js/libs/jquery.min.js"></script>
+    <script src="../js/libs/bootstrap.min.js"></script>
+    <script src="../js/defaultValuesLang.js"></script>
+    <script src="../js/constants.js"></script>
+    <script src="../js/utils/base.js"></script>
+    <script src="../js/common/common.js"></script>
+    <script src="../js/apiMethods.js"></script>
+    <script src="../js/CheckAuth.js"></script>
+    <script src="../js/common/commonHtml.js"></script>
+    <script src="../js/common/userLists.js"></script>
+
+    <script src="../js/twitter/twitterSearchParser.js"></script>
+    <script src="../js/twitter/twitterSearch.js"></script>
+    <script src="../js/twitter/twitterParserApi.js"></script>
+</body>
+
+</html>

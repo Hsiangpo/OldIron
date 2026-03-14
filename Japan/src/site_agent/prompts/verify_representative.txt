@@ -1,0 +1,22 @@
+﻿You are verifying whether the candidate name is a real person name (not a company name, title only, placeholder, or invalid text).
+Use only the provided pages. Do not guess.
+Return ONLY a single JSON object. No code fences, no extra text.
+
+{context_block}
+Return JSON schema:
+{
+  "is_valid": boolean,
+  "cleaned_name": string|null,
+  "evidence_url": string|null,
+  "analysis_summary": string|null
+}
+
+Rules:
+- If the candidate is a real person name, set is_valid=true.
+- If the candidate contains titles or noise (e.g. "代表取締役会長兼社長　アーネスト・エム・比嘉"), return cleaned_name without the title/extra noise.
+- If the candidate is already clean, cleaned_name should be the original name.
+- If the candidate is NOT a real person name, set is_valid=false and cleaned_name=null.
+analysis_summary: 用中文 1-2 句简短说明依据（<= 60 字）。
+
+Pages (JSON):
+{payload}

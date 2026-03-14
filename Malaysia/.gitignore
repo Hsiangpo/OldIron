@@ -1,0 +1,13 @@
+.env
+cookies/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 运行期数据库与锁文件
+output/runtime/
+
+# 临时状态文件
+output/**/state*.json

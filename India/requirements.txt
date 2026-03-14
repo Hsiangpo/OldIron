@@ -1,0 +1,6 @@
+cloudscraper>=1.2.71
+beautifulsoup4>=4.12.2
+lxml>=4.9.3
+tqdm>=4.66.1
+browser-cookie3>=0.19.1
+websocket-client>=1.6.1

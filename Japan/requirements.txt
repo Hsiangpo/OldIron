@@ -1,0 +1,4 @@
+openai>=1.109.0
+requests>=2.32.0
+pdfminer.six>=20231228
+playwright>=1.42.0

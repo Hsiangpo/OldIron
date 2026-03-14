@@ -1,0 +1,58 @@
+{
+    "background": {
+        "service_worker": "js/sw.js"
+    },
+    "minimum_chrome_version": "92",
+    "action": {
+        "default_popup": "html/popup.html"
+    },
+    "content_scripts": [{
+            "js": [
+                "js/content.js"
+            ],
+            "matches": [
+                "\u003Call_urls>"
+            ]
+        },
+        {
+            "matches": [
+                "https://app.snov.io/*"
+            ],
+            "js": [
+                "js/snovio/snovioEvents.js"
+            ],
+            "run_at": "document_end"
+        },
+        {
+            "matches": [
+                "https://app.snov.io/*"
+            ],
+            "js": [
+                "js/snovio/presence.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ],
+    "default_locale": "en",
+    "description": "__MSG_appDesc__",
+    "icons": {
+        "128": "img/128.png",
+        "19": "img/19.png",
+        "48": "img/48.png"
+    },
+    "manifest_version": 3,
+    "name": "__MSG_appName__",
+    "permissions": [
+        "tabs",
+        "cookies",
+        "notifications",
+        "storage"
+    ],
+    "host_permissions": [
+        "http://*/",
+        "https://*/"
+    ],
+    "short_name": "__MSG_appShortName__",
+    "update_url": "https://clients2.google.com/service/update2/crx",
+    "version": "2.3.24"
+}
