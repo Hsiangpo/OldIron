@@ -33,7 +33,6 @@ class CoordinatorRuntime:
     def serve_forever(self) -> None:
         self._config.validate()
         initialize_schema(self._db)
-        export_cluster_snapshots(self._db, self._config.output_root, include_delivery=True)
         server = ThreadingHTTPServer(
             (self._config.coordinator_host, self._config.coordinator_port),
             self._build_handler(),
