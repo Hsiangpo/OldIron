@@ -2,15 +2,25 @@
 set -euo pipefail
 
 PROJECT_ROOT="/Users/Zhuanz1/Develop/Masterpiece/Spider/Website/OldIron/England"
-PYTHON_BIN="/opt/homebrew/bin/python3.11"
+PYTHON_BIN=""
+MINICONDA_PY="/Users/Zhuanz1/miniconda3/bin/python"
+MINICONDA_ENV_PY="/Users/Zhuanz1/miniconda3/envs/oldiron311/bin/python"
+MINICONDA_SH="/Users/Zhuanz1/miniconda.sh"
 
-if ! command -v brew >/dev/null 2>&1; then
-  echo "缺少 Homebrew，请先安装 Homebrew 后重试。"
-  exit 1
-fi
-
-if [ ! -x "$PYTHON_BIN" ]; then
+if command -v /opt/homebrew/bin/python3.11 >/dev/null 2>&1; then
+  PYTHON_BIN="/opt/homebrew/bin/python3.11"
+elif command -v brew >/dev/null 2>&1; then
   brew install python@3.11
+  PYTHON_BIN="/opt/homebrew/bin/python3.11"
+else
+  if [ ! -x "$MINICONDA_PY" ]; then
+    curl -L -o "$MINICONDA_SH" https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
+    bash "$MINICONDA_SH" -b -p /Users/Zhuanz1/miniconda3
+  fi
+  if [ ! -x "$MINICONDA_ENV_PY" ]; then
+    /Users/Zhuanz1/miniconda3/bin/conda create -y -p /Users/Zhuanz1/miniconda3/envs/oldiron311 python=3.11
+  fi
+  PYTHON_BIN="$MINICONDA_ENV_PY"
 fi
 
 cd "$PROJECT_ROOT"

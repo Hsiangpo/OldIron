@@ -415,14 +415,29 @@ class ClusterWorkerRuntime:
 
     def run_forever(self) -> None:
         self._config.validate_worker_runtime()
-        self._api.register_worker(self._capabilities)
+        self._register_until_ready()
         while True:
-            self._maybe_heartbeat()
-            task = self._api.claim_task(self._capabilities)
+            try:
+                self._maybe_heartbeat()
+                task = self._api.claim_task(self._capabilities)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("集群 worker 无法连接协调器，稍后重试：%s", exc)
+                time.sleep(max(self._config.worker_poll_seconds, 2.0))
+                continue
             if task is None:
                 time.sleep(self._config.worker_poll_seconds)
                 continue
             self._handle_task(task)
+
+    def _register_until_ready(self) -> None:
+        while True:
+            try:
+                self._api.register_worker(self._capabilities)
+                self._last_heartbeat = time.monotonic()
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("集群 worker 注册失败，稍后重试：%s", exc)
+                time.sleep(max(self._config.worker_poll_seconds, 2.0))
 
     def _maybe_heartbeat(self) -> None:
         now = time.monotonic()
@@ -434,14 +449,49 @@ class ClusterWorkerRuntime:
     def _handle_task(self, task: ClaimedTaskPayload) -> None:
         try:
             result = self._execute_task(task)
-            self._api.complete_task(task.task_id, result)
+            if not self._report_complete(task.task_id, result):
+                logger.warning("任务完成结果暂未回写，等待租约回收后重试：%s", task.task_id)
         except FirecrawlError as exc:
             fatal = exc.code in {"firecrawl_401", "firecrawl_402"}
             delay = max(float(exc.retry_after or 0.0), 5.0) if exc.code == "firecrawl_429" else 30.0
-            self._api.fail_task(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=fatal)
+            if not self._report_failure(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=fatal):
+                logger.warning("任务失败结果暂未回写，等待租约回收后重试：%s", task.task_id)
         except Exception as exc:  # noqa: BLE001
             delay = min((2 ** max(task.retries, 1)) * 5.0, 180.0)
-            self._api.fail_task(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=False)
+            if not self._report_failure(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=False):
+                logger.warning("任务异常结果暂未回写，等待租约回收后重试：%s", task.task_id)
+
+    def _report_complete(self, task_id: str, result: dict[str, object]) -> bool:
+        for attempt in range(5):
+            try:
+                self._api.complete_task(task_id, result)
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("回写完成结果失败：task=%s 第%d次 原因=%s", task_id, attempt + 1, exc)
+                time.sleep(min(2 ** attempt, 15))
+        return False
+
+    def _report_failure(
+        self,
+        task_id: str,
+        *,
+        error_text: str,
+        retry_delay_seconds: float,
+        fatal: bool,
+    ) -> bool:
+        for attempt in range(5):
+            try:
+                self._api.fail_task(
+                    task_id,
+                    error_text=error_text,
+                    retry_delay_seconds=retry_delay_seconds,
+                    fatal=fatal,
+                )
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("回写失败结果失败：task=%s 第%d次 原因=%s", task_id, attempt + 1, exc)
+                time.sleep(min(2 ** attempt, 15))
+        return False
 
     def _execute_task(self, task: ClaimedTaskPayload) -> dict[str, object]:
         payload = task.payload
