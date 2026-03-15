@@ -81,6 +81,13 @@ CORP_SUFFIX_PATTERNS = (
     r"\blimited\b",
     r"\bltd\.?\b",
 )
+WORKER_ROLE_CAPABILITIES = {
+    "ch-lookup": ["ch_lookup"],
+    "dnb-discovery": ["dnb_discovery", "dnb_list_segment"],
+    "dnb-detail": ["dnb_detail"],
+    "gmap": ["ch_gmap", "dnb_gmap"],
+    "email-firecrawl": ["ch_firecrawl", "dnb_firecrawl"],
+}
 
 
 def _normalize_text(value: str) -> str:
@@ -131,15 +138,16 @@ class ClaimedTaskPayload:
 class ClusterApiClient:
     """协调器 HTTP 客户端。"""
 
-    def __init__(self, config: ClusterConfig) -> None:
+    def __init__(self, config: ClusterConfig, *, worker_id: str) -> None:
         self._config = config
+        self._worker_id = str(worker_id).strip()
         self._session = requests.Session()
 
     def register_worker(self, capabilities: list[str]) -> None:
         self._post(
             "/api/v1/workers/register",
             {
-                "worker_id": self._config.worker_id,
+                "worker_id": self._worker_id,
                 "host_name": socket.gethostname(),
                 "platform": platform.platform(),
                 "capabilities": capabilities,
@@ -149,12 +157,12 @@ class ClusterApiClient:
         )
 
     def heartbeat(self) -> None:
-        self._post("/api/v1/workers/heartbeat", {"worker_id": self._config.worker_id})
+        self._post("/api/v1/workers/heartbeat", {"worker_id": self._worker_id})
 
     def claim_task(self, capabilities: list[str]) -> ClaimedTaskPayload | None:
         payload = self._post(
             "/api/v1/tasks/claim",
-            {"worker_id": self._config.worker_id, "capabilities": capabilities},
+            {"worker_id": self._worker_id, "capabilities": capabilities},
         )
         task = payload.get("task")
         if not isinstance(task, dict):
@@ -169,14 +177,14 @@ class ClusterApiClient:
     def complete_task(self, task_id: str, result: dict[str, object]) -> None:
         self._post(
             f"/api/v1/tasks/{task_id}/complete",
-            {"worker_id": self._config.worker_id, "result": result},
+            {"worker_id": self._worker_id, "result": result},
         )
 
     def fail_task(self, task_id: str, *, error_text: str, retry_delay_seconds: float, fatal: bool) -> None:
         self._post(
             f"/api/v1/tasks/{task_id}/fail",
             {
-                "worker_id": self._config.worker_id,
+                "worker_id": self._worker_id,
                 "error_text": error_text,
                 "retry_delay_seconds": retry_delay_seconds,
                 "fatal": fatal,
@@ -222,6 +230,14 @@ class ClusterApiClient:
         if data.get("error"):
             raise RuntimeError(str(data["error"]))
         return data
+
+
+def get_worker_role_capabilities(role: str) -> list[str]:
+    value = str(role or "").strip().lower()
+    capabilities = WORKER_ROLE_CAPABILITIES.get(value)
+    if capabilities is None:
+        raise ValueError(f"不支持的 worker 角色：{role}")
+    return list(capabilities)
 
 
 class CoordinatorKeyPool:
@@ -393,25 +409,30 @@ class ClusterEmailService:
 class ClusterWorkerRuntime:
     """England 集群 worker 主循环。"""
 
-    def __init__(self, config: ClusterConfig) -> None:
+    def __init__(
+        self,
+        config: ClusterConfig,
+        *,
+        role: str,
+        worker_index: int = 1,
+        worker_id: str = "",
+    ) -> None:
         self._config = config
-        self._api = ClusterApiClient(config)
+        self._role = str(role or "").strip().lower()
+        if not self._role:
+            raise ValueError("worker 角色不能为空。")
+        self._capabilities = get_worker_role_capabilities(self._role)
+        resolved_worker_id = str(worker_id or "").strip()
+        if not resolved_worker_id:
+            resolved_worker_id = f"{socket.gethostname().strip().lower() or 'worker'}-{self._role}-{max(int(worker_index), 1)}"
+        self._worker_id = resolved_worker_id
+        self._api = ClusterApiClient(config, worker_id=self._worker_id)
         self._email_service = ClusterEmailService(config, self._api)
         self._gmap_client = GoogleMapsClient(GoogleMapsConfig(hl="en", gl="gb"))
         provider = DnbCookieProvider(project_root=config.project_root, logger=logger)
         self._dnb_client = DnbClient(cookie_header=provider.get(force_refresh=True), cookie_provider=provider)
-        self._ch_client = CompaniesHouseClient(worker_label=config.worker_id)
+        self._ch_client = CompaniesHouseClient(worker_label=self._worker_id)
         self._last_heartbeat = 0.0
-        self._capabilities = [
-            "dnb_discovery",
-            "dnb_list_segment",
-            "dnb_detail",
-            "dnb_gmap",
-            "dnb_firecrawl",
-            "ch_lookup",
-            "ch_gmap",
-            "ch_firecrawl",
-        ]
 
     def run_forever(self) -> None:
         self._config.validate_worker_runtime()

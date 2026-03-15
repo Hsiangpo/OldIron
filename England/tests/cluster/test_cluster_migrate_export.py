@@ -240,6 +240,10 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         repo = ClusterRepository(db, config)
         with db.transaction() as conn:
             with conn.cursor() as cur:
+                cur.execute("TRUNCATE england_cluster_task_attempts RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_cluster_tasks RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_ch_companies RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_firecrawl_domain_cache RESTART IDENTITY CASCADE")
                 cur.execute(
                     """
                     INSERT INTO england_ch_companies(
@@ -260,6 +264,7 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
                 )
         task = repo.claim_task("worker-1", ["ch_firecrawl"])
         self.assertIsNotNone(task)
+        self.assertEqual(task.task_id, "t1")
         repo.complete_task(task_id=task.task_id, worker_id="worker-1", result={"emails": ["hello@gamma.test"]})
         with db.connect() as conn:
             with conn.cursor() as cur:

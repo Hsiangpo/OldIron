@@ -35,6 +35,20 @@ def _env_str(name: str, default: str = "") -> str:
     return os.getenv(name, "").strip() or default
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if not value:
+        return default
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _default_worker_id() -> str:
     host = socket.gethostname().strip().lower() or "worker"
     suffix = uuid.uuid4().hex[:8]
@@ -66,6 +80,12 @@ class ClusterConfig:
     worker_heartbeat_seconds: float
     task_lease_seconds: int
     snapshot_export_interval_seconds: float
+    auto_export_enabled: bool
+    ch_lookup_workers_per_host: int
+    dnb_discovery_workers_per_host: int
+    dnb_detail_workers_per_host: int
+    gmap_workers_per_host: int
+    email_firecrawl_workers_per_host: int
     firecrawl_key_per_limit: int
     firecrawl_key_cooldown_seconds: int
     firecrawl_key_wait_seconds: int
@@ -108,6 +128,12 @@ class ClusterConfig:
                 "ENGLAND_CLUSTER_EXPORT_INTERVAL_SECONDS",
                 30.0,
             ),
+            auto_export_enabled=_env_bool("ENGLAND_CLUSTER_AUTO_EXPORT", False),
+            ch_lookup_workers_per_host=_env_int("ENGLAND_CLUSTER_CH_LOOKUP_WORKERS", 4),
+            dnb_discovery_workers_per_host=_env_int("ENGLAND_CLUSTER_DNB_DISCOVERY_WORKERS", 4),
+            dnb_detail_workers_per_host=_env_int("ENGLAND_CLUSTER_DNB_DETAIL_WORKERS", 4),
+            gmap_workers_per_host=_env_int("ENGLAND_CLUSTER_GMAP_WORKERS", 32),
+            email_firecrawl_workers_per_host=_env_int("ENGLAND_CLUSTER_EMAIL_FIRECRAWL_WORKERS", 32),
             firecrawl_key_per_limit=_env_int("FIRECRAWL_KEY_PER_LIMIT", 2),
             firecrawl_key_cooldown_seconds=_env_int("FIRECRAWL_KEY_COOLDOWN_SECONDS", 90),
             firecrawl_key_wait_seconds=_env_int("FIRECRAWL_KEY_WAIT_SECONDS", 20),
@@ -146,3 +172,12 @@ class ClusterConfig:
         self.validate()
         if not self.llm_api_key:
             raise RuntimeError("集群 worker 缺少 LLM_API_KEY。")
+
+    def build_worker_role_counts(self) -> list[tuple[str, int]]:
+        return [
+            ("ch-lookup", max(int(self.ch_lookup_workers_per_host), 0)),
+            ("dnb-discovery", max(int(self.dnb_discovery_workers_per_host), 0)),
+            ("dnb-detail", max(int(self.dnb_detail_workers_per_host), 0)),
+            ("gmap", max(int(self.gmap_workers_per_host), 0)),
+            ("email-firecrawl", max(int(self.email_firecrawl_workers_per_host), 0)),
+        ]

@@ -391,7 +391,7 @@ class ClusterRepository(ClusterTaskOpsMixin):
         return count
 
     def submit_companies_house_input(self, input_xlsx: Path, max_companies: int = 0) -> int:
-        names = iter_company_names_from_xlsx(input_xlsx, max_companies=max_companies)
+        names = iter_company_names_from_xlsx(input_xlsx, limit=max_companies)
         inserted = 0
         with self._db.transaction() as conn:
             with conn.cursor() as cur:
