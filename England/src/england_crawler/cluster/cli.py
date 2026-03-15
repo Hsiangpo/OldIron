@@ -56,6 +56,38 @@ def _stderr_path(role: str, index: int) -> Path:
     return _runtime_dir() / f"{role}.{index}.err.log"
 
 
+def _worker_command_markers(role: str, index: int) -> list[str]:
+    return [
+        "run.py cluster worker",
+        f"worker {role}",
+        f"--worker-index {index}",
+    ]
+
+
+def _process_command_line(pid: int) -> str:
+    if pid <= 0:
+        return ""
+    if os.name == "nt":
+        command = (
+            "Get-CimInstance Win32_Process -Filter \\\"ProcessId = {pid}\\\" | "
+            "Select-Object -ExpandProperty CommandLine"
+        ).format(pid=pid)
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return (result.stdout or "").strip()
+    result = subprocess.run(
+        ["ps", "-o", "command=", "-p", str(pid)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return (result.stdout or "").strip()
+
+
 def _is_running(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -72,6 +104,16 @@ def _is_running(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _is_expected_worker_process(pid: int, *, role: str, index: int) -> bool:
+    if not _is_running(pid):
+        return False
+    command_line = _process_command_line(pid).lower()
+    if not command_line:
+        return False
+    markers = [item.lower() for item in _worker_command_markers(role, index)]
+    return all(marker in command_line for marker in markers)
 
 
 def _terminate_pid(pid: int) -> None:
@@ -171,7 +213,7 @@ def _start_local_worker_pools(config: ClusterConfig, *, detach: bool) -> tuple[i
                     pid = int(pid_file.read_text(encoding="utf-8").strip())
                 except ValueError:
                     pid = 0
-                if _is_running(pid):
+                if _is_expected_worker_process(pid, role=role, index=index):
                     already_running += 1
                     continue
                 pid_file.unlink(missing_ok=True)
@@ -187,11 +229,17 @@ def _start_local_worker_pools(config: ClusterConfig, *, detach: bool) -> tuple[i
 def _stop_local_worker_pools() -> int:
     stopped = 0
     for pid_file in _runtime_dir().glob("*.pid"):
+        stem_parts = pid_file.stem.rsplit(".", 1)
+        role = stem_parts[0] if stem_parts else ""
+        try:
+            index = int(stem_parts[1]) if len(stem_parts) == 2 else 0
+        except ValueError:
+            index = 0
         try:
             pid = int(pid_file.read_text(encoding="utf-8").strip())
         except (FileNotFoundError, ValueError):
             pid = 0
-        if _is_running(pid):
+        if role and index > 0 and _is_expected_worker_process(pid, role=role, index=index):
             _terminate_pid(pid)
             stopped += 1
         pid_file.unlink(missing_ok=True)
@@ -217,11 +265,17 @@ def _run_pool_supervisor(processes: list[subprocess.Popen], threads: list[thread
         for thread in threads:
             thread.join(timeout=1.0)
         for pid_file in _runtime_dir().glob("*.pid"):
+            stem_parts = pid_file.stem.rsplit(".", 1)
+            role = stem_parts[0] if stem_parts else ""
+            try:
+                index = int(stem_parts[1]) if len(stem_parts) == 2 else 0
+            except ValueError:
+                index = 0
             try:
                 pid = int(pid_file.read_text(encoding="utf-8").strip())
             except ValueError:
                 pid = 0
-            if not _is_running(pid):
+            if not role or index <= 0 or not _is_expected_worker_process(pid, role=role, index=index):
                 pid_file.unlink(missing_ok=True)
     return 0
 

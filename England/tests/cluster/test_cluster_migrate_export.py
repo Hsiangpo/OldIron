@@ -706,6 +706,8 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         from england_crawler.cluster.cli import _stop_local_worker_pools
 
         class _FakePidFile:
+            stem = "dummy.1"
+
             def read_text(self, encoding: str = "utf-8") -> str:
                 raise FileNotFoundError("gone")
 
@@ -743,6 +745,72 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
             captured["cmd"],
         )
         self.assertEqual("1", captured["kwargs"]["env"]["PYTHONUNBUFFERED"])
+
+    def test_start_pools_relaunches_when_pid_is_reused_by_other_process(self) -> None:
+        from england_crawler.cluster.cli import _start_local_worker_pools
+        from england_crawler.cluster.config import ClusterConfig
+
+        class _FakePidFile:
+            def __init__(self, text: str) -> None:
+                self._text = text
+                self.deleted = False
+
+            def exists(self) -> bool:
+                return True
+
+            def read_text(self, encoding: str = "utf-8") -> str:
+                return self._text
+
+            def unlink(self, missing_ok: bool = True) -> None:
+                self.deleted = True
+
+            def write_text(self, content: str, encoding: str = "utf-8") -> int:
+                self._text = content
+                return len(content)
+
+        class _FakeProc:
+            def __init__(self, pid: int) -> None:
+                self.pid = pid
+                self.stdout = None
+
+        config = ClusterConfig.from_env(ROOT)
+        pid_file = _FakePidFile("4321")
+
+        with patch("england_crawler.cluster.cli._role_counts", return_value=[("gmap", 1)]):
+            with patch("england_crawler.cluster.cli._pid_path", return_value=pid_file):
+                with patch("england_crawler.cluster.cli._is_expected_worker_process", return_value=False):
+                    with patch("england_crawler.cluster.cli._spawn_worker_process", return_value=_FakeProc(9876)):
+                        launched, already_running, processes, threads = _start_local_worker_pools(config, detach=False)
+
+        self.assertEqual(1, launched)
+        self.assertEqual(0, already_running)
+        self.assertTrue(pid_file.deleted)
+        self.assertEqual("9876", pid_file._text)
+        self.assertEqual(1, len(processes))
+        self.assertEqual(1, len(threads))
+
+    def test_stop_pools_skips_unrelated_process_when_pid_reused(self) -> None:
+        from england_crawler.cluster.cli import _stop_local_worker_pools
+
+        class _FakePidFile:
+            stem = "gmap.1"
+
+            def read_text(self, encoding: str = "utf-8") -> str:
+                return "4321"
+
+            def unlink(self, missing_ok: bool = True) -> None:
+                return None
+
+        class _FakeRuntimeDir:
+            def glob(self, pattern: str):
+                return [_FakePidFile()]
+
+        with patch("england_crawler.cluster.cli._runtime_dir", return_value=_FakeRuntimeDir()):
+            with patch("england_crawler.cluster.cli._is_expected_worker_process", return_value=False):
+                with patch("england_crawler.cluster.cli._terminate_pid", side_effect=AssertionError("不该误杀无关进程")):
+                    stopped = _stop_local_worker_pools()
+
+        self.assertEqual(0, stopped)
 
     def test_gmap_worker_init_does_not_touch_dnb_cookie_provider(self) -> None:
         from england_crawler.cluster.config import ClusterConfig
