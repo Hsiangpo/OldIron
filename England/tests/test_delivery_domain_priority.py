@@ -201,6 +201,41 @@ class DeliveryDomainPriorityTests(unittest.TestCase):
             self.assertEqual(1, len(rows))
             self.assertEqual("Acme Services Ltd", rows[0]["company_name"])
 
+    def test_build_delivery_bundle_keeps_global_site_with_foreign_phone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "output"
+            delivery_root = data_root / "delivery"
+            site_dir = data_root / "dnb"
+            site_dir.mkdir(parents=True)
+
+            row = {
+                "duns": "D1",
+                "company_name": "Purple Public Relations Limited",
+                "ceo": "Alice",
+                "homepage": "https://purplepr.com",
+                "phone": "+852 2973 0089",
+                "emails": ["enquiries@purplepr.com"],
+            }
+
+            (site_dir / "final_companies.jsonl").write_text(
+                json.dumps(row, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            summary = build_delivery_bundle(
+                data_root=data_root,
+                delivery_root=delivery_root,
+                day_label="day1",
+            )
+
+            self.assertEqual(1, summary["total_current_companies"])
+            csv_path = delivery_root / "England_day001" / "companies.csv"
+            with csv_path.open("r", encoding="utf-8", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(1, len(rows))
+            self.assertEqual("Purple Public Relations Limited", rows[0]["company_name"])
+
     def test_build_delivery_bundle_overwrites_locked_day_dir_by_reusing_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

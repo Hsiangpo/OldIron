@@ -12,7 +12,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 DAY_PATTERN = re.compile(r"^day(\d+)$", flags=re.I)
-FOREIGN_PHONE_PREFIXES = ("+852", "+91", "+86", "+60", "+63", "+254")
 FOREIGN_TLDS = (".hk", ".com.hk", ".in", ".my", ".cn", ".sg")
 FOREIGN_URL_MARKERS = ("hong-kong", "hongkong", "/locations/cn/", "/hk/", ".hk/")
 
@@ -59,12 +58,9 @@ def _build_domain_key(domain: str) -> str:
 def _looks_suspicious_uk_record(homepage: str, phone: str) -> bool:
     domain = _extract_domain(homepage)
     lower_homepage = str(homepage or "").strip().lower()
-    normalized_phone = str(phone or "").strip()
     if domain and any(domain.endswith(suffix) for suffix in FOREIGN_TLDS):
         return True
     if any(marker in lower_homepage for marker in FOREIGN_URL_MARKERS):
-        return True
-    if normalized_phone and any(normalized_phone.startswith(prefix) for prefix in FOREIGN_PHONE_PREFIXES):
         return True
     return False
 
