@@ -12,6 +12,8 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from england_crawler.cluster.config import ClusterConfig
 from england_crawler.cluster.coordinator import CoordinatorRuntime
@@ -201,6 +203,18 @@ def _stream_process_output(process: subprocess.Popen, *, role: str, index: int) 
 
 def _role_counts(config: ClusterConfig) -> list[tuple[str, int]]:
     return [(role, count) for role, count in config.build_worker_role_counts() if count > 0]
+
+
+def _coordinator_healthz_url(config: ClusterConfig) -> str:
+    return config.coordinator_base_url.rstrip("/") + "/healthz"
+
+
+def _coordinator_is_healthy(config: ClusterConfig) -> bool:
+    try:
+        with urlopen(_coordinator_healthz_url(config), timeout=3.0) as response:  # noqa: S310
+            return int(getattr(response, "status", 0) or 0) == 200
+    except (OSError, URLError):
+        return False
 
 
 def _start_local_worker_pools(config: ClusterConfig, *, detach: bool) -> tuple[int, int, list[subprocess.Popen], list[threading.Thread]]:
@@ -436,6 +450,9 @@ def run_cluster(argv: list[str]) -> int:
         ).run_forever()
         return 0
     if args.command == "start-pools":
+        if not _coordinator_is_healthy(config):
+            print(f"England 协调器未就绪：{_coordinator_healthz_url(config)}")
+            return 1
         launched, already_running, processes, threads = _start_local_worker_pools(config, detach=bool(args.detach))
         print(f"England 本机 worker 池已启动：新增 {launched}，已在运行 {already_running}")
         if args.detach:

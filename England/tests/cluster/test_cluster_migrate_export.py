@@ -679,15 +679,27 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         from england_crawler.cluster.cli import run_cluster
 
         buffer = io.StringIO()
-        with patch("england_crawler.cluster.cli.ClusterDb", side_effect=AssertionError("start-pools 不该创建 ClusterDb")):
-            with patch(
-                "england_crawler.cluster.cli._start_local_worker_pools",
-                return_value=(0, 0, [], []),
-            ):
-                with redirect_stdout(buffer):
-                    code = run_cluster(["start-pools"])
+        with patch("england_crawler.cluster.cli._coordinator_is_healthy", return_value=True):
+            with patch("england_crawler.cluster.cli.ClusterDb", side_effect=AssertionError("start-pools 不该创建 ClusterDb")):
+                with patch(
+                    "england_crawler.cluster.cli._start_local_worker_pools",
+                    return_value=(0, 0, [], []),
+                ):
+                    with redirect_stdout(buffer):
+                        code = run_cluster(["start-pools"])
         self.assertEqual(code, 0)
         self.assertIn("England 本机 worker 池已启动：新增 0，已在运行 0", buffer.getvalue())
+
+    def test_start_pools_fails_fast_when_coordinator_is_down(self) -> None:
+        from england_crawler.cluster.cli import run_cluster
+
+        buffer = io.StringIO()
+        with patch("england_crawler.cluster.cli._coordinator_is_healthy", return_value=False):
+            with redirect_stdout(buffer):
+                code = run_cluster(["start-pools"])
+
+        self.assertEqual(1, code)
+        self.assertIn("England 协调器未就绪", buffer.getvalue())
 
     def test_worker_does_not_construct_cluster_db(self) -> None:
         from england_crawler.cluster.cli import run_cluster
