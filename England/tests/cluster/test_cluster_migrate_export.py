@@ -556,3 +556,30 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
                 [(str(row["normalized_name"]), str(row["ch_task_status"])) for row in company_rows],
                 [("ALPHA LTD", "failed"), ("BETA LTD", "")],
             )
+
+    def test_start_pools_does_not_construct_cluster_db(self) -> None:
+        from england_crawler.cluster.cli import run_cluster
+
+        buffer = io.StringIO()
+        with patch("england_crawler.cluster.cli.ClusterDb", side_effect=AssertionError("start-pools 不该创建 ClusterDb")):
+            with patch(
+                "england_crawler.cluster.cli._start_local_worker_pools",
+                return_value=(0, 0, [], []),
+            ):
+                with redirect_stdout(buffer):
+                    code = run_cluster(["start-pools"])
+        self.assertEqual(code, 0)
+        self.assertIn("England 本机 worker 池已启动：新增 0，已在运行 0", buffer.getvalue())
+
+    def test_worker_does_not_construct_cluster_db(self) -> None:
+        from england_crawler.cluster.cli import run_cluster
+
+        class _WorkerExit(RuntimeError):
+            pass
+
+        buffer = io.StringIO()
+        with patch("england_crawler.cluster.cli.ClusterDb", side_effect=AssertionError("worker 不该创建 ClusterDb")):
+            with patch("england_crawler.cluster.worker.ClusterWorkerRuntime.run_forever", side_effect=_WorkerExit):
+                with redirect_stdout(buffer):
+                    with self.assertRaises(_WorkerExit):
+                        run_cluster(["worker", "ch-lookup"])

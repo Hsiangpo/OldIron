@@ -252,6 +252,15 @@ def _print_submit_outcomes(lines: list[str]) -> None:
         print(f"  {line}")
 
 
+def _build_cluster_db(config: ClusterConfig) -> ClusterDb:
+    return ClusterDb(
+        config.postgres_dsn,
+        min_size=config.db_pool_min_size,
+        max_size=config.db_pool_max_size,
+        timeout_seconds=config.db_pool_timeout_seconds,
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="England 集群模式命令")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -283,25 +292,23 @@ def run_cluster(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     _configure_logging(args.log_level)
     config = ClusterConfig.from_env(ROOT)
-    db = ClusterDb(
-        config.postgres_dsn,
-        min_size=config.db_pool_min_size,
-        max_size=config.db_pool_max_size,
-        timeout_seconds=config.db_pool_timeout_seconds,
-    )
     if args.command == "init-db":
+        db = _build_cluster_db(config)
         initialize_schema(db)
         print("England 集群数据库初始化完成。")
         return 0
     if args.command == "migrate-england":
+        db = _build_cluster_db(config)
         migrate_england_history(db, ROOT / "output")
         print("England 历史数据迁移完成。")
         return 0
     if args.command == "export":
+        db = _build_cluster_db(config)
         export_cluster_snapshots(db, ROOT / "output", include_delivery=not bool(args.skip_delivery))
         print("England Postgres 快照已导出到 output。")
         return 0
     if args.command == "produce":
+        db = _build_cluster_db(config)
         export_cluster_snapshots(db, ROOT / "output", include_delivery=True)
         summary = build_delivery_bundle(
             data_root=ROOT / "output",
@@ -320,6 +327,7 @@ def run_cluster(argv: list[str]) -> int:
         print(f"目录：{ROOT / 'output' / 'delivery' / f'England_day{day_value:03d}'}")
         return 0
     if args.command == "submit":
+        db = _build_cluster_db(config)
         initialize_schema(db)
         repo = ClusterRepository(db, config)
         target = _normalize_submit_target(str(args.target))
@@ -345,6 +353,7 @@ def run_cluster(argv: list[str]) -> int:
         parser.error(f"不支持的提交目标：{args.target}")
         return 1
     if args.command == "status":
+        db = _build_cluster_db(config)
         _print_cluster_status(db)
         return 0
     if args.command == "coordinator":
