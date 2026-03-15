@@ -81,6 +81,9 @@ class ClusterConfig:
     task_lease_seconds: int
     snapshot_export_interval_seconds: float
     auto_export_enabled: bool
+    db_pool_min_size: int
+    db_pool_max_size: int
+    db_pool_timeout_seconds: float
     ch_lookup_workers_per_host: int
     dnb_discovery_workers_per_host: int
     dnb_detail_workers_per_host: int
@@ -129,6 +132,9 @@ class ClusterConfig:
                 30.0,
             ),
             auto_export_enabled=_env_bool("ENGLAND_CLUSTER_AUTO_EXPORT", False),
+            db_pool_min_size=_env_int("ENGLAND_CLUSTER_DB_POOL_MIN_SIZE", 4),
+            db_pool_max_size=_env_int("ENGLAND_CLUSTER_DB_POOL_MAX_SIZE", 24),
+            db_pool_timeout_seconds=_env_float("ENGLAND_CLUSTER_DB_POOL_TIMEOUT_SECONDS", 30.0),
             ch_lookup_workers_per_host=_env_int("ENGLAND_CLUSTER_CH_LOOKUP_WORKERS", 4),
             dnb_discovery_workers_per_host=_env_int("ENGLAND_CLUSTER_DNB_DISCOVERY_WORKERS", 4),
             dnb_detail_workers_per_host=_env_int("ENGLAND_CLUSTER_DNB_DETAIL_WORKERS", 4),

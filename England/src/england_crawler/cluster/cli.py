@@ -268,7 +268,12 @@ def run_cluster(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     _configure_logging(args.log_level)
     config = ClusterConfig.from_env(ROOT)
-    db = ClusterDb(config.postgres_dsn)
+    db = ClusterDb(
+        config.postgres_dsn,
+        min_size=config.db_pool_min_size,
+        max_size=config.db_pool_max_size,
+        timeout_seconds=config.db_pool_timeout_seconds,
+    )
     if args.command == "init-db":
         initialize_schema(db)
         print("England 集群数据库初始化完成。")

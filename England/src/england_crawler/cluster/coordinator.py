@@ -51,6 +51,7 @@ class CoordinatorRuntime:
             self._stop_event.set()
             server.server_close()
             maintainer.join(timeout=3.0)
+            self._db.close()
 
     def _maintenance_loop(self) -> None:
         while not self._stop_event.is_set():
