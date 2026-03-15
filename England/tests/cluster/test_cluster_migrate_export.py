@@ -721,6 +721,29 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
 
         self.assertEqual(0, stopped)
 
+    def test_spawn_worker_process_uses_unbuffered_python(self) -> None:
+        from england_crawler.cluster.cli import ROOT as CLI_ROOT
+        from england_crawler.cluster.cli import _spawn_worker_process
+        from england_crawler.cluster.config import ClusterConfig
+
+        captured: dict[str, object] = {}
+
+        class _FakePopen:
+            def __init__(self, cmd, **kwargs) -> None:
+                captured["cmd"] = cmd
+                captured["kwargs"] = kwargs
+                self.pid = 12345
+
+        config = ClusterConfig.from_env(ROOT)
+        with patch("england_crawler.cluster.cli.subprocess.Popen", _FakePopen):
+            _spawn_worker_process(config, role="gmap", index=1, detach=False)
+
+        self.assertEqual(
+            [sys.executable, "-u", str(CLI_ROOT / "run.py"), "cluster", "worker", "gmap", "--worker-index", "1"],
+            captured["cmd"],
+        )
+        self.assertEqual("1", captured["kwargs"]["env"]["PYTHONUNBUFFERED"])
+
     def test_gmap_worker_init_does_not_touch_dnb_cookie_provider(self) -> None:
         from england_crawler.cluster.config import ClusterConfig
         from england_crawler.cluster.worker import ClusterWorkerRuntime

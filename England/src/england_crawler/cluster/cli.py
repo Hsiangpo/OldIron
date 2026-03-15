@@ -99,11 +99,13 @@ def _spawn_worker_process(
     detach: bool,
 ):
     env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
     env["ENGLAND_CLUSTER_POSTGRES_DSN"] = config.postgres_dsn
     env["ENGLAND_CLUSTER_BASE_URL"] = config.coordinator_base_url
     env["ENGLAND_CLUSTER_WORKER_ID"] = f"{config.worker_id}-{role}-{index}"
     cmd = [
         sys.executable,
+        "-u",
         str(ROOT / "run.py"),
         "cluster",
         "worker",
