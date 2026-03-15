@@ -150,7 +150,18 @@ def _remove_dir_safe(day_dir: Path) -> None:
             return
         except (PermissionError, OSError):
             time.sleep(0.6)
-    raise ValueError(f"交付目录被占用，请关闭文件后重试: {day_dir}")
+    _clear_dir_contents_safe(day_dir)
+
+
+def _clear_dir_contents_safe(day_dir: Path) -> None:
+    """目录被占用时，尽量复用目录并清空其内容。"""
+    if not day_dir.exists():
+        return
+    for child in sorted(day_dir.iterdir()):
+        if child.is_dir():
+            shutil.rmtree(child)
+            continue
+        child.unlink()
 
 
 def build_delivery_bundle(
