@@ -64,6 +64,7 @@ def submit_england_sources(
 ) -> list[EnglandSourceOutcome]:
     """提交 England 下全部已注册来源。"""
 
+    repo.reconcile_company_backed_task_states()
     specs = [
         _EnglandSourceSpec(source_key="dnb", label="DNB"),
         _EnglandSourceSpec(source_key="companies-house", label="Companies House"),

@@ -330,6 +330,7 @@ def run_cluster(argv: list[str]) -> int:
         db = _build_cluster_db(config)
         initialize_schema(db)
         repo = ClusterRepository(db, config)
+        repo.reconcile_company_backed_task_states()
         target = _normalize_submit_target(str(args.target))
         if target == "dnb":
             count = repo.submit_dnb_seed_tasks()

@@ -230,6 +230,9 @@ class ClusterRepository(ClusterTaskOpsMixin):
                         retries=int(row["retries"]),
                         payload=dict(row["payload_json"] or {}),
                     )
+                    if self._task_already_done_locked(cur, task):
+                        self._mark_task_done_locked(cur, task.task_id)
+                        continue
                     if supported and task.task_type not in supported and task.pipeline not in supported:
                         cur.execute(
                             "UPDATE england_cluster_tasks SET next_run_at = %s, updated_at = %s WHERE task_id = %s",
@@ -432,7 +435,21 @@ class ClusterRepository(ClusterTaskOpsMixin):
                         """,
                         (segment.segment_id, segment.industry_path, segment.country_iso_two_code, segment.region_name, segment.city_name, segment.expected_count, _utc_now()),
                     )
-                    count += self._upsert_task_locked(cur, pipeline=DNB_PIPELINE, task_type="dnb_discovery", entity_id=segment.segment_id, payload=segment.to_dict(), force_pending=True)
+                    cur.execute(
+                        "SELECT task_status FROM england_dnb_discovery_nodes WHERE segment_id = %s",
+                        (segment.segment_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is not None and str(row["task_status"] or "").strip() == "done":
+                        continue
+                    count += self._upsert_task_locked(
+                        cur,
+                        pipeline=DNB_PIPELINE,
+                        task_type="dnb_discovery",
+                        entity_id=segment.segment_id,
+                        payload=segment.to_dict(),
+                        force_pending=True,
+                    )
         return count
 
     def get_dnb_source_state(self) -> str:
@@ -525,8 +542,40 @@ class ClusterRepository(ClusterTaskOpsMixin):
                         """,
                         (comp_id, company_name.strip(), normalized_name, _utc_now()),
                     )
-                    inserted += self._upsert_task_locked(cur, pipeline=CH_PIPELINE, task_type="ch_lookup", entity_id=comp_id, payload={"comp_id": comp_id, "company_name": company_name.strip(), "company_number": "", "homepage": "", "domain": ""}, force_pending=True)
-                    self._upsert_task_locked(cur, pipeline=CH_PIPELINE, task_type="ch_gmap", entity_id=comp_id, payload={"comp_id": comp_id, "company_name": company_name.strip(), "company_number": "", "homepage": "", "domain": ""}, force_pending=True)
+                    cur.execute(
+                        """
+                        SELECT ch_task_status, gmap_task_status
+                        FROM england_ch_companies
+                        WHERE comp_id = %s
+                        """,
+                        (comp_id,),
+                    )
+                    current = cur.fetchone()
+                    payload = {
+                        "comp_id": comp_id,
+                        "company_name": company_name.strip(),
+                        "company_number": "",
+                        "homepage": "",
+                        "domain": "",
+                    }
+                    if current is None or str(current["ch_task_status"] or "").strip() != "done":
+                        inserted += self._upsert_task_locked(
+                            cur,
+                            pipeline=CH_PIPELINE,
+                            task_type="ch_lookup",
+                            entity_id=comp_id,
+                            payload=payload,
+                            force_pending=True,
+                        )
+                    if current is None or str(current["gmap_task_status"] or "").strip() != "done":
+                        self._upsert_task_locked(
+                            cur,
+                            pipeline=CH_PIPELINE,
+                            task_type="ch_gmap",
+                            entity_id=comp_id,
+                            payload=payload,
+                            force_pending=True,
+                        )
                 self._mark_source_loaded_locked(
                     cur,
                     source_path=source_path,
@@ -535,6 +584,92 @@ class ClusterRepository(ClusterTaskOpsMixin):
                     scope=scope,
                 )
         return inserted
+
+    def reconcile_company_backed_task_states(self) -> int:
+        affected = 0
+        now = _utc_now()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                for task_type, column in (
+                    ("ch_lookup", "ch_task_status"),
+                    ("ch_gmap", "gmap_task_status"),
+                    ("ch_firecrawl", "firecrawl_task_status"),
+                ):
+                    cur.execute(
+                        f"""
+                        UPDATE england_cluster_tasks AS t
+                        SET status = 'done', lease_owner = '', lease_expires_at = NULL, last_error = '', updated_at = %s
+                        FROM england_ch_companies AS c
+                        WHERE t.pipeline = %s
+                          AND t.task_type = %s
+                          AND t.entity_id = c.comp_id
+                          AND c.{column} = 'done'
+                          AND t.status <> 'done'
+                        """,
+                        (now, CH_PIPELINE, task_type),
+                    )
+                    affected += cur.rowcount
+                cur.execute(
+                    """
+                    UPDATE england_cluster_tasks AS t
+                    SET status = 'done', lease_owner = '', lease_expires_at = NULL, last_error = '', updated_at = %s
+                    FROM england_dnb_discovery_nodes AS d
+                    WHERE t.pipeline = %s
+                      AND t.task_type = 'dnb_discovery'
+                      AND t.entity_id = d.segment_id
+                      AND d.task_status = 'done'
+                      AND t.status <> 'done'
+                    """,
+                    (now, DNB_PIPELINE),
+                )
+                affected += cur.rowcount
+                cur.execute(
+                    """
+                    UPDATE england_cluster_tasks AS t
+                    SET status = 'done', lease_owner = '', lease_expires_at = NULL, last_error = '', updated_at = %s
+                    FROM england_dnb_segments AS d
+                    WHERE t.pipeline = %s
+                      AND t.task_type = 'dnb_list_segment'
+                      AND t.entity_id = d.segment_id
+                      AND d.task_status = 'done'
+                      AND t.status <> 'done'
+                    """,
+                    (now, DNB_PIPELINE),
+                )
+                affected += cur.rowcount
+                cur.execute(
+                    """
+                    UPDATE england_cluster_tasks AS t
+                    SET status = 'done', lease_owner = '', lease_expires_at = NULL, last_error = '', updated_at = %s
+                    FROM england_dnb_companies AS d
+                    WHERE t.pipeline = %s
+                      AND t.task_type = 'dnb_detail'
+                      AND t.entity_id = d.duns
+                      AND d.detail_done = TRUE
+                      AND t.status <> 'done'
+                    """,
+                    (now, DNB_PIPELINE),
+                )
+                affected += cur.rowcount
+                for task_type, column in (
+                    ("dnb_gmap", "gmap_task_status"),
+                    ("dnb_firecrawl", "firecrawl_task_status"),
+                ):
+                    cur.execute(
+                        f"""
+                        UPDATE england_cluster_tasks AS t
+                        SET status = 'done', lease_owner = '', lease_expires_at = NULL, last_error = '', updated_at = %s
+                        FROM england_dnb_companies AS d
+                        WHERE t.pipeline = %s
+                          AND t.task_type = %s
+                          AND t.entity_id = d.duns
+                          AND d.{column} = 'done'
+                          AND t.status <> 'done'
+                        """,
+                        (now, DNB_PIPELINE, task_type),
+                    )
+                    affected += cur.rowcount
+        return affected
 
     def _get_pipeline_task_counts(self, pipeline: str) -> dict[str, int]:
         counts = {"pending": 0, "leased": 0, "failed": 0, "done": 0}
@@ -702,6 +837,35 @@ class ClusterRepository(ClusterTaskOpsMixin):
             "ch_gmap": policy.ch_gmap_max_retries,
             "ch_firecrawl": policy.ch_firecrawl_max_retries,
         }.get(task_type, 5)
+
+    def _task_already_done_locked(self, cur, task: ClaimedTask) -> bool:
+        if task.task_type == "dnb_discovery":
+            cur.execute("SELECT task_status FROM england_dnb_discovery_nodes WHERE segment_id = %s", (task.entity_id,))
+            row = cur.fetchone()
+            return row is not None and str(row["task_status"] or "").strip() == "done"
+        if task.task_type == "dnb_list_segment":
+            cur.execute("SELECT task_status FROM england_dnb_segments WHERE segment_id = %s", (task.entity_id,))
+            row = cur.fetchone()
+            return row is not None and str(row["task_status"] or "").strip() == "done"
+        if task.task_type == "dnb_detail":
+            cur.execute("SELECT detail_done FROM england_dnb_companies WHERE duns = %s", (task.entity_id,))
+            row = cur.fetchone()
+            return row is not None and bool(row["detail_done"])
+        if task.task_type in {"dnb_gmap", "dnb_firecrawl"}:
+            column = "gmap_task_status" if task.task_type == "dnb_gmap" else "firecrawl_task_status"
+            cur.execute(f"SELECT {column} FROM england_dnb_companies WHERE duns = %s", (task.entity_id,))
+            row = cur.fetchone()
+            return row is not None and str(row[column] or "").strip() == "done"
+        if task.task_type in {"ch_lookup", "ch_gmap", "ch_firecrawl"}:
+            column = {
+                "ch_lookup": "ch_task_status",
+                "ch_gmap": "gmap_task_status",
+                "ch_firecrawl": "firecrawl_task_status",
+            }[task.task_type]
+            cur.execute(f"SELECT {column} FROM england_ch_companies WHERE comp_id = %s", (task.entity_id,))
+            row = cur.fetchone()
+            return row is not None and str(row[column] or "").strip() == "done"
+        return False
 
     def _prepare_firecrawl_domain_for_task(self, cur, task: ClaimedTask, worker_id: str) -> str:
         now = _utc_now()

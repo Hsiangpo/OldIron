@@ -319,6 +319,7 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         from england_crawler.cluster.schema import initialize_schema
 
         with tempfile.TemporaryDirectory() as tmp:
+            self._reset_cluster_tables()
             input_xlsx = Path(tmp) / "docs" / "英国.xlsx"
             self._build_companies_house_xlsx(input_xlsx, ["Alpha Ltd", "Beta Ltd"])
 
@@ -378,6 +379,65 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
             self.assertIsNotNone(task_row)
             self.assertEqual(task_row["status"], "leased")
             self.assertEqual(int(source_row["count"]), 1)
+
+    def test_submit_companies_house_skips_done_stage_for_existing_company(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        with tempfile.TemporaryDirectory() as tmp:
+            input_xlsx = Path(tmp) / "docs" / "英国.xlsx"
+            self._build_companies_house_xlsx(input_xlsx, ["Alpha Ltd", "Beta Ltd"])
+
+            config = ClusterConfig.from_env(ROOT)
+            config.postgres_dsn = self.dsn
+            db = ClusterDb(self.dsn)
+            initialize_schema(db)
+            repo = ClusterRepository(db, config)
+
+            self.assertEqual(repo.submit_companies_house_input(input_xlsx, max_companies=1), 1)
+            with db.transaction() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE england_ch_companies
+                        SET ch_task_status = 'done', gmap_task_status = 'done', updated_at = NOW()
+                        WHERE normalized_name = 'ALPHA LTD'
+                        """
+                    )
+                    cur.execute(
+                        """
+                        UPDATE england_cluster_tasks
+                        SET status = 'done', updated_at = NOW()
+                        WHERE pipeline = 'england_companies_house'
+                          AND entity_id = (
+                              SELECT comp_id FROM england_ch_companies WHERE normalized_name = 'ALPHA LTD'
+                          )
+                        """
+                    )
+
+            self._build_companies_house_xlsx(input_xlsx, ["Alpha Ltd", "Beta Ltd", "Gamma Ltd"])
+            inserted = repo.submit_companies_house_input(input_xlsx, max_companies=3)
+            self.assertEqual(inserted, 2)
+
+            with db.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT task_type, status, COUNT(*) AS count
+                        FROM england_cluster_tasks
+                        WHERE pipeline = 'england_companies_house'
+                        GROUP BY task_type, status
+                        ORDER BY task_type, status
+                        """
+                    )
+                    rows = cur.fetchall()
+            summary = {(str(row["task_type"]), str(row["status"])): int(row["count"]) for row in rows}
+            self.assertEqual(summary[("ch_lookup", "done")], 1)
+            self.assertEqual(summary[("ch_gmap", "done")], 1)
+            self.assertEqual(summary[("ch_lookup", "pending")], 2)
+            self.assertEqual(summary[("ch_gmap", "pending")], 2)
 
     def test_submit_england_skips_done_dnb_and_submits_companies_house(self) -> None:
         from england_crawler.cluster.db import ClusterDb
@@ -557,6 +617,64 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
                 [("ALPHA LTD", "failed"), ("BETA LTD", "")],
             )
 
+    def test_submit_england_reconciles_stale_done_ch_tasks_before_state_detection(self) -> None:
+        from england_crawler.cluster.db import ClusterDb
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._reset_cluster_tables()
+            input_xlsx = Path(tmp) / "docs" / "英国.xlsx"
+            self._build_companies_house_xlsx(input_xlsx, ["Alpha Ltd"])
+
+            db = ClusterDb(self.dsn)
+            with db.transaction() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO england_ch_companies(
+                            comp_id, company_name, normalized_name, company_number, company_status, ceo, homepage, domain,
+                            phone, emails_json, ch_task_status, ch_task_retries, gmap_task_status, gmap_task_retries,
+                            firecrawl_task_status, firecrawl_task_retries, last_error, updated_at
+                        ) VALUES(
+                            'c-done','Alpha Ltd','ALPHA LTD','123','','Alice','https://alpha.test','alpha.test','',
+                            '[]'::jsonb,'done',0,'done',0,'done',0,'',NOW()
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO england_ch_source_files(source_path, fingerprint, total_rows, updated_at)
+                        VALUES(%s, %s, 1, NOW())
+                        """,
+                        (f"{input_xlsx.resolve()}|full", f"{input_xlsx.stat().st_mtime_ns}:{input_xlsx.stat().st_size}"),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO england_cluster_tasks(task_id, pipeline, task_type, entity_id, status, retries, next_run_at, payload_json, created_at, updated_at)
+                        VALUES
+                        ('stale-ch-lookup','england_companies_house','ch_lookup','c-done','pending',0,NOW(),%s,NOW(),NOW()),
+                        ('stale-ch-gmap','england_companies_house','ch_gmap','c-done','pending',0,NOW(),%s,NOW(),NOW())
+                        """,
+                        (Jsonb({"comp_id": "c-done", "company_name": "Alpha Ltd"}), Jsonb({"comp_id": "c-done", "company_name": "Alpha Ltd"})),
+                    )
+
+            code, output = self._run_cluster_command(["submit", "England", "--input-xlsx", str(input_xlsx)])
+            self.assertEqual(code, 0)
+            self.assertIn("Companies House | 已完成，跳过", output)
+
+            with db.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT status, COUNT(*) AS count
+                        FROM england_cluster_tasks
+                        WHERE pipeline = 'england_companies_house'
+                        GROUP BY status
+                        ORDER BY status
+                        """
+                    )
+                    rows = cur.fetchall()
+            self.assertEqual({str(row["status"]): int(row["count"]) for row in rows}, {"done": 2})
+
     def test_start_pools_does_not_construct_cluster_db(self) -> None:
         from england_crawler.cluster.cli import run_cluster
 
@@ -612,6 +730,48 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         with patch("england_crawler.cluster.worker.DnbCookieProvider", _Provider):
             with self.assertRaisesRegex(RuntimeError, "9222 浏览器未提供 DNB cookie"):
                 ClusterWorkerRuntime(config, role="dnb-detail")
+
+    def test_claim_task_marks_stale_done_task_without_execution(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        config = ClusterConfig.from_env(ROOT)
+        config.postgres_dsn = self.dsn
+        db = ClusterDb(self.dsn)
+        initialize_schema(db)
+        repo = ClusterRepository(db, config)
+        with db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE england_cluster_task_attempts RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_cluster_tasks RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_ch_companies RESTART IDENTITY CASCADE")
+                cur.execute(
+                    """
+                    INSERT INTO england_ch_companies(
+                        comp_id, company_name, normalized_name, company_number, company_status, ceo, homepage, domain,
+                        phone, emails_json, ch_task_status, ch_task_retries, gmap_task_status, gmap_task_retries,
+                        firecrawl_task_status, firecrawl_task_retries, last_error, updated_at
+                    ) VALUES('c-stale','Alpha Ltd','ALPHA LTD','123','','Alice','','','',
+                             '[]'::jsonb,'done',0,'pending',0,'',0,'',NOW())
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO england_cluster_tasks(task_id, pipeline, task_type, entity_id, status, retries, next_run_at, payload_json, created_at, updated_at)
+                    VALUES('t-stale','england_companies_house','ch_lookup','c-stale','pending',0,NOW(),%s,NOW(),NOW())
+                    """,
+                    (Jsonb({"comp_id": "c-stale", "company_name": "Alpha Ltd"}),),
+                )
+
+        task = repo.claim_task("worker-1", ["ch_lookup"])
+        self.assertIsNone(task)
+        with db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM england_cluster_tasks WHERE task_id = 't-stale'")
+                row = cur.fetchone()
+        self.assertEqual("done", str(row["status"]))
 
     def test_renew_task_lease_extends_firecrawl_domain_cache_lease(self) -> None:
         from england_crawler.cluster.config import ClusterConfig
