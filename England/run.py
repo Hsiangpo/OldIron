@@ -22,7 +22,7 @@ USAGE_TEXT = """用法：
 站点：
   dnb               — dnb.com 英国全站行业目录（邮箱阶段默认 Firecrawl）
   companies-house   — 英国.xlsx -> Companies House + GMap + Firecrawl
-  cluster           — England 集群模式（Postgres + coordinator + worker）
+  cluster           — England 集群模式（常用：coordinator / start-pools / submit England / produce）
 """
 
 REQUIRED_MODULES = (

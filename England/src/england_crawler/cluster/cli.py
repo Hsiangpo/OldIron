@@ -19,11 +19,13 @@ from england_crawler.cluster.export import export_cluster_snapshots
 from england_crawler.cluster.migrate import migrate_england_history
 from england_crawler.cluster.repository import ClusterRepository
 from england_crawler.cluster.schema import initialize_schema
+from england_crawler.cluster.sources import submit_england_sources
 from england_crawler.cluster.worker import WORKER_ROLE_CAPABILITIES
 from england_crawler.delivery import build_delivery_bundle
 
 
 ROOT = Path(__file__).resolve().parents[3]
+logger = logging.getLogger(__name__)
 
 
 def _configure_logging(log_level: str) -> None:
@@ -237,6 +239,19 @@ def _print_cluster_status(db: ClusterDb) -> None:
         print(f"  {row['task_type']} | {row['status']} | {row['count']}")
 
 
+def _normalize_submit_target(raw: str) -> str:
+    value = str(raw or "").strip().lower().replace("_", "-")
+    if value in {"companieshouse", "companies-house"}:
+        return "companies-house"
+    return value
+
+
+def _print_submit_outcomes(lines: list[str]) -> None:
+    print("England 任务补种完成：")
+    for line in lines:
+        print(f"  {line}")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="England 集群模式命令")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -250,7 +265,7 @@ def _build_parser() -> argparse.ArgumentParser:
     produce.add_argument("day_label", help="交付日，例如 day2")
     sub.add_parser("coordinator", help="启动 England 集群协调器")
     submit = sub.add_parser("submit", help="向集群提交新任务")
-    submit.add_argument("target", choices=["dnb", "companies-house"], help="提交目标")
+    submit.add_argument("target", help="提交目标（dnb / companies-house / England）")
     submit.add_argument("--input-xlsx", default=str(ROOT / "docs" / "英国.xlsx"), help="Companies House 输入文件")
     submit.add_argument("--max-companies", type=int, default=0, help="Companies House 最大导入数")
     worker = sub.add_parser("worker", help="启动单个 England 集群 worker")
@@ -307,20 +322,38 @@ def run_cluster(argv: list[str]) -> int:
     if args.command == "submit":
         initialize_schema(db)
         repo = ClusterRepository(db, config)
-        if args.target == "dnb":
+        target = _normalize_submit_target(str(args.target))
+        if target == "dnb":
             count = repo.submit_dnb_seed_tasks()
             print(f"England DNB 新增种子任务：{count}")
             return 0
-        count = repo.submit_companies_house_input(
-            Path(args.input_xlsx),
-            max_companies=max(int(args.max_companies or 0), 0),
-        )
-        print(f"England Companies House 新增任务：{count}")
-        return 0
+        if target == "companies-house":
+            count = repo.submit_companies_house_input(
+                Path(args.input_xlsx),
+                max_companies=max(int(args.max_companies or 0), 0),
+            )
+            print(f"England Companies House 新增任务：{count}")
+            return 0
+        if target == "england":
+            outcomes = submit_england_sources(
+                repo,
+                input_xlsx=Path(args.input_xlsx),
+                max_companies=max(int(args.max_companies or 0), 0),
+            )
+            _print_submit_outcomes([item.render() for item in outcomes])
+            return 0
+        parser.error(f"不支持的提交目标：{args.target}")
+        return 1
     if args.command == "status":
         _print_cluster_status(db)
         return 0
     if args.command == "coordinator":
+        logger.info(
+            "England 集群配置已加载：env=%s dsn=%s base_url=%s",
+            ROOT / ".env",
+            config.postgres_dsn,
+            config.coordinator_base_url,
+        )
         CoordinatorRuntime(config).serve_forever()
         return 0
     if args.command == "worker":

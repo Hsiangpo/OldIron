@@ -408,7 +408,7 @@ class ClusterTaskOpsMixin:
                 (task_id, pipeline, task_type, entity_id, self._utc_now(), Jsonb(payload), self._utc_now(), self._utc_now()),
             )
             return 1
-        if force_pending and str(row["status"]) != "done":
+        if force_pending and str(row["status"]) not in {"done", "leased"}:
             cur.execute(
                 """
                 UPDATE england_cluster_tasks

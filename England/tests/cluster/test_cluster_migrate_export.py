@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import socket
@@ -6,8 +7,11 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
+from openpyxl import Workbook
 from psycopg.types.json import Jsonb
 
 
@@ -72,6 +76,41 @@ class ClusterPostgresCase(unittest.TestCase):
 
 
 class ClusterMigrationExportTests(ClusterPostgresCase):
+    def _build_companies_house_xlsx(self, path: Path, names: list[str]) -> None:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet["A1"] = "Company Name"
+        for index, name in enumerate(names, start=2):
+            sheet.cell(row=index, column=1, value=name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        workbook.save(path)
+
+    def _run_cluster_command(self, argv: list[str]) -> tuple[int, str]:
+        from england_crawler.cluster.cli import run_cluster
+
+        buffer = io.StringIO()
+        with patch.dict(os.environ, {"ENGLAND_CLUSTER_POSTGRES_DSN": self.dsn}, clear=False):
+            with redirect_stdout(buffer):
+                code = run_cluster(argv)
+        return code, buffer.getvalue()
+
+    def _reset_cluster_tables(self) -> None:
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.schema import initialize_schema
+
+        db = ClusterDb(self.dsn)
+        initialize_schema(db)
+        with db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE england_cluster_task_attempts RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_cluster_tasks RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_dnb_discovery_nodes RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_dnb_segments RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_dnb_companies RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_ch_source_files RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_ch_companies RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_firecrawl_domain_cache RESTART IDENTITY CASCADE")
+
     def _prepare_sample_output(self, tmp: Path) -> None:
         output = tmp / "output"
         (output / "dnb").mkdir(parents=True, exist_ok=True)
@@ -272,3 +311,248 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
                 row = cur.fetchone()
         self.assertEqual(row["firecrawl_task_status"], "done")
         self.assertIn("hello@gamma.test", row["emails_json"])
+
+    def test_submit_companies_house_skips_unchanged_source(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        with tempfile.TemporaryDirectory() as tmp:
+            input_xlsx = Path(tmp) / "docs" / "英国.xlsx"
+            self._build_companies_house_xlsx(input_xlsx, ["Alpha Ltd", "Beta Ltd"])
+
+            config = ClusterConfig.from_env(ROOT)
+            config.postgres_dsn = self.dsn
+            db = ClusterDb(self.dsn)
+            initialize_schema(db)
+            repo = ClusterRepository(db, config)
+
+            first_inserted = repo.submit_companies_house_input(input_xlsx)
+            self.assertEqual(first_inserted, 2)
+
+            with db.transaction() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE england_cluster_tasks
+                        SET status = 'leased', lease_owner = 'worker-x', updated_at = NOW()
+                        WHERE pipeline = 'england_companies_house'
+                          AND task_type = 'ch_lookup'
+                          AND entity_id = (
+                              SELECT comp_id
+                              FROM england_ch_companies
+                              WHERE normalized_name = 'ALPHA LTD'
+                          )
+                        """
+                    )
+
+            second_inserted = repo.submit_companies_house_input(input_xlsx)
+            self.assertEqual(second_inserted, 0)
+
+            with db.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT status
+                        FROM england_cluster_tasks
+                        WHERE pipeline = 'england_companies_house'
+                          AND task_type = 'ch_lookup'
+                          AND entity_id = (
+                              SELECT comp_id
+                              FROM england_ch_companies
+                              WHERE normalized_name = 'ALPHA LTD'
+                          )
+                        """
+                    )
+                    task_row = cur.fetchone()
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS count
+                        FROM england_ch_source_files
+                        WHERE source_path = %s
+                        """,
+                        (f"{input_xlsx.resolve()}|full",),
+                    )
+                    source_row = cur.fetchone()
+            self.assertIsNotNone(task_row)
+            self.assertEqual(task_row["status"], "leased")
+            self.assertEqual(int(source_row["count"]), 1)
+
+    def test_submit_england_skips_done_dnb_and_submits_companies_house(self) -> None:
+        from england_crawler.cluster.db import ClusterDb
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._reset_cluster_tables()
+            input_xlsx = Path(tmp) / "docs" / "英国.xlsx"
+            self._build_companies_house_xlsx(input_xlsx, ["Alpha Ltd", "Beta Ltd"])
+
+            db = ClusterDb(self.dsn)
+            with db.transaction() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO england_dnb_discovery_nodes(
+                            segment_id, industry_path, country_iso_two_code, region_name, city_name,
+                            expected_count, task_status, task_retries, updated_at
+                        ) VALUES('seg-done','construction','gb','','',10,'done',0,NOW())
+                        """
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO england_dnb_segments(
+                            segment_id, industry_path, country_iso_two_code, region_name, city_name,
+                            expected_count, next_page, task_status, task_retries, updated_at
+                        ) VALUES('seg-done','construction','gb','','',10,1,'done',0,NOW())
+                        """
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO england_dnb_companies(
+                            duns, company_name_en_dnb, company_name_url, key_principal, address, city, region, country,
+                            postal_code, sales_revenue, dnb_website, website, domain, website_source, company_name_en_gmap,
+                            company_name_en_site, company_name_resolved, site_evidence_url, site_evidence_quote, site_confidence,
+                            phone, emails_json, detail_done, detail_task_status, detail_task_retries, gmap_task_status,
+                            gmap_task_retries, firecrawl_task_status, firecrawl_task_retries, last_error, updated_at
+                        ) VALUES(
+                            'dnb-done','Done Ltd','','','','','','United Kingdom','','','','https://done.test','done.test','gmap',
+                            '','','','','',0,'','[]'::jsonb,TRUE,'done',0,'done',0,'done',0,'',NOW()
+                        )
+                        """
+                    )
+
+            code, output = self._run_cluster_command(
+                ["submit", "England", "--input-xlsx", str(input_xlsx)]
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("DNB | 已完成，跳过", output)
+            self.assertIn("Companies House | 新增任务 2", output)
+
+            with db.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS count
+                        FROM england_cluster_tasks
+                        WHERE pipeline = 'england_companies_house' AND status = 'pending'
+                        """
+                    )
+                    row = cur.fetchone()
+            self.assertEqual(int(row["count"]), 4)
+
+    def test_submit_england_requeues_failed_source(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._reset_cluster_tables()
+            input_xlsx = Path(tmp) / "docs" / "英国.xlsx"
+            self._build_companies_house_xlsx(input_xlsx, ["Alpha Ltd"])
+
+            config = ClusterConfig.from_env(ROOT)
+            config.postgres_dsn = self.dsn
+            db = ClusterDb(self.dsn)
+            initialize_schema(db)
+            repo = ClusterRepository(db, config)
+            self.assertEqual(repo.submit_companies_house_input(input_xlsx), 1)
+
+            with db.transaction() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE england_cluster_tasks
+                        SET status = 'failed', retries = 5, last_error = 'boom'
+                        WHERE pipeline = 'england_companies_house'
+                        """
+                    )
+                    cur.execute(
+                        """
+                        UPDATE england_ch_companies
+                        SET ch_task_status = 'failed', ch_task_retries = 5, gmap_task_status = 'failed', gmap_task_retries = 5,
+                            last_error = 'boom', updated_at = NOW()
+                        WHERE normalized_name = 'ALPHA LTD'
+                        """
+                    )
+
+            code, output = self._run_cluster_command(
+                ["submit", "England", "--input-xlsx", str(input_xlsx)]
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("Companies House | 已重挂失败任务 2", output)
+
+            with db.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT status, retries, last_error
+                        FROM england_cluster_tasks
+                        WHERE pipeline = 'england_companies_house'
+                        ORDER BY task_type
+                        """
+                    )
+                    task_rows = cur.fetchall()
+            self.assertEqual([str(row["status"]) for row in task_rows], ["pending", "pending"])
+            self.assertEqual([int(row["retries"]) for row in task_rows], [0, 0])
+            self.assertEqual([str(row["last_error"]) for row in task_rows], ["", ""])
+
+    def test_submit_england_prefers_new_companies_house_source_over_failed_only(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._reset_cluster_tables()
+            input_xlsx = Path(tmp) / "docs" / "英国.xlsx"
+            self._build_companies_house_xlsx(input_xlsx, ["Alpha Ltd"])
+
+            config = ClusterConfig.from_env(ROOT)
+            config.postgres_dsn = self.dsn
+            db = ClusterDb(self.dsn)
+            initialize_schema(db)
+            repo = ClusterRepository(db, config)
+            self.assertEqual(repo.submit_companies_house_input(input_xlsx), 1)
+
+            with db.transaction() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE england_cluster_tasks
+                        SET status = 'failed', retries = 5, last_error = 'boom'
+                        WHERE pipeline = 'england_companies_house'
+                        """
+                    )
+                    cur.execute(
+                        """
+                        UPDATE england_ch_companies
+                        SET ch_task_status = 'failed', ch_task_retries = 5, gmap_task_status = 'failed', gmap_task_retries = 5,
+                            last_error = 'boom', updated_at = NOW()
+                        WHERE normalized_name = 'ALPHA LTD'
+                        """
+                    )
+
+            time.sleep(0.01)
+            self._build_companies_house_xlsx(input_xlsx, ["Alpha Ltd", "Beta Ltd"])
+
+            code, output = self._run_cluster_command(
+                ["submit", "England", "--input-xlsx", str(input_xlsx)]
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("Companies House | 新增任务 1", output)
+
+            with db.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT normalized_name, ch_task_status
+                        FROM england_ch_companies
+                        ORDER BY normalized_name
+                        """
+                    )
+                    company_rows = cur.fetchall()
+            self.assertEqual(
+                [(str(row["normalized_name"]), str(row["ch_task_status"])) for row in company_rows],
+                [("ALPHA LTD", "failed"), ("BETA LTD", "")],
+            )

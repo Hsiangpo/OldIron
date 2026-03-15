@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -25,6 +26,7 @@ from england_crawler.snov.client import extract_domain
 DNB_PIPELINE = "england_dnb"
 CH_PIPELINE = "england_companies_house"
 FIRECRAWL_WAIT_SECONDS = 15.0
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -79,6 +81,19 @@ def _merge_text(current: object, incoming: object) -> str:
 def _build_comp_id(company_name: str) -> str:
     normalized = normalize_company_name(company_name)
     return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+
+
+def _source_fingerprint(path: Path) -> str:
+    stat = path.resolve().stat()
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
+def _source_scope(max_companies: int) -> str:
+    return f"limit:{max_companies}" if max(int(max_companies), 0) > 0 else "full"
+
+
+def _source_key(path: Path, scope: str) -> str:
+    return f"{path.resolve()}|{scope.strip() or 'full'}"
 
 
 @dataclass(slots=True)
@@ -390,15 +405,85 @@ class ClusterRepository(ClusterTaskOpsMixin):
                     count += self._upsert_task_locked(cur, pipeline=DNB_PIPELINE, task_type="dnb_discovery", entity_id=segment.segment_id, payload=segment.to_dict(), force_pending=True)
         return count
 
-    def submit_companies_house_input(self, input_xlsx: Path, max_companies: int = 0) -> int:
-        names = iter_company_names_from_xlsx(input_xlsx, limit=max_companies)
-        inserted = 0
+    def get_dnb_source_state(self) -> str:
+        counts = self._get_pipeline_task_counts(DNB_PIPELINE)
+        if counts["pending"] > 0 or counts["leased"] > 0:
+            return "in_progress"
+        if counts["failed"] > 0:
+            return "failed_only"
+        if self._has_dnb_history():
+            return "done"
+        return "uninitialized"
+
+    def get_companies_house_source_state(self, input_xlsx: Path, max_companies: int = 0) -> str:
+        counts = self._get_pipeline_task_counts(CH_PIPELINE)
+        if counts["pending"] > 0 or counts["leased"] > 0:
+            return "in_progress"
+        if not self._is_companies_house_source_loaded(input_xlsx, max_companies=max_companies):
+            return "uninitialized"
+        if counts["failed"] > 0:
+            return "failed_only"
+        return "done"
+
+    def requeue_failed_tasks_for_pipeline(self, pipeline: str) -> int:
+        normalized = str(pipeline or "").strip()
+        if normalized not in {DNB_PIPELINE, CH_PIPELINE}:
+            return 0
+        count = 0
+        now = _utc_now()
         with self._db.transaction() as conn:
             with conn.cursor() as cur:
-                for company_name in names:
+                cur.execute(
+                    """
+                    SELECT task_id, task_type, entity_id
+                    FROM england_cluster_tasks
+                    WHERE pipeline = %s AND status = 'failed'
+                    ORDER BY task_id
+                    FOR UPDATE
+                    """,
+                    (normalized,),
+                )
+                for row in cur.fetchall():
+                    task_id = str(row["task_id"])
+                    task_type = str(row["task_type"])
+                    entity_id = str(row["entity_id"])
+                    if normalized == DNB_PIPELINE:
+                        self._requeue_failed_dnb_task_locked(cur, task_type=task_type, entity_id=entity_id)
+                    else:
+                        self._requeue_failed_ch_task_locked(cur, task_type=task_type, entity_id=entity_id)
+                    cur.execute(
+                        """
+                        UPDATE england_cluster_tasks
+                        SET status = 'pending', retries = 0, next_run_at = %s, lease_owner = '',
+                            lease_expires_at = NULL, last_error = '', updated_at = %s
+                        WHERE task_id = %s
+                        """,
+                        (now, now, task_id),
+                    )
+                    count += 1
+        return count
+
+    def submit_companies_house_input(self, input_xlsx: Path, max_companies: int = 0) -> int:
+        source_path = Path(input_xlsx).resolve()
+        scope = _source_scope(max_companies)
+        fingerprint = _source_fingerprint(source_path)
+        inserted = 0
+        total_rows = 0
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                if self._source_is_loaded_locked(
+                    cur,
+                    source_path=source_path,
+                    fingerprint=fingerprint,
+                    scope=scope,
+                ):
+                    logger.info("Companies House 输入未变化，跳过重复补种：%s | 范围=%s", source_path, scope)
+                    return 0
+                for company_name in iter_company_names_from_xlsx(source_path, limit=max_companies):
                     normalized_name = normalize_company_name(company_name)
                     if not normalized_name:
                         continue
+                    total_rows += 1
                     comp_id = _build_comp_id(company_name)
                     cur.execute(
                         """
@@ -412,7 +497,142 @@ class ClusterRepository(ClusterTaskOpsMixin):
                     )
                     inserted += self._upsert_task_locked(cur, pipeline=CH_PIPELINE, task_type="ch_lookup", entity_id=comp_id, payload={"comp_id": comp_id, "company_name": company_name.strip(), "company_number": "", "homepage": "", "domain": ""}, force_pending=True)
                     self._upsert_task_locked(cur, pipeline=CH_PIPELINE, task_type="ch_gmap", entity_id=comp_id, payload={"comp_id": comp_id, "company_name": company_name.strip(), "company_number": "", "homepage": "", "domain": ""}, force_pending=True)
+                self._mark_source_loaded_locked(
+                    cur,
+                    source_path=source_path,
+                    fingerprint=fingerprint,
+                    total_rows=total_rows,
+                    scope=scope,
+                )
         return inserted
+
+    def _get_pipeline_task_counts(self, pipeline: str) -> dict[str, int]:
+        counts = {"pending": 0, "leased": 0, "failed": 0, "done": 0}
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status, COUNT(*) AS count
+                    FROM england_cluster_tasks
+                    WHERE pipeline = %s
+                    GROUP BY status
+                    """,
+                    (pipeline,),
+                )
+                for row in cur.fetchall():
+                    status = str(row["status"] or "").strip().lower()
+                    if status in counts:
+                        counts[status] = int(row["count"] or 0)
+        return counts
+
+    def _has_dnb_history(self) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1 FROM england_dnb_discovery_nodes
+                        UNION ALL
+                        SELECT 1 FROM england_dnb_segments
+                        UNION ALL
+                        SELECT 1 FROM england_dnb_companies
+                    ) AS has_rows
+                    """
+                )
+                row = cur.fetchone()
+        return bool(row and row["has_rows"])
+
+    def _is_companies_house_source_loaded(self, input_xlsx: Path, *, max_companies: int = 0) -> bool:
+        source_path = Path(input_xlsx).resolve()
+        scope = _source_scope(max_companies)
+        fingerprint = _source_fingerprint(source_path)
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                return self._source_is_loaded_locked(
+                    cur,
+                    source_path=source_path,
+                    fingerprint=fingerprint,
+                    scope=scope,
+                )
+
+    def _source_is_loaded_locked(
+        self,
+        cur,
+        *,
+        source_path: Path,
+        fingerprint: str,
+        scope: str,
+    ) -> bool:
+        cur.execute(
+            "SELECT fingerprint FROM england_ch_source_files WHERE source_path = %s",
+            (_source_key(source_path, scope),),
+        )
+        row = cur.fetchone()
+        return row is not None and str(row["fingerprint"]) == fingerprint
+
+    def _requeue_failed_dnb_task_locked(self, cur, *, task_type: str, entity_id: str) -> None:
+        if task_type == "dnb_discovery":
+            cur.execute(
+                """
+                UPDATE england_dnb_discovery_nodes
+                SET task_status = 'pending', task_retries = 0, updated_at = %s
+                WHERE segment_id = %s
+                """,
+                (_utc_now(), entity_id),
+            )
+            return
+        if task_type == "dnb_list_segment":
+            cur.execute(
+                """
+                UPDATE england_dnb_segments
+                SET task_status = 'pending', task_retries = 0, updated_at = %s
+                WHERE segment_id = %s
+                """,
+                (_utc_now(), entity_id),
+            )
+            return
+        self._update_dnb_task_state_locked(
+            cur,
+            duns=entity_id,
+            task_type=task_type,
+            status="pending",
+            retries=0,
+        )
+
+    def _requeue_failed_ch_task_locked(self, cur, *, task_type: str, entity_id: str) -> None:
+        self._update_ch_task_state_locked(
+            cur,
+            comp_id=entity_id,
+            task_type=task_type,
+            status="pending",
+            retries=0,
+        )
+
+    def _mark_source_loaded_locked(
+        self,
+        cur,
+        *,
+        source_path: Path,
+        fingerprint: str,
+        total_rows: int,
+        scope: str,
+    ) -> None:
+        cur.execute(
+            """
+            INSERT INTO england_ch_source_files(source_path, fingerprint, total_rows, updated_at)
+            VALUES(%s, %s, %s, %s)
+            ON CONFLICT(source_path) DO UPDATE SET
+                fingerprint = EXCLUDED.fingerprint,
+                total_rows = EXCLUDED.total_rows,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (
+                _source_key(source_path, scope),
+                fingerprint,
+                max(int(total_rows), 0),
+                _utc_now(),
+            ),
+        )
 
     def _select_claimable_task(self, cur) -> dict[str, Any] | None:
         cur.execute(
