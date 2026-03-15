@@ -223,8 +223,14 @@ class ClusterApiClient:
             json=payload,
             timeout=30,
         )
-        response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+        if response.status_code >= 400:
+            if isinstance(data, dict) and data.get("error"):
+                raise RuntimeError(str(data["error"]))
+            raise RuntimeError(f"协调器 HTTP {response.status_code}: {path}")
         if not isinstance(data, dict):
             raise RuntimeError(f"协调器返回非法响应：{path}")
         if data.get("error"):
@@ -249,7 +255,10 @@ class CoordinatorKeyPool:
         self._lease_index = 0
 
     def acquire(self) -> KeyLease:
-        key = self._api.acquire_firecrawl_key()
+        try:
+            key = self._api.acquire_firecrawl_key()
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(str(exc)) from exc
         self._lease_index += 1
         self._leases[self._lease_index] = key["key_hash"]
         return KeyLease(key=key["key_value"], index=self._lease_index)
@@ -468,6 +477,13 @@ class ClusterWorkerRuntime:
         self._last_heartbeat = now
 
     def _handle_task(self, task: ClaimedTaskPayload) -> None:
+        logger.info(
+            "任务开始：worker=%s | role=%s | type=%s | entity=%s",
+            self._worker_id,
+            self._role,
+            task.task_type,
+            task.payload.get("comp_id", task.payload.get("duns", task.entity_id if hasattr(task, "entity_id") else "")),
+        )
         try:
             result = self._execute_task(task)
             if not self._report_complete(task.task_id, result):
@@ -518,18 +534,23 @@ class ClusterWorkerRuntime:
         payload = task.payload
         if task.task_type == "dnb_discovery":
             segment = Segment.from_dict(payload)
+            logger.info("DNB 探索开始：%s", segment.segment_id)
             result = self._dnb_client.fetch_company_listing_page(segment=segment, page_number=1)
+            expected = int(result.get("candidatesMatchedQuantityInt", 0) or 0)
+            logger.info("DNB 探索完成：%s | 预估=%d", segment.segment_id, expected)
             return {
-                "expected_count": int(result.get("candidatesMatchedQuantityInt", 0) or 0),
+                "expected_count": expected,
                 "children": [item.to_dict() for item in extract_child_segments(segment.industry_path, result, segment.country_iso_two_code)],
             }
         if task.task_type == "dnb_list_segment":
             segment = Segment.from_dict(payload)
             page_number = int(payload.get("next_page", 1) or 1)
+            logger.info("DNB 列表开始：%s | page=%d", segment.segment_id, page_number)
             raw = self._dnb_client.fetch_company_listing_page(segment=segment, page_number=page_number)
             rows = [item.to_dict() for item in parse_company_listing(raw)]
             page_count = int(raw.get("pageCount", 1) or 1)
             done = page_number >= page_count or not rows
+            logger.info("DNB 列表完成：%s | page=%d | rows=%d | done=%s", segment.segment_id, page_number, len(rows), done)
             return {
                 "rows": rows,
                 "next_page": page_number + 1,
@@ -537,18 +558,23 @@ class ClusterWorkerRuntime:
                 "done": done,
             }
         if task.task_type == "dnb_detail":
+            logger.info("DNB 详情开始：%s | %s", payload.get("duns", ""), payload.get("company_name_en_dnb", ""))
             company = parse_company_profile(
                 record=CompanyRecord.from_dict(payload),
                 payload=self._dnb_client.fetch_company_profile(str(payload.get("company_name_url", ""))),
             )
+            logger.info("DNB 详情完成：%s | 负责人=%s | 官网=%s", company.duns, company.key_principal, company.dnb_website)
             return company.to_dict()
         if task.task_type == "dnb_gmap":
+            logger.info("GMap 开始：%s | %s", payload.get("duns", ""), payload.get("company_name_en", ""))
             result = GoogleMapsPlaceResult()
             for query in _build_gmap_queries(payload):
+                logger.info("GMap 查询：%s | %s", payload.get("duns", ""), query)
                 candidate = self._gmap_client.search_company_profile(query, company_name=str(payload.get("company_name_en", "")))
                 result = _merge_place_results(result, candidate)
                 if result.website:
                     break
+            logger.info("GMap 完成：%s | 官网=%s | 电话=%s", payload.get("duns", ""), result.website or payload.get("dnb_website", ""), result.phone)
             return {
                 "website": result.website or str(payload.get("dnb_website", "")),
                 "source": "gmap" if result.website else ("dnb" if str(payload.get("dnb_website", "")) else ""),
@@ -556,34 +582,48 @@ class ClusterWorkerRuntime:
                 "company_name_local_gmap": result.company_name,
             }
         if task.task_type == "dnb_firecrawl":
+            domain = str(payload.get("domain", "")).strip().lower() or extract_domain(str(payload.get("homepage", "")).strip())
+            logger.info("Firecrawl 开始：%s | 域名=%s", payload.get("duns", ""), domain)
             emails = self._email_service.discover_emails(
                 company_name=str(payload.get("company_name_en_dnb", "")),
                 homepage=str(payload.get("homepage", "")),
                 domain=str(payload.get("domain", "")),
             )
+            logger.info("Firecrawl 完成：%s | 域名=%s | 邮箱=%d", payload.get("duns", ""), domain, len(emails))
             return {"emails": emails}
         if task.task_type == "ch_lookup":
+            logger.info("CH 开始：%s | %s", payload.get("comp_id", ""), payload.get("company_name", ""))
+            logger.info("CH 查询：%s | %s", payload.get("comp_id", ""), payload.get("company_name", ""))
             candidates = self._ch_client.search_companies(str(payload.get("company_name", "")))
             candidate = select_best_candidate(str(payload.get("company_name", "")), candidates)
             if candidate is None:
+                logger.info("CH 未命中：%s | 公司号= | 代表人=", payload.get("comp_id", ""))
                 return {"company_number": "", "company_status": "not_found", "ceo": ""}
+            logger.info("CH 命中：%s | 公司号=%s | 状态=%s", payload.get("comp_id", ""), candidate.company_number, candidate.status_text)
+            logger.info("CH Officers 查询：%s | 公司号=%s", payload.get("comp_id", ""), candidate.company_number)
             ceo = self._ch_client.fetch_first_active_director(candidate.company_number)
+            logger.info("CH 完成：%s | 公司号=%s | 代表人=%s", payload.get("comp_id", ""), candidate.company_number, ceo)
             return {
                 "company_number": candidate.company_number,
                 "company_status": candidate.status_text,
                 "ceo": ceo,
             }
         if task.task_type == "ch_gmap":
+            logger.info("GMap 开始：%s | %s", payload.get("comp_id", ""), payload.get("company_name", ""))
             profile = self._gmap_client.search_company_profile(
                 str(payload.get("company_name", "")),
                 str(payload.get("company_name", "")),
             )
+            logger.info("GMap 完成：%s | 官网=%s | 电话=%s", payload.get("comp_id", ""), profile.website, profile.phone)
             return {"homepage": profile.website, "phone": profile.phone}
         if task.task_type == "ch_firecrawl":
+            domain = str(payload.get("domain", "")).strip().lower() or extract_domain(str(payload.get("homepage", "")).strip())
+            logger.info("Firecrawl 开始：%s | 域名=%s", payload.get("comp_id", ""), domain)
             emails = self._email_service.discover_emails(
                 company_name=str(payload.get("company_name", "")),
                 homepage=str(payload.get("homepage", "")),
                 domain=str(payload.get("domain", "")),
             )
+            logger.info("Firecrawl 完成：%s | 域名=%s | 邮箱=%d", payload.get("comp_id", ""), domain, len(emails))
             return {"emails": emails}
         raise RuntimeError(f"未知任务类型：{task.task_type}")

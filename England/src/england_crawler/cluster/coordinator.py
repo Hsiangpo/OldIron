@@ -148,7 +148,11 @@ class CoordinatorRuntime:
                         self._write_json(200, {"ok": True})
                         return
                     if path == "/api/v1/firecrawl/lease":
-                        lease = runtime._repo.acquire_firecrawl_key(str(body.get("worker_id", "")).strip())
+                        try:
+                            lease = runtime._repo.acquire_firecrawl_key(str(body.get("worker_id", "")).strip())
+                        except RuntimeError as exc:
+                            self._write_json(503, {"error": str(exc)})
+                            return
                         self._write_json(200, {"key_hash": lease.key_hash, "key_value": lease.key_value})
                         return
                     if path == "/api/v1/firecrawl/release":
