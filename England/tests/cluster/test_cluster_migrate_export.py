@@ -746,6 +746,28 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         )
         self.assertEqual("1", captured["kwargs"]["env"]["PYTHONUNBUFFERED"])
 
+    def test_decode_process_output_handles_gbk_bytes(self) -> None:
+        from england_crawler.cluster.cli import _decode_process_output
+
+        text = _decode_process_output("正在终止进程".encode("gbk"))
+
+        self.assertIn("正在终止进程", text)
+
+    def test_run_captured_command_uses_binary_mode(self) -> None:
+        from england_crawler.cluster.cli import _run_captured_command
+
+        class _FakeCompleted:
+            def __init__(self) -> None:
+                self.stdout = "完成".encode("gbk")
+                self.stderr = b""
+
+        with patch("england_crawler.cluster.cli.subprocess.run", return_value=_FakeCompleted()) as mocked:
+            stdout, stderr = _run_captured_command(["taskkill", "/PID", "123"])
+
+        self.assertEqual("完成", stdout)
+        self.assertEqual("", stderr)
+        self.assertFalse(bool(mocked.call_args.kwargs["text"]))
+
     def test_start_pools_relaunches_when_pid_is_reused_by_other_process(self) -> None:
         from england_crawler.cluster.cli import _start_local_worker_pools
         from england_crawler.cluster.config import ClusterConfig

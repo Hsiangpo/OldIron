@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import locale
 import logging
 import os
 from pathlib import Path
@@ -64,6 +65,28 @@ def _worker_command_markers(role: str, index: int) -> list[str]:
     ]
 
 
+def _decode_process_output(data: bytes) -> str:
+    if not data:
+        return ""
+    preferred = locale.getpreferredencoding(False) or "utf-8"
+    for encoding in (preferred, "utf-8", "gbk", "mbcs"):
+        try:
+            return data.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return data.decode("utf-8", errors="ignore")
+
+
+def _run_captured_command(args: list[str]) -> tuple[str, str]:
+    result = subprocess.run(
+        args,
+        check=False,
+        capture_output=True,
+        text=False,
+    )
+    return _decode_process_output(result.stdout), _decode_process_output(result.stderr)
+
+
 def _process_command_line(pid: int) -> str:
     if pid <= 0:
         return ""
@@ -72,33 +95,18 @@ def _process_command_line(pid: int) -> str:
             "Get-CimInstance Win32_Process -Filter \\\"ProcessId = {pid}\\\" | "
             "Select-Object -ExpandProperty CommandLine"
         ).format(pid=pid)
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        return (result.stdout or "").strip()
-    result = subprocess.run(
-        ["ps", "-o", "command=", "-p", str(pid)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return (result.stdout or "").strip()
+        stdout, _ = _run_captured_command(["powershell", "-NoProfile", "-Command", command])
+        return stdout.strip()
+    stdout, _ = _run_captured_command(["ps", "-o", "command=", "-p", str(pid)])
+    return stdout.strip()
 
 
 def _is_running(pid: int) -> bool:
     if pid <= 0:
         return False
     if os.name == "nt":
-        result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        return str(pid) in result.stdout
+        stdout, _ = _run_captured_command(["tasklist", "/FI", f"PID eq {pid}"])
+        return str(pid) in stdout
     try:
         os.kill(pid, 0)
     except OSError:
@@ -120,12 +128,7 @@ def _terminate_pid(pid: int) -> None:
     if pid <= 0:
         return
     if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        _run_captured_command(["taskkill", "/PID", str(pid), "/T", "/F"])
         return
     try:
         os.kill(pid, signal.SIGTERM)
