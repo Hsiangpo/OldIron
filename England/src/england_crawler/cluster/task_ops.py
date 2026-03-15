@@ -15,6 +15,11 @@ from england_crawler.snov.client import is_valid_domain
 class ClusterTaskOpsMixin:
     """England 集群任务写回逻辑。"""
 
+    def _ensure_jsonb_value(self, value):
+        if isinstance(value, Jsonb):
+            return value
+        return self._dump_json_list(self._parse_json_list(value))
+
     def _complete_dnb_discovery_locked(self, cur, task, result):
         expected_count = int(result.get("expected_count", 0) or 0)
         payload = dict(task.payload)
@@ -546,6 +551,8 @@ class ClusterTaskOpsMixin:
         return row
 
     def _upsert_dnb_company_locked(self, cur, row: dict[str, object]):
+        payload = dict(row)
+        payload["emails_json"] = self._ensure_jsonb_value(payload.get("emails_json", []))
         cur.execute(
             """
             INSERT INTO england_dnb_companies(
@@ -595,10 +602,12 @@ class ClusterTaskOpsMixin:
                 last_error = EXCLUDED.last_error,
                 updated_at = EXCLUDED.updated_at
             """,
-            row,
+            payload,
         )
 
     def _upsert_ch_company_locked(self, cur, row: dict[str, object]):
+        payload = dict(row)
+        payload["emails_json"] = self._ensure_jsonb_value(payload.get("emails_json", []))
         cur.execute(
             """
             INSERT INTO england_ch_companies(
@@ -630,5 +639,5 @@ class ClusterTaskOpsMixin:
                 last_error = EXCLUDED.last_error,
                 updated_at = EXCLUDED.updated_at
             """,
-            row,
+            payload,
         )

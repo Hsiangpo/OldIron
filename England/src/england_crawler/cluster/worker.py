@@ -192,7 +192,7 @@ class ClusterApiClient:
         )
 
     def acquire_firecrawl_key(self) -> dict[str, str]:
-        payload = self._post("/api/v1/firecrawl/lease", {"worker_id": self._config.worker_id})
+        payload = self._post("/api/v1/firecrawl/lease", {"worker_id": self._worker_id})
         return {"key_hash": str(payload["key_hash"]), "key_value": str(payload["key_value"])}
 
     def release_firecrawl_key(
