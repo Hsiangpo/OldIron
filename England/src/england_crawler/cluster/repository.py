@@ -260,6 +260,8 @@ class ClusterRepository(ClusterTaskOpsMixin):
             with conn.cursor() as cur:
                 row = self._load_leased_task(cur, task_id, worker_id)
                 if row is None:
+                    if self._is_stale_task_callback_locked(cur, task_id, worker_id):
+                        return
                     raise RuntimeError("任务不存在或不属于当前 worker。")
                 task = ClaimedTask(
                     task_id=str(row["task_id"]),
@@ -286,6 +288,8 @@ class ClusterRepository(ClusterTaskOpsMixin):
             with conn.cursor() as cur:
                 row = self._load_leased_task(cur, task_id, worker_id)
                 if row is None:
+                    if self._is_stale_task_callback_locked(cur, task_id, worker_id):
+                        return
                     raise RuntimeError("任务不存在或不属于当前 worker。")
                 lease_expires_at = _utc_after(self._config.task_lease_seconds)
                 cur.execute(
@@ -316,6 +320,8 @@ class ClusterRepository(ClusterTaskOpsMixin):
             with conn.cursor() as cur:
                 row = self._load_leased_task(cur, task_id, worker_id)
                 if row is None:
+                    if self._is_stale_task_callback_locked(cur, task_id, worker_id):
+                        return
                     raise RuntimeError("任务不存在或不属于当前 worker。")
                 task = ClaimedTask(
                     task_id=str(row["task_id"]),
@@ -824,6 +830,25 @@ class ClusterRepository(ClusterTaskOpsMixin):
             (task_id, worker_id),
         )
         return cur.fetchone()
+
+    def _is_stale_task_callback_locked(self, cur, task_id: str, worker_id: str) -> bool:
+        """允许重复回写在任务已结束或已回到待处理时静默返回。"""
+        cur.execute(
+            """
+            SELECT status, lease_owner
+            FROM england_cluster_tasks
+            WHERE task_id = %s
+            FOR UPDATE
+            """,
+            (task_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return True
+        status = str(row["status"] or "").strip().lower()
+        if status != "leased":
+            return True
+        return False
 
     def _task_retry_limit(self, task_type: str) -> int:
         policy = self._config.retry_policy

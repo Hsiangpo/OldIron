@@ -815,6 +815,76 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
                 row = cur.fetchone()
         self.assertEqual("done", str(row["status"]))
 
+    def test_complete_task_is_idempotent_after_reschedule(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        config = ClusterConfig.from_env(ROOT)
+        config.postgres_dsn = self.dsn
+        db = ClusterDb(self.dsn)
+        initialize_schema(db)
+        repo = ClusterRepository(db, config)
+        with db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE england_cluster_task_attempts RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_cluster_tasks RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_dnb_segments RESTART IDENTITY CASCADE")
+                cur.execute(
+                    """
+                    INSERT INTO england_dnb_segments(
+                        segment_id, industry_path, country_iso_two_code, region_name, city_name,
+                        expected_count, next_page, task_status, task_retries, updated_at
+                    ) VALUES('seg1','construction','gb','','',10,1,'pending',0,NOW())
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO england_cluster_tasks(
+                        task_id, pipeline, task_type, entity_id, status, retries, next_run_at, lease_owner, lease_expires_at, payload_json, created_at, updated_at
+                    ) VALUES('t-seg','england_dnb','dnb_list_segment','seg1','leased',0,NOW(),'worker-1',NOW() + interval '90 seconds',%s,NOW(),NOW())
+                    """,
+                    (Jsonb({"segment_id": "seg1", "industry_path": "construction", "country_iso_two_code": "gb", "next_page": 1}),),
+                )
+
+        result = {"rows": [], "next_page": 2, "total_pages": 5, "done": False}
+        repo.complete_task(task_id="t-seg", worker_id="worker-1", result=result)
+        repo.complete_task(task_id="t-seg", worker_id="worker-1", result=result)
+
+        with db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM england_cluster_tasks WHERE task_id = 't-seg'")
+                row = cur.fetchone()
+        self.assertEqual("pending", str(row["status"]))
+
+    def test_renew_task_lease_ignores_already_rescheduled_task(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        config = ClusterConfig.from_env(ROOT)
+        config.postgres_dsn = self.dsn
+        db = ClusterDb(self.dsn)
+        initialize_schema(db)
+        repo = ClusterRepository(db, config)
+        with db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE england_cluster_task_attempts RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_cluster_tasks RESTART IDENTITY CASCADE")
+                cur.execute(
+                    """
+                    INSERT INTO england_cluster_tasks(
+                        task_id, pipeline, task_type, entity_id, status, retries, next_run_at, lease_owner, lease_expires_at, payload_json, created_at, updated_at
+                    ) VALUES('t-renew-stale','england_dnb','dnb_list_segment','seg2','pending',0,NOW(),'',
+                             NULL,%s,NOW(),NOW())
+                    """,
+                    (Jsonb({"segment_id": "seg2"}),),
+                )
+
+        repo.renew_task_lease(task_id="t-renew-stale", worker_id="worker-1")
+
     def test_renew_task_lease_extends_firecrawl_domain_cache_lease(self) -> None:
         from england_crawler.cluster.config import ClusterConfig
         from england_crawler.cluster.db import ClusterDb
