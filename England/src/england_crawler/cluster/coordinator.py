@@ -57,7 +57,10 @@ class CoordinatorRuntime:
             try:
                 self._repo.requeue_expired_tasks()
                 now = time.monotonic()
-                if now - self._last_export_at >= self._config.snapshot_export_interval_seconds:
+                if (
+                    self._config.auto_export_enabled
+                    and now - self._last_export_at >= self._config.snapshot_export_interval_seconds
+                ):
                     export_cluster_snapshots(self._db, self._config.output_root, include_delivery=True)
                     self._last_export_at = now
             except Exception as exc:  # noqa: BLE001
