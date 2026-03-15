@@ -117,6 +117,7 @@ def resolve_dnb_cookie_header(
     *,
     project_root: Path,
     logger: logging.Logger | None = None,
+    allow_env_fallback: bool = False,
 ) -> str:
     log = logger or logging.getLogger(__name__)
     fallback = os.getenv("DNB_COOKIE_HEADER", "").strip()
@@ -124,13 +125,13 @@ def resolve_dnb_cookie_header(
     try:
         live_cookie = fetch_live_dnb_cookie_header(debug_url=debug_url)
     except Exception as exc:  # noqa: BLE001
-        if fallback:
+        if allow_env_fallback and fallback:
             log.warning("读取 9222 浏览器 DNB cookie 失败，继续使用 .env：%s", exc)
             return fallback
         log.warning("读取 9222 浏览器 DNB cookie 失败：%s", exc)
         return ""
     if not live_cookie:
-        if fallback:
+        if allow_env_fallback and fallback:
             log.warning("9222 浏览器未返回 DNB cookie，继续使用 .env。")
             return fallback
         log.warning("9222 浏览器未返回 DNB cookie。")
@@ -151,10 +152,12 @@ class DnbCookieProvider:
         project_root: Path,
         logger: logging.Logger | None = None,
         min_refresh_seconds: float = 60.0,
+        allow_env_fallback: bool = False,
     ) -> None:
         self.project_root = Path(project_root)
         self.logger = logger or logging.getLogger(__name__)
         self.min_refresh_seconds = max(float(min_refresh_seconds), 0.0)
+        self.allow_env_fallback = bool(allow_env_fallback)
         self._lock = threading.RLock()
         self._cached_cookie = os.getenv("DNB_COOKIE_HEADER", "").strip()
         self._last_refresh_at = 0.0
@@ -170,6 +173,7 @@ class DnbCookieProvider:
             cookie = resolve_dnb_cookie_header(
                 project_root=self.project_root,
                 logger=self.logger,
+                allow_env_fallback=self.allow_env_fallback,
             ).strip()
             if cookie:
                 self._cached_cookie = cookie

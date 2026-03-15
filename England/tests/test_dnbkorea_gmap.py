@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +95,38 @@ class DnbEnglandGMapTests(unittest.TestCase):
 
         self.assertEqual("en", config.hl)
         self.assertEqual("gb", config.gl)
+
+    def test_google_maps_default_proxy_points_to_local_7897(self) -> None:
+        from england_crawler.google_maps.client import GoogleMapsConfig
+
+        with patch.dict(os.environ, {}, clear=True):
+            config = GoogleMapsConfig()
+
+        self.assertEqual("socks5h://127.0.0.1:7897", config.proxy_url)
+
+    def test_google_maps_session_uses_configured_proxy(self) -> None:
+        from england_crawler.google_maps.client import GoogleMapsClient
+        from england_crawler.google_maps.client import GoogleMapsConfig
+
+        created: dict[str, object] = {}
+
+        class _FakeSession:
+            def __init__(self, *, impersonate: str) -> None:
+                created["impersonate"] = impersonate
+                self.trust_env = True
+                self.proxies = {}
+
+        with patch("england_crawler.google_maps.client.cffi_requests.Session", _FakeSession):
+            client = GoogleMapsClient(
+                GoogleMapsConfig(proxy_url="socks5h://127.0.0.1:7897")
+            )
+
+        self.assertEqual("chrome", created["impersonate"])
+        self.assertIs(False, client.session.trust_env)
+        self.assertEqual(
+            {"http": "socks5h://127.0.0.1:7897", "https": "socks5h://127.0.0.1:7897"},
+            client.session.proxies,
+        )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import random
 import re
 import time
@@ -33,6 +34,10 @@ RETRYABLE_TRANSPORT_PATTERNS = (
     r"curl: \((28|35|56|92)\)",
     r"HTTP/2 stream \d+ was not closed cleanly",
 )
+
+
+def _default_dnb_proxy_url() -> str:
+    return os.getenv("DNB_PROXY_URL", "").strip() or "socks5h://127.0.0.1:7897"
 
 
 class RateLimitConfig:
@@ -298,6 +303,9 @@ class DnbClient:
     def _build_session(self) -> cffi_requests.Session:
         session = cffi_requests.Session(impersonate="chrome110")
         session.trust_env = False
+        proxy_url = _default_dnb_proxy_url()
+        if proxy_url:
+            session.proxies = {"http": proxy_url, "https": proxy_url}
         return session
 
     def _refresh_cookie_header(self, *, force_refresh: bool) -> None:

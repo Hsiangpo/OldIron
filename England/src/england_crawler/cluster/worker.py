@@ -8,6 +8,7 @@ import random
 import re
 import socket
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -88,6 +89,8 @@ WORKER_ROLE_CAPABILITIES = {
     "gmap": ["ch_gmap", "dnb_gmap"],
     "email-firecrawl": ["ch_firecrawl", "dnb_firecrawl"],
 }
+
+DNB_CLIENT_TASK_TYPES = {"dnb_discovery", "dnb_list_segment", "dnb_detail"}
 
 
 def _normalize_text(value: str) -> str:
@@ -178,6 +181,12 @@ class ClusterApiClient:
         self._post(
             f"/api/v1/tasks/{task_id}/complete",
             {"worker_id": self._worker_id, "result": result},
+        )
+
+    def renew_task_lease(self, task_id: str) -> None:
+        self._post(
+            f"/api/v1/tasks/{task_id}/renew",
+            {"worker_id": self._worker_id},
         )
 
     def fail_task(self, task_id: str, *, error_text: str, retry_delay_seconds: float, fatal: bool) -> None:
@@ -438,10 +447,30 @@ class ClusterWorkerRuntime:
         self._api = ClusterApiClient(config, worker_id=self._worker_id)
         self._email_service = ClusterEmailService(config, self._api)
         self._gmap_client = GoogleMapsClient(GoogleMapsConfig(hl="en", gl="gb"))
-        provider = DnbCookieProvider(project_root=config.project_root, logger=logger)
-        self._dnb_client = DnbClient(cookie_header=provider.get(force_refresh=True), cookie_provider=provider)
+        self._dnb_client = self._build_dnb_client()
         self._ch_client = CompaniesHouseClient(worker_label=self._worker_id)
         self._last_heartbeat = 0.0
+
+    def _needs_dnb_client(self) -> bool:
+        return any(item in DNB_CLIENT_TASK_TYPES for item in self._capabilities)
+
+    def _build_dnb_client(self) -> DnbClient | None:
+        if not self._needs_dnb_client():
+            return None
+        provider = DnbCookieProvider(
+            project_root=self._config.project_root,
+            logger=logger,
+            allow_env_fallback=False,
+        )
+        cookie_header = provider.get(force_refresh=True)
+        if not cookie_header:
+            raise RuntimeError("DNB worker 启动失败：9222 浏览器未提供 DNB cookie。")
+        return DnbClient(cookie_header=cookie_header, cookie_provider=provider)
+
+    def _require_dnb_client(self) -> DnbClient:
+        if self._dnb_client is None:
+            raise RuntimeError("当前 worker 未初始化 DNB 客户端。")
+        return self._dnb_client
 
     def run_forever(self) -> None:
         self._config.validate_worker_runtime()
@@ -476,6 +505,25 @@ class ClusterWorkerRuntime:
         self._api.heartbeat()
         self._last_heartbeat = now
 
+    def _start_task_lease_renewer(self, task_id: str) -> tuple[threading.Event, threading.Thread]:
+        stop_event = threading.Event()
+        interval_seconds = max(float(self._config.task_lease_seconds) / 3.0, 15.0)
+
+        def _runner() -> None:
+            while not stop_event.wait(interval_seconds):
+                try:
+                    self._api.renew_task_lease(task_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("任务租约续期失败：task=%s | 原因=%s", task_id, exc)
+
+        thread = threading.Thread(
+            target=_runner,
+            name=f"LeaseRenew-{task_id}",
+            daemon=True,
+        )
+        thread.start()
+        return stop_event, thread
+
     def _handle_task(self, task: ClaimedTaskPayload) -> None:
         logger.info(
             "任务开始：worker=%s | role=%s | type=%s | entity=%s",
@@ -484,6 +532,7 @@ class ClusterWorkerRuntime:
             task.task_type,
             task.payload.get("comp_id", task.payload.get("duns", task.entity_id if hasattr(task, "entity_id") else "")),
         )
+        renew_stop, renew_thread = self._start_task_lease_renewer(task.task_id)
         try:
             result = self._execute_task(task)
             if not self._report_complete(task.task_id, result):
@@ -497,6 +546,9 @@ class ClusterWorkerRuntime:
             delay = min((2 ** max(task.retries, 1)) * 5.0, 180.0)
             if not self._report_failure(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=False):
                 logger.warning("任务异常结果暂未回写，等待租约回收后重试：%s", task.task_id)
+        finally:
+            renew_stop.set()
+            renew_thread.join(timeout=1.0)
 
     def _report_complete(self, task_id: str, result: dict[str, object]) -> bool:
         for attempt in range(5):
@@ -533,9 +585,10 @@ class ClusterWorkerRuntime:
     def _execute_task(self, task: ClaimedTaskPayload) -> dict[str, object]:
         payload = task.payload
         if task.task_type == "dnb_discovery":
+            dnb_client = self._require_dnb_client()
             segment = Segment.from_dict(payload)
             logger.info("DNB 探索开始：%s", segment.segment_id)
-            result = self._dnb_client.fetch_company_listing_page(segment=segment, page_number=1)
+            result = dnb_client.fetch_company_listing_page(segment=segment, page_number=1)
             expected = int(result.get("candidatesMatchedQuantityInt", 0) or 0)
             logger.info("DNB 探索完成：%s | 预估=%d", segment.segment_id, expected)
             return {
@@ -543,10 +596,11 @@ class ClusterWorkerRuntime:
                 "children": [item.to_dict() for item in extract_child_segments(segment.industry_path, result, segment.country_iso_two_code)],
             }
         if task.task_type == "dnb_list_segment":
+            dnb_client = self._require_dnb_client()
             segment = Segment.from_dict(payload)
             page_number = int(payload.get("next_page", 1) or 1)
             logger.info("DNB 列表开始：%s | page=%d", segment.segment_id, page_number)
-            raw = self._dnb_client.fetch_company_listing_page(segment=segment, page_number=page_number)
+            raw = dnb_client.fetch_company_listing_page(segment=segment, page_number=page_number)
             rows = [item.to_dict() for item in parse_company_listing(raw)]
             page_count = int(raw.get("pageCount", 1) or 1)
             done = page_number >= page_count or not rows
@@ -558,10 +612,11 @@ class ClusterWorkerRuntime:
                 "done": done,
             }
         if task.task_type == "dnb_detail":
+            dnb_client = self._require_dnb_client()
             logger.info("DNB 详情开始：%s | %s", payload.get("duns", ""), payload.get("company_name_en_dnb", ""))
             company = parse_company_profile(
                 record=CompanyRecord.from_dict(payload),
-                payload=self._dnb_client.fetch_company_profile(str(payload.get("company_name_url", ""))),
+                payload=dnb_client.fetch_company_profile(str(payload.get("company_name_url", ""))),
             )
             logger.info("DNB 详情完成：%s | 负责人=%s | 官网=%s", company.duns, company.key_principal, company.dnb_website)
             return company.to_dict()

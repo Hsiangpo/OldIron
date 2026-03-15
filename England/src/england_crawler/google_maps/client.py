@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import re
 import time
 import urllib.parse
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlunparse
 
@@ -135,6 +137,10 @@ MAP_HEADERS = {
 }
 
 
+def _default_google_maps_proxy() -> str:
+    return os.getenv("GOOGLE_MAPS_PROXY_URL", "").strip() or "socks5h://127.0.0.1:7897"
+
+
 @dataclass(slots=True)
 class GoogleMapsConfig:
     hl: str = "en"
@@ -146,6 +152,7 @@ class GoogleMapsConfig:
     long_rest_interval: int = 250
     long_rest_seconds: float = 5.0
     timeout: float = 30.0
+    proxy_url: str = field(default_factory=_default_google_maps_proxy)
 
 
 @dataclass(slots=True)
@@ -167,7 +174,12 @@ class GoogleMapsClient:
         self.session = self._build_session()
 
     def _build_session(self) -> cffi_requests.Session:
-        return cffi_requests.Session(impersonate="chrome")
+        session = cffi_requests.Session(impersonate="chrome")
+        session.trust_env = False
+        proxy = str(self.config.proxy_url or "").strip()
+        if proxy:
+            session.proxies = {"http": proxy, "https": proxy}
+        return session
 
     def _reset_session(self) -> None:
         try:

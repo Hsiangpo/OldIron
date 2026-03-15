@@ -137,6 +137,14 @@ class CoordinatorRuntime:
                         )
                         self._write_json(200, {"ok": True})
                         return
+                    if path.startswith("/api/v1/tasks/") and path.endswith("/renew"):
+                        task_id = path.removeprefix("/api/v1/tasks/").removesuffix("/renew")
+                        runtime._repo.renew_task_lease(
+                            task_id=task_id,
+                            worker_id=str(body.get("worker_id", "")).strip(),
+                        )
+                        self._write_json(200, {"ok": True})
+                        return
                     if path.startswith("/api/v1/tasks/") and path.endswith("/fail"):
                         task_id = path.removeprefix("/api/v1/tasks/").removesuffix("/fail")
                         runtime._repo.fail_task(

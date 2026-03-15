@@ -241,7 +241,7 @@ class ClusterTaskOpsMixin:
         return "done"
 
     def _complete_ch_lookup_locked(self, cur, task, result):
-        current = self._fetch_ch_company_locked(cur, task.entity_id)
+        current = self._fetch_ch_company_for_update_locked(cur, task.entity_id)
         if current is None:
             raise RuntimeError("Companies House 公司不存在。")
         row = {
@@ -254,12 +254,34 @@ class ClusterTaskOpsMixin:
             "last_error": "",
             "updated_at": self._utc_now(),
         }
-        self._upsert_ch_company_locked(cur, row)
+        cur.execute(
+            """
+            UPDATE england_ch_companies
+            SET company_number = %s,
+                company_status = %s,
+                ceo = %s,
+                ch_task_status = %s,
+                ch_task_retries = %s,
+                last_error = %s,
+                updated_at = %s
+            WHERE comp_id = %s
+            """,
+            (
+                row["company_number"],
+                row["company_status"],
+                row["ceo"],
+                row["ch_task_status"],
+                row["ch_task_retries"],
+                row["last_error"],
+                row["updated_at"],
+                task.entity_id,
+            ),
+        )
         self._queue_ch_firecrawl_if_ready_locked(cur, row)
         return "done"
 
     def _complete_ch_gmap_locked(self, cur, task, result):
-        current = self._fetch_ch_company_locked(cur, task.entity_id)
+        current = self._fetch_ch_company_for_update_locked(cur, task.entity_id)
         if current is None:
             raise RuntimeError("Companies House 公司不存在。")
         homepage = clean_homepage(str(result.get("homepage", "")).strip())
@@ -273,7 +295,29 @@ class ClusterTaskOpsMixin:
             "last_error": "",
             "updated_at": self._utc_now(),
         }
-        self._upsert_ch_company_locked(cur, row)
+        cur.execute(
+            """
+            UPDATE england_ch_companies
+            SET homepage = %s,
+                domain = %s,
+                phone = %s,
+                gmap_task_status = %s,
+                gmap_task_retries = %s,
+                last_error = %s,
+                updated_at = %s
+            WHERE comp_id = %s
+            """,
+            (
+                row["homepage"],
+                row["domain"],
+                row["phone"],
+                row["gmap_task_status"],
+                row["gmap_task_retries"],
+                row["last_error"],
+                row["updated_at"],
+                task.entity_id,
+            ),
+        )
         self._queue_ch_firecrawl_if_ready_locked(cur, row)
         return "done"
 
@@ -501,6 +545,11 @@ class ClusterTaskOpsMixin:
 
     def _fetch_ch_company_locked(self, cur, comp_id: str):
         cur.execute("SELECT * FROM england_ch_companies WHERE comp_id = %s", (comp_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+
+    def _fetch_ch_company_for_update_locked(self, cur, comp_id: str):
+        cur.execute("SELECT * FROM england_ch_companies WHERE comp_id = %s FOR UPDATE", (comp_id,))
         row = cur.fetchone()
         return dict(row) if row is not None else None
 

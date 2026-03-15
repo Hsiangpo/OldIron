@@ -59,6 +59,28 @@ class DnbEnglandBrowserCookieTests(unittest.TestCase):
         self.assertEqual("first=value", second)
         self.assertEqual("second=value", third)
 
+    def test_resolve_dnb_cookie_header_does_not_fallback_env_by_default(self) -> None:
+        from england_crawler.dnb.browser_cookie import resolve_dnb_cookie_header
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("england_crawler.dnb.browser_cookie.fetch_live_dnb_cookie_header", return_value=""):
+                with patch.dict(os.environ, {"DNB_COOKIE_HEADER": "old=value"}, clear=False):
+                    header = resolve_dnb_cookie_header(project_root=root)
+
+        self.assertEqual("", header)
+
+    def test_resolve_dnb_cookie_header_can_opt_in_env_fallback(self) -> None:
+        from england_crawler.dnb.browser_cookie import resolve_dnb_cookie_header
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("england_crawler.dnb.browser_cookie.fetch_live_dnb_cookie_header", return_value=""):
+                with patch.dict(os.environ, {"DNB_COOKIE_HEADER": "old=value"}, clear=False):
+                    header = resolve_dnb_cookie_header(project_root=root, allow_env_fallback=True)
+
+        self.assertEqual("old=value", header)
+
 
 if __name__ == "__main__":
     unittest.main()

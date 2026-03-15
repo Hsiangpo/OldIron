@@ -159,8 +159,14 @@ def run_dnb(argv: list[str]) -> int:
         snov_workers=max(int(args.firecrawl_workers or 1), 1),
     )
 
-    cookie_provider = DnbCookieProvider(project_root=ROOT, logger=logging.getLogger(__name__))
+    cookie_provider = DnbCookieProvider(
+        project_root=ROOT,
+        logger=logging.getLogger(__name__),
+        allow_env_fallback=False,
+    )
     cookie_header = cookie_provider.get(force_refresh=True)
+    if not cookie_header:
+        raise RuntimeError("DNB England 启动失败：9222 浏览器未提供 DNB cookie。")
     client = DnbClient(cookie_header=cookie_header, cookie_provider=cookie_provider)
     skip_firecrawl = bool(args.skip_firecrawl or args.skip_snov)
     try:

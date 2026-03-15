@@ -22,12 +22,17 @@ class DnbEnglandClientTests(unittest.TestCase):
                 self.trust_env = True
                 self.headers = {}
                 self.cookies = {}
+                self.proxies = {}
 
         with patch("england_crawler.dnb.client.cffi_requests.Session", _FakeSession):
             client = DnbClient()
 
         self.assertEqual("chrome110", created["impersonate"])
         self.assertIs(False, client.session.trust_env)
+        self.assertEqual(
+            {"http": "socks5h://127.0.0.1:7897", "https": "socks5h://127.0.0.1:7897"},
+            client.session.proxies,
+        )
 
     def test_seed_cookie_header_uses_cookie_jar_instead_of_static_header(self) -> None:
         from england_crawler.dnb.client import DnbClient

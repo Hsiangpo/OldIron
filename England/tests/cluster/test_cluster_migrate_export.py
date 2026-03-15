@@ -583,3 +583,132 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
                 with redirect_stdout(buffer):
                     with self.assertRaises(_WorkerExit):
                         run_cluster(["worker", "ch-lookup"])
+
+    def test_gmap_worker_init_does_not_touch_dnb_cookie_provider(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.worker import ClusterWorkerRuntime
+
+        config = ClusterConfig.from_env(ROOT)
+        with patch(
+            "england_crawler.cluster.worker.DnbCookieProvider",
+            side_effect=AssertionError("gmap worker 不该读取 9222 cookie"),
+        ):
+            worker = ClusterWorkerRuntime(config, role="gmap")
+
+        self.assertIsNone(worker._dnb_client)
+
+    def test_dnb_worker_requires_cookie_from_9222(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.worker import ClusterWorkerRuntime
+
+        class _Provider:
+            def __init__(self, *args, **kwargs) -> None:
+                return None
+
+            def get(self, *, force_refresh: bool = False) -> str:
+                return ""
+
+        config = ClusterConfig.from_env(ROOT)
+        with patch("england_crawler.cluster.worker.DnbCookieProvider", _Provider):
+            with self.assertRaisesRegex(RuntimeError, "9222 浏览器未提供 DNB cookie"):
+                ClusterWorkerRuntime(config, role="dnb-detail")
+
+    def test_renew_task_lease_extends_firecrawl_domain_cache_lease(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        config = ClusterConfig.from_env(ROOT)
+        config.postgres_dsn = self.dsn
+        db = ClusterDb(self.dsn)
+        initialize_schema(db)
+        repo = ClusterRepository(db, config)
+        with db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE england_cluster_task_attempts RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_cluster_tasks RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_ch_companies RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_firecrawl_domain_cache RESTART IDENTITY CASCADE")
+                cur.execute(
+                    """
+                    INSERT INTO england_ch_companies(
+                        comp_id, company_name, normalized_name, company_number, company_status, ceo, homepage, domain,
+                        phone, emails_json, ch_task_status, ch_task_retries, gmap_task_status, gmap_task_retries,
+                        firecrawl_task_status, firecrawl_task_retries, last_error, updated_at
+                    ) VALUES('cx','Gamma Ltd','GAMMA LTD','','','Bob','https://gamma.test','gamma.test','','[]'::jsonb,'done',0,'done',0,'pending',0,'',NOW())
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO england_cluster_tasks(task_id, pipeline, task_type, entity_id, status, retries, next_run_at, lease_owner, lease_expires_at, payload_json, created_at, updated_at)
+                    VALUES('t-renew','england_companies_house','ch_firecrawl','cx','leased',0,NOW(),'worker-1',NOW() + interval '30 seconds',%s,NOW(),NOW())
+                    """,
+                    (Jsonb({"comp_id": "cx", "company_name": "Gamma Ltd", "homepage": "https://gamma.test", "domain": "gamma.test"}),),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO england_firecrawl_domain_cache(domain, status, emails_json, next_retry_at, lease_owner, lease_expires_at, last_error, updated_at)
+                    VALUES('gamma.test','running','[]'::jsonb,NULL,'worker-1',NOW() + interval '30 seconds','',NOW())
+                    """
+                )
+
+        repo.renew_task_lease(task_id="t-renew", worker_id="worker-1")
+
+        with db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT lease_expires_at FROM england_cluster_tasks WHERE task_id = 't-renew'")
+                task_row = cur.fetchone()
+                cur.execute("SELECT lease_expires_at FROM england_firecrawl_domain_cache WHERE domain = 'gamma.test'")
+                cache_row = cur.fetchone()
+        self.assertIsNotNone(task_row["lease_expires_at"])
+        self.assertIsNotNone(cache_row["lease_expires_at"])
+
+    def test_firecrawl_claim_respects_next_retry_at(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        config = ClusterConfig.from_env(ROOT)
+        config.postgres_dsn = self.dsn
+        db = ClusterDb(self.dsn)
+        initialize_schema(db)
+        repo = ClusterRepository(db, config)
+        with db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE england_cluster_task_attempts RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_cluster_tasks RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_ch_companies RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE england_firecrawl_domain_cache RESTART IDENTITY CASCADE")
+                cur.execute(
+                    """
+                    INSERT INTO england_ch_companies(
+                        comp_id, company_name, normalized_name, company_number, company_status, ceo, homepage, domain,
+                        phone, emails_json, ch_task_status, ch_task_retries, gmap_task_status, gmap_task_retries,
+                        firecrawl_task_status, firecrawl_task_retries, last_error, updated_at
+                    ) VALUES('cy','Delta Ltd','DELTA LTD','','','Bob','https://delta.test','delta.test','','[]'::jsonb,'done',0,'done',0,'pending',0,'',NOW())
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO england_cluster_tasks(task_id, pipeline, task_type, entity_id, status, retries, next_run_at, payload_json, created_at, updated_at)
+                    VALUES('t-wait','england_companies_house','ch_firecrawl','cy','pending',0,NOW(),%s,NOW(),NOW())
+                    """,
+                    (Jsonb({"comp_id": "cy", "company_name": "Delta Ltd", "homepage": "https://delta.test", "domain": "delta.test"}),),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO england_firecrawl_domain_cache(domain, status, emails_json, next_retry_at, lease_owner, lease_expires_at, last_error, updated_at)
+                    VALUES('delta.test','pending','[]'::jsonb,NOW() + interval '120 seconds','',NULL,'boom',NOW())
+                    """
+                )
+
+        task = repo.claim_task("worker-1", ["ch_firecrawl"])
+        self.assertIsNone(task)
+        with db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status, next_run_at FROM england_cluster_tasks WHERE task_id = 't-wait'")
+                row = cur.fetchone()
+        self.assertEqual("pending", row["status"])
+        self.assertIsNotNone(row["next_run_at"])

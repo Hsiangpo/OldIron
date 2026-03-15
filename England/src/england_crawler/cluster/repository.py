@@ -277,6 +277,36 @@ class ClusterRepository(ClusterTaskOpsMixin):
                 if task_state == "done":
                     self._mark_task_done_locked(cur, task.task_id)
 
+    def renew_task_lease(self, *, task_id: str, worker_id: str) -> None:
+        now = _utc_now()
+        with self._db.transaction() as conn:
+            with conn.cursor() as cur:
+                row = self._load_leased_task(cur, task_id, worker_id)
+                if row is None:
+                    raise RuntimeError("任务不存在或不属于当前 worker。")
+                lease_expires_at = _utc_after(self._config.task_lease_seconds)
+                cur.execute(
+                    """
+                    UPDATE england_cluster_tasks
+                    SET lease_expires_at = %s, updated_at = %s
+                    WHERE task_id = %s
+                    """,
+                    (lease_expires_at, now, task_id),
+                )
+                task_type = str(row["task_type"])
+                payload = dict(row["payload_json"] or {})
+                if task_type in {"dnb_firecrawl", "ch_firecrawl"}:
+                    domain = str(payload.get("domain", "")).strip().lower() or extract_domain(str(payload.get("homepage", "")).strip())
+                    if domain:
+                        cur.execute(
+                            """
+                            UPDATE england_firecrawl_domain_cache
+                            SET lease_expires_at = %s, updated_at = %s
+                            WHERE domain = %s AND status = 'running' AND lease_owner = %s
+                            """,
+                            (lease_expires_at, now, domain, worker_id),
+                        )
+
     def fail_task(self, *, task_id: str, worker_id: str, error_text: str, retry_delay_seconds: float, fatal: bool) -> None:
         now = _utc_now()
         with self._db.transaction() as conn:
@@ -674,6 +704,7 @@ class ClusterRepository(ClusterTaskOpsMixin):
         }.get(task_type, 5)
 
     def _prepare_firecrawl_domain_for_task(self, cur, task: ClaimedTask, worker_id: str) -> str:
+        now = _utc_now()
         domain = str(task.payload.get("domain", "")).strip().lower() or extract_domain(str(task.payload.get("homepage", "")).strip())
         if not domain:
             self._mark_entity_firecrawl_failed_locked(cur, task, "缺少域名")
@@ -687,8 +718,14 @@ class ClusterRepository(ClusterTaskOpsMixin):
             self._mark_task_done_locked(cur, task.task_id)
             return "done"
         if row is not None and str(row["status"]) == "running":
-            if row["lease_expires_at"] is None or row["lease_expires_at"] > _utc_now():
+            if row["lease_expires_at"] is None or row["lease_expires_at"] > now:
                 self._reschedule_task_locked(cur, task.task_id, retries=task.retries, delay_seconds=FIRECRAWL_WAIT_SECONDS, error_text="等待同域名查询完成", payload=task.payload)
+                return "wait"
+        if row is not None and str(row["status"]) == "pending":
+            next_retry_at = row["next_retry_at"]
+            if next_retry_at is not None and next_retry_at > now:
+                wait_seconds = max((next_retry_at - now).total_seconds(), FIRECRAWL_WAIT_SECONDS)
+                self._reschedule_task_locked(cur, task.task_id, retries=task.retries, delay_seconds=wait_seconds, error_text="等待域名重试窗口", payload=task.payload)
                 return "wait"
         cur.execute(
             """
@@ -702,7 +739,7 @@ class ClusterRepository(ClusterTaskOpsMixin):
                 updated_at = EXCLUDED.updated_at,
                 last_error = ''
             """,
-            (domain, worker_id, _utc_after(self._config.task_lease_seconds), _utc_now()),
+            (domain, worker_id, _utc_after(self._config.task_lease_seconds), now),
         )
         cur.execute("UPDATE england_cluster_tasks SET payload_json = %s WHERE task_id = %s", (Jsonb(task.payload), task.task_id))
         return "claim"
