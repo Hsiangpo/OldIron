@@ -42,6 +42,29 @@ INFO_HOSTS = (
     "wikidata.org",
     "wikimedia.org",
 )
+FOREIGN_TLDS = (
+    ".hk",
+    ".com.hk",
+    ".in",
+    ".my",
+    ".cn",
+    ".sg",
+)
+FOREIGN_PHONE_PREFIXES = (
+    "+852",
+    "+91",
+    "+86",
+    "+60",
+    "+63",
+    "+254",
+)
+FOREIGN_URL_MARKERS = (
+    "hong-kong",
+    "hongkong",
+    "/locations/cn/",
+    "/hk/",
+    ".hk/",
+)
 KOREAN_COMPANY_TOKENS = (
     "주식회사",
     "(주)",
@@ -592,10 +615,21 @@ def _domain_match_score(query_name: str, website: str) -> int:
 
 
 def _candidate_score(query_name: str, candidate: dict[str, str | int]) -> int:
-    return max(
-        _name_match_score(query_name, str(candidate.get("name", ""))),
-        _domain_match_score(query_name, str(candidate.get("website", ""))),
-    )
+    name_score = _name_match_score(query_name, str(candidate.get("name", "")))
+    domain_score = _domain_match_score(query_name, str(candidate.get("website", "")))
+    base = max(name_score, domain_score)
+    website = str(candidate.get("website", ""))
+    phone = str(candidate.get("phone", ""))
+    parsed = urlparse(website if "://" in website else f"https://{website}")
+    host = (parsed.netloc or parsed.path).strip().lower()
+    lower_url = website.lower()
+    if any(host.endswith(suffix) for suffix in FOREIGN_TLDS):
+        base -= 60
+    if any(marker in lower_url for marker in FOREIGN_URL_MARKERS):
+        base -= 40
+    if any(phone.startswith(prefix) for prefix in FOREIGN_PHONE_PREFIXES):
+        base -= 60 if domain_score < 80 else 40
+    return base
 
 
 def _local_name_score(value: str) -> int:

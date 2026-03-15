@@ -12,6 +12,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 DAY_PATTERN = re.compile(r"^day(\d+)$", flags=re.I)
+FOREIGN_PHONE_PREFIXES = ("+852", "+91", "+86", "+60", "+63", "+254")
+FOREIGN_TLDS = (".hk", ".com.hk", ".in", ".my", ".cn", ".sg")
+FOREIGN_URL_MARKERS = ("hong-kong", "hongkong", "/locations/cn/", "/hk/", ".hk/")
 
 
 def parse_day_label(raw: str) -> int:
@@ -51,6 +54,19 @@ def _build_key(company_name: str, domain: str) -> str:
 def _build_domain_key(domain: str) -> str:
     value = str(domain or "").strip().lower()
     return f"domain|{value}" if value else ""
+
+
+def _looks_suspicious_uk_record(homepage: str, phone: str) -> bool:
+    domain = _extract_domain(homepage)
+    lower_homepage = str(homepage or "").strip().lower()
+    normalized_phone = str(phone or "").strip()
+    if domain and any(domain.endswith(suffix) for suffix in FOREIGN_TLDS):
+        return True
+    if any(marker in lower_homepage for marker in FOREIGN_URL_MARKERS):
+        return True
+    if normalized_phone and any(normalized_phone.startswith(prefix) for prefix in FOREIGN_PHONE_PREFIXES):
+        return True
+    return False
 
 
 def _list_existing_days(delivery_root: Path) -> list[int]:
@@ -173,19 +189,27 @@ def build_delivery_bundle(
     # 过滤：只保留同时有 公司名+法人+邮箱 的完整记录
     qualified: list[dict] = []
     skipped = 0
+    suspicious = 0
     for record in all_records:
         company_name = str(record.get("company_name", "")).strip()
         ceo = str(record.get("ceo", "")).strip()
         emails = record.get("emails", [])
         has_emails = bool(emails and any(e.strip() for e in emails)) if isinstance(emails, list) else bool(str(emails).strip())
+        homepage = str(record.get("homepage", "")).strip()
+        phone = str(record.get("phone", "")).strip()
 
         if company_name and ceo and has_emails:
+            if _looks_suspicious_uk_record(homepage, phone):
+                suspicious += 1
+                continue
             qualified.append(record)
         else:
             skipped += 1
 
     if skipped:
         print(f"跳过 {skipped} 条不完整记录（缺少公司名/法人/邮箱）")
+    if suspicious:
+        print(f"跳过 {suspicious} 条疑似海外错配记录（官网/电话异常）")
 
     # 构建 key 并去重
     keyed_records: list[dict] = []

@@ -128,6 +128,29 @@ class DnbEnglandGMapTests(unittest.TestCase):
             client.session.proxies,
         )
 
+    def test_pick_best_candidate_rejects_foreign_phone_and_hk_domain_for_uk_company(self) -> None:
+        from england_crawler.google_maps.client import _pick_best_candidate
+
+        picked = _pick_best_candidate(
+            [
+                {
+                    "name": "UKAP (EK) LIMITED",
+                    "company_name_local": "",
+                    "phone": "+852 2735 7268",
+                    "website": "https://ukea.org",
+                },
+                {
+                    "name": "UKAP (EK) LIMITED",
+                    "company_name_local": "",
+                    "phone": "+852 2111 2884",
+                    "website": "https://jointleader.com.hk",
+                },
+            ],
+            "UKAP (EK) LIMITED",
+        )
+
+        self.assertIsNone(picked)
+
 
 if __name__ == "__main__":
     unittest.main()

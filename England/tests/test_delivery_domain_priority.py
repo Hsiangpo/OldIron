@@ -157,6 +157,49 @@ class DeliveryDomainPriorityTests(unittest.TestCase):
                 rows = list(csv.DictReader(fp))
             self.assertEqual(0, len(rows))
 
+    def test_build_delivery_bundle_filters_suspicious_foreign_match_for_uk_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "output"
+            delivery_root = data_root / "delivery"
+            site_dir = data_root / "companies_house"
+            site_dir.mkdir(parents=True)
+
+            bad_row = {
+                "comp_id": "C1",
+                "company_name": "Leader (UK) Ltd",
+                "ceo": "Alice",
+                "homepage": "https://www.jointleader.com.hk",
+                "phone": "+852 2111 2884",
+                "emails": ["info@jointleader.com.hk"],
+            }
+            good_row = {
+                "comp_id": "C2",
+                "company_name": "Acme Services Ltd",
+                "ceo": "Bob",
+                "homepage": "https://acme-services.co.uk",
+                "phone": "020 7946 0958",
+                "emails": ["info@acme-services.co.uk"],
+            }
+
+            (site_dir / "final_companies.jsonl").write_text(
+                json.dumps(bad_row, ensure_ascii=False) + "\n" + json.dumps(good_row, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            summary = build_delivery_bundle(
+                data_root=data_root,
+                delivery_root=delivery_root,
+                day_label="day1",
+            )
+
+            self.assertEqual(1, summary["total_current_companies"])
+            csv_path = delivery_root / "England_day001" / "companies.csv"
+            with csv_path.open("r", encoding="utf-8", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(1, len(rows))
+            self.assertEqual("Acme Services Ltd", rows[0]["company_name"])
+
 
 if __name__ == "__main__":
     unittest.main()
