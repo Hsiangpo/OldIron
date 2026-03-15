@@ -168,6 +168,7 @@ def _spawn_worker_process(
                 env=env,
                 stdout=out_fp,
                 stderr=err_fp,
+                start_new_session=True,
             )
     return subprocess.Popen(  # noqa: S603
         cmd,

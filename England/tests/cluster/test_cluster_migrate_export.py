@@ -758,6 +758,24 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         )
         self.assertEqual("1", captured["kwargs"]["env"]["PYTHONUNBUFFERED"])
 
+    def test_spawn_worker_process_detach_starts_new_session(self) -> None:
+        from england_crawler.cluster.cli import _spawn_worker_process
+        from england_crawler.cluster.config import ClusterConfig
+
+        captured: dict[str, object] = {}
+
+        class _FakePopen:
+            def __init__(self, cmd, **kwargs) -> None:
+                captured["cmd"] = cmd
+                captured["kwargs"] = kwargs
+                self.pid = 12345
+
+        config = ClusterConfig.from_env(ROOT)
+        with patch("england_crawler.cluster.cli.subprocess.Popen", _FakePopen):
+            _spawn_worker_process(config, role="gmap", index=1, detach=True)
+
+        self.assertTrue(bool(captured["kwargs"]["start_new_session"]))
+
     def test_decode_process_output_handles_gbk_bytes(self) -> None:
         from england_crawler.cluster.cli import _decode_process_output
 
