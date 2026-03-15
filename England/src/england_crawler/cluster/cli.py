@@ -187,7 +187,7 @@ def _stop_local_worker_pools() -> int:
     for pid_file in _runtime_dir().glob("*.pid"):
         try:
             pid = int(pid_file.read_text(encoding="utf-8").strip())
-        except ValueError:
+        except (FileNotFoundError, ValueError):
             pid = 0
         if _is_running(pid):
             _terminate_pid(pid)

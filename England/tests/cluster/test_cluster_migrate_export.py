@@ -702,6 +702,25 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
                     with self.assertRaises(_WorkerExit):
                         run_cluster(["worker", "ch-lookup"])
 
+    def test_stop_pools_ignores_disappeared_pid_file(self) -> None:
+        from england_crawler.cluster.cli import _stop_local_worker_pools
+
+        class _FakePidFile:
+            def read_text(self, encoding: str = "utf-8") -> str:
+                raise FileNotFoundError("gone")
+
+            def unlink(self, missing_ok: bool = True) -> None:
+                return None
+
+        class _FakeRuntimeDir:
+            def glob(self, pattern: str):
+                return [_FakePidFile()]
+
+        with patch("england_crawler.cluster.cli._runtime_dir", return_value=_FakeRuntimeDir()):
+            stopped = _stop_local_worker_pools()
+
+        self.assertEqual(0, stopped)
+
     def test_gmap_worker_init_does_not_touch_dnb_cookie_provider(self) -> None:
         from england_crawler.cluster.config import ClusterConfig
         from england_crawler.cluster.worker import ClusterWorkerRuntime
