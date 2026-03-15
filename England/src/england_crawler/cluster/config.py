@@ -78,6 +78,7 @@ class ClusterConfig:
     worker_id: str
     worker_poll_seconds: float
     worker_heartbeat_seconds: float
+    worker_startup_delay_seconds: float
     task_lease_seconds: int
     snapshot_export_interval_seconds: float
     auto_export_enabled: bool
@@ -126,6 +127,7 @@ class ClusterConfig:
             worker_id=_env_str("ENGLAND_CLUSTER_WORKER_ID", _default_worker_id()),
             worker_poll_seconds=_env_float("ENGLAND_CLUSTER_WORKER_POLL_SECONDS", 2.0),
             worker_heartbeat_seconds=_env_float("ENGLAND_CLUSTER_HEARTBEAT_SECONDS", 10.0),
+            worker_startup_delay_seconds=_env_float("ENGLAND_CLUSTER_WORKER_STARTUP_DELAY_SECONDS", 0.15),
             task_lease_seconds=_env_int("ENGLAND_CLUSTER_TASK_LEASE_SECONDS", 90),
             snapshot_export_interval_seconds=_env_float(
                 "ENGLAND_CLUSTER_EXPORT_INTERVAL_SECONDS",

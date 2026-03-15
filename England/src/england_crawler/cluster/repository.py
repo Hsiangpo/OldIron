@@ -37,6 +37,11 @@ def _utc_after(seconds: float) -> datetime:
     return _utc_now() + timedelta(seconds=max(float(seconds), 0.0))
 
 
+def _worker_offline_deadline(heartbeat_seconds: float) -> datetime:
+    grace_seconds = max(float(heartbeat_seconds or 0.0) * 3.0, 30.0)
+    return _utc_now() - timedelta(seconds=grace_seconds)
+
+
 def _build_task_id(pipeline: str, task_type: str, entity_id: str) -> str:
     return f"{pipeline}:{task_type}:{entity_id}"
 
@@ -117,6 +122,7 @@ class ClusterRepository(ClusterTaskOpsMixin):
 
     _utc_now = staticmethod(_utc_now)
     _utc_after = staticmethod(_utc_after)
+    _worker_offline_deadline = staticmethod(_worker_offline_deadline)
     _build_task_id = staticmethod(_build_task_id)
     _clip_text = staticmethod(_clip_text)
     _parse_json_list = staticmethod(_parse_json_list)
@@ -184,8 +190,17 @@ class ClusterRepository(ClusterTaskOpsMixin):
 
     def requeue_expired_tasks(self) -> int:
         now = _utc_now()
+        offline_deadline = _worker_offline_deadline(self._config.worker_heartbeat_seconds)
         with self._db.transaction() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE cluster_workers
+                    SET status = 'offline', updated_at = %s
+                    WHERE status <> 'offline' AND last_heartbeat_at < %s
+                    """,
+                    (now, offline_deadline),
+                )
                 cur.execute(
                     """
                     UPDATE england_cluster_tasks

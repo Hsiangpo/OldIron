@@ -808,6 +808,7 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
                 self.stdout = None
 
         config = ClusterConfig.from_env(ROOT)
+        config.worker_startup_delay_seconds = 0.0
         pid_file = _FakePidFile("4321")
 
         with patch("england_crawler.cluster.cli._role_counts", return_value=[("gmap", 1)]):
@@ -822,6 +823,37 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         self.assertEqual("9876", pid_file._text)
         self.assertEqual(1, len(processes))
         self.assertEqual(1, len(threads))
+
+    def test_start_pools_applies_startup_delay(self) -> None:
+        from england_crawler.cluster.cli import _start_local_worker_pools
+        from england_crawler.cluster.config import ClusterConfig
+
+        class _FakePidFile:
+            def exists(self) -> bool:
+                return False
+
+            def write_text(self, content: str, encoding: str = "utf-8") -> int:
+                return len(content)
+
+        class _FakeProc:
+            def __init__(self, pid: int) -> None:
+                self.pid = pid
+                self.stdout = None
+
+        config = ClusterConfig.from_env(ROOT)
+        config.worker_startup_delay_seconds = 0.25
+
+        with patch("england_crawler.cluster.cli._role_counts", return_value=[("gmap", 2)]):
+            with patch("england_crawler.cluster.cli._pid_path", return_value=_FakePidFile()):
+                with patch("england_crawler.cluster.cli._spawn_worker_process", side_effect=[_FakeProc(1), _FakeProc(2)]):
+                    with patch("england_crawler.cluster.cli.time.sleep") as mocked_sleep:
+                        launched, already_running, processes, threads = _start_local_worker_pools(config, detach=False)
+
+        self.assertEqual(2, launched)
+        self.assertEqual(0, already_running)
+        self.assertEqual(2, len(processes))
+        self.assertEqual(2, len(threads))
+        mocked_sleep.assert_any_call(0.25)
 
     def test_stop_pools_skips_unrelated_process_when_pid_reused(self) -> None:
         from england_crawler.cluster.cli import _stop_local_worker_pools
@@ -1086,3 +1118,38 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
                 row = cur.fetchone()
         self.assertEqual("pending", row["status"])
         self.assertIsNotNone(row["next_run_at"])
+
+    def test_requeue_expired_tasks_marks_stale_workers_offline(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.repository import ClusterRepository
+        from england_crawler.cluster.schema import initialize_schema
+
+        config = ClusterConfig.from_env(ROOT)
+        config.postgres_dsn = self.dsn
+        config.worker_heartbeat_seconds = 10.0
+        db = ClusterDb(self.dsn)
+        initialize_schema(db)
+        repo = ClusterRepository(db, config)
+        with db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE cluster_workers RESTART IDENTITY CASCADE")
+                cur.execute(
+                    """
+                    INSERT INTO cluster_workers(
+                        worker_id, host_name, platform, capabilities_json, git_commit, python_version,
+                        status, last_heartbeat_at, created_at, updated_at
+                    ) VALUES
+                    ('stale-worker','host','win','[]'::jsonb,'','3.11','online',NOW() - interval '5 minutes',NOW(),NOW()),
+                    ('fresh-worker','host','win','[]'::jsonb,'','3.11','online',NOW() - interval '5 seconds',NOW(),NOW())
+                    """
+                )
+
+        repo.requeue_expired_tasks()
+
+        with db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT worker_id, status FROM cluster_workers ORDER BY worker_id")
+                rows = {str(row["worker_id"]): str(row["status"]) for row in cur.fetchall()}
+        self.assertEqual("online", rows["fresh-worker"])
+        self.assertEqual("offline", rows["stale-worker"])

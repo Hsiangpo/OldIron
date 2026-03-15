@@ -240,6 +240,8 @@ def _start_local_worker_pools(config: ClusterConfig, *, detach: bool) -> tuple[i
             if not detach:
                 threads.append(_stream_process_output(proc, role=role, index=index))
             launched += 1
+            if config.worker_startup_delay_seconds > 0:
+                time.sleep(config.worker_startup_delay_seconds)
     return launched, already_running, processes, threads
 
 
@@ -297,10 +299,20 @@ def _run_pool_supervisor(processes: list[subprocess.Popen], threads: list[thread
     return 0
 
 
-def _print_cluster_status(db: ClusterDb) -> None:
+def _print_cluster_status(db: ClusterDb, config: ClusterConfig) -> None:
+    ClusterRepository(db, config).requeue_expired_tasks()
     with db.connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT worker_id, status, last_heartbeat_at FROM cluster_workers ORDER BY worker_id")
+            cur.execute(
+                """
+                SELECT worker_id, status, last_heartbeat_at
+                FROM cluster_workers
+                ORDER BY
+                    CASE WHEN status = 'online' THEN 0 ELSE 1 END,
+                    last_heartbeat_at DESC,
+                    worker_id ASC
+                """
+            )
             workers = cur.fetchall()
             cur.execute("SELECT task_type, status, COUNT(*) AS count FROM england_cluster_tasks GROUP BY task_type, status ORDER BY task_type, status")
             task_rows = cur.fetchall()
@@ -428,7 +440,7 @@ def run_cluster(argv: list[str]) -> int:
         return 1
     if args.command == "status":
         db = _build_cluster_db(config)
-        _print_cluster_status(db)
+        _print_cluster_status(db, config)
         return 0
     if args.command == "coordinator":
         logger.info(
