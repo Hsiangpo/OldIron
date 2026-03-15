@@ -9,6 +9,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 from england_crawler.cluster.config import ClusterConfig
@@ -56,6 +57,14 @@ def _stderr_path(role: str, index: int) -> Path:
 def _is_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return str(pid) in result.stdout
     try:
         os.kill(pid, 0)
     except OSError:
@@ -63,12 +72,93 @@ def _is_running(pid: int) -> bool:
     return True
 
 
+def _terminate_pid(pid: int) -> None:
+    if pid <= 0:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+
+
+def _spawn_worker_process(
+    config: ClusterConfig,
+    *,
+    role: str,
+    index: int,
+    detach: bool,
+):
+    env = os.environ.copy()
+    env["ENGLAND_CLUSTER_POSTGRES_DSN"] = config.postgres_dsn
+    env["ENGLAND_CLUSTER_BASE_URL"] = config.coordinator_base_url
+    env["ENGLAND_CLUSTER_WORKER_ID"] = f"{config.worker_id}-{role}-{index}"
+    cmd = [
+        sys.executable,
+        str(ROOT / "run.py"),
+        "cluster",
+        "worker",
+        role,
+        "--worker-index",
+        str(index),
+    ]
+    if detach:
+        with _stdout_path(role, index).open("w", encoding="utf-8") as out_fp, _stderr_path(role, index).open("w", encoding="utf-8") as err_fp:
+            return subprocess.Popen(  # noqa: S603
+                cmd,
+                cwd=str(ROOT),
+                env=env,
+                stdout=out_fp,
+                stderr=err_fp,
+            )
+    return subprocess.Popen(  # noqa: S603
+        cmd,
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+
+def _stream_process_output(process: subprocess.Popen, *, role: str, index: int) -> threading.Thread:
+    prefix = f"[{role}.{index}] "
+    log_path = _stdout_path(role, index)
+
+    def _runner() -> None:
+        if process.stdout is None:
+            return
+        with log_path.open("a", encoding="utf-8") as fp:
+            for line in process.stdout:
+                text = line.rstrip("\n")
+                if not text:
+                    continue
+                rendered = prefix + text
+                print(rendered, flush=True)
+                fp.write(rendered + "\n")
+
+    thread = threading.Thread(target=_runner, name=f"Stream-{role}-{index}", daemon=True)
+    thread.start()
+    return thread
+
+
 def _role_counts(config: ClusterConfig) -> list[tuple[str, int]]:
     return [(role, count) for role, count in config.build_worker_role_counts() if count > 0]
 
 
-def _start_local_worker_pools(config: ClusterConfig) -> int:
+def _start_local_worker_pools(config: ClusterConfig, *, detach: bool) -> tuple[int, int, list[subprocess.Popen], list[threading.Thread]]:
     launched = 0
+    already_running = 0
+    processes: list[subprocess.Popen] = []
+    threads: list[threading.Thread] = []
     for role, count in _role_counts(config):
         for index in range(1, count + 1):
             pid_file = _pid_path(role, index)
@@ -78,32 +168,16 @@ def _start_local_worker_pools(config: ClusterConfig) -> int:
                 except ValueError:
                     pid = 0
                 if _is_running(pid):
+                    already_running += 1
                     continue
                 pid_file.unlink(missing_ok=True)
-            env = os.environ.copy()
-            env["ENGLAND_CLUSTER_POSTGRES_DSN"] = config.postgres_dsn
-            env["ENGLAND_CLUSTER_BASE_URL"] = config.coordinator_base_url
-            env["ENGLAND_CLUSTER_WORKER_ID"] = f"{config.worker_id}-{role}-{index}"
-            cmd = [
-                sys.executable,
-                str(ROOT / "run.py"),
-                "cluster",
-                "worker",
-                role,
-                "--worker-index",
-                str(index),
-            ]
-            with _stdout_path(role, index).open("w", encoding="utf-8") as out_fp, _stderr_path(role, index).open("w", encoding="utf-8") as err_fp:
-                proc = subprocess.Popen(  # noqa: S603
-                    cmd,
-                    cwd=str(ROOT),
-                    env=env,
-                    stdout=out_fp,
-                    stderr=err_fp,
-                )
+            proc = _spawn_worker_process(config, role=role, index=index, detach=detach)
             pid_file.write_text(str(proc.pid), encoding="utf-8")
+            processes.append(proc)
+            if not detach:
+                threads.append(_stream_process_output(proc, role=role, index=index))
             launched += 1
-    return launched
+    return launched, already_running, processes, threads
 
 
 def _stop_local_worker_pools() -> int:
@@ -114,19 +188,38 @@ def _stop_local_worker_pools() -> int:
         except ValueError:
             pid = 0
         if _is_running(pid):
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
-            time.sleep(0.3)
-            if _is_running(pid):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
+            _terminate_pid(pid)
             stopped += 1
         pid_file.unlink(missing_ok=True)
     return stopped
+
+
+def _run_pool_supervisor(processes: list[subprocess.Popen], threads: list[threading.Thread]) -> int:
+    try:
+        while True:
+            alive = 0
+            for process in processes:
+                if process.poll() is None:
+                    alive += 1
+            if alive == 0:
+                break
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("收到 Ctrl+C，正在停止 worker 池...", flush=True)
+        for process in processes:
+            if process.poll() is None:
+                _terminate_pid(int(process.pid))
+    finally:
+        for thread in threads:
+            thread.join(timeout=1.0)
+        for pid_file in _runtime_dir().glob("*.pid"):
+            try:
+                pid = int(pid_file.read_text(encoding="utf-8").strip())
+            except ValueError:
+                pid = 0
+            if not _is_running(pid):
+                pid_file.unlink(missing_ok=True)
+    return 0
 
 
 def _print_cluster_status(db: ClusterDb) -> None:
@@ -163,7 +256,8 @@ def _build_parser() -> argparse.ArgumentParser:
     worker = sub.add_parser("worker", help="启动单个 England 集群 worker")
     worker.add_argument("role", choices=sorted(WORKER_ROLE_CAPABILITIES.keys()), help="worker 角色")
     worker.add_argument("--worker-index", type=int, default=1, help="worker 编号")
-    sub.add_parser("start-pools", help="按配置启动本机全部 worker 池")
+    start = sub.add_parser("start-pools", help="按配置启动本机全部 worker 池")
+    start.add_argument("--detach", action="store_true", help="后台启动 worker 池并写日志到文件")
     sub.add_parser("stop-pools", help="停止本机全部 worker 池")
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     return parser
@@ -235,9 +329,14 @@ def run_cluster(argv: list[str]) -> int:
         ).run_forever()
         return 0
     if args.command == "start-pools":
-        launched = _start_local_worker_pools(config)
-        print(f"England 本机 worker 池已启动：{launched}")
-        return 0
+        launched, already_running, processes, threads = _start_local_worker_pools(config, detach=bool(args.detach))
+        print(f"England 本机 worker 池已启动：新增 {launched}，已在运行 {already_running}")
+        if args.detach:
+            return 0
+        if launched == 0:
+            print("当前没有新增 worker。若想重新接管日志，先执行 cluster stop-pools。")
+            return 0
+        return _run_pool_supervisor(processes, threads)
     if args.command == "stop-pools":
         stopped = _stop_local_worker_pools()
         print(f"England 本机 worker 池已停止：{stopped}")
