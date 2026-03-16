@@ -20,6 +20,7 @@ from england_crawler.cluster.config import ClusterConfig
 from england_crawler.cluster.coordinator import CoordinatorRuntime
 from england_crawler.cluster.db import ClusterDb
 from england_crawler.cluster.export import export_cluster_snapshots
+from england_crawler.cluster.export import sync_delivery_history_to_db
 from england_crawler.cluster.migrate import migrate_england_history
 from england_crawler.cluster.repository import ClusterRepository
 from england_crawler.cluster.schema import initialize_schema
@@ -428,6 +429,11 @@ def run_cluster(argv: list[str]) -> int:
             data_root=ROOT / "output",
             delivery_root=ROOT / "output" / "delivery",
             day_label=str(args.day_label),
+        )
+        sync_delivery_history_to_db(
+            db,
+            ROOT / "output" / "delivery",
+            day_number=int(summary["day"]),
         )
         print(
             "交付完成：day{day}，基线 day{baseline}，当日增量 {delta}，当前总量 {total}".format(

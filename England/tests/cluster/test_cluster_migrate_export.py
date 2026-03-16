@@ -250,6 +250,7 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
     def test_migrate_and_export_keep_product_compatible(self) -> None:
         from england_crawler.cluster.db import ClusterDb
         from england_crawler.cluster.export import export_cluster_snapshots
+        from england_crawler.cluster.export import sync_delivery_history_to_db
         from england_crawler.cluster.migrate import migrate_england_history
         from england_crawler.delivery import build_delivery_bundle
 
@@ -260,11 +261,49 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
             migrate_england_history(db, root / "output")
             export_cluster_snapshots(db, root / "output", include_delivery=True)
             summary = build_delivery_bundle(root / "output", root / "output" / "delivery", "day1")
+            sync_delivery_history_to_db(db, root / "output" / "delivery", day_number=1)
             self.assertEqual(summary["day"], 1)
             dnb_text = (root / "output" / "dnb" / "final_companies.jsonl").read_text(encoding="utf-8")
             ch_text = (root / "output" / "companies_house" / "final_companies.jsonl").read_text(encoding="utf-8")
             self.assertIn("Alpha Ltd", dnb_text)
             self.assertIn("Beta Ltd", ch_text)
+
+    def test_produce_keeps_latest_day2_as_day3_baseline(self) -> None:
+        from england_crawler.cluster.cli import run_cluster
+        from england_crawler.cluster.db import ClusterDb
+        from england_crawler.cluster.migrate import migrate_england_history
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._prepare_sample_output(root)
+            db = ClusterDb(self.dsn)
+            migrate_england_history(db, root / "output")
+            with db.transaction() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO england_ch_companies(
+                            comp_id, company_name, normalized_name, company_number, company_status, ceo, homepage, domain,
+                            phone, emails_json, ch_task_status, ch_task_retries, gmap_task_status, gmap_task_retries,
+                            firecrawl_task_status, firecrawl_task_retries, last_error, updated_at
+                        ) VALUES(
+                            'c2','Gamma Ltd','GAMMA LTD','999','active','Grace','https://gamma.test','gamma.test',
+                            '020 0000 0000','["hello@gamma.test"]'::jsonb,'done',0,'done',0,'done',0,'',NOW()
+                        )
+                        """
+                    )
+            with patch.dict(os.environ, {"ENGLAND_CLUSTER_POSTGRES_DSN": self.dsn}, clear=False):
+                with patch("england_crawler.cluster.cli.ROOT", root):
+                    code_day2 = run_cluster(["produce", "day2"])
+                    code_day3 = run_cluster(["produce", "day3"])
+            self.assertEqual(0, code_day2)
+            self.assertEqual(0, code_day3)
+            day2_summary = json.loads((root / "output" / "delivery" / "England_day002" / "summary.json").read_text(encoding="utf-8"))
+            day3_summary = json.loads((root / "output" / "delivery" / "England_day003" / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(1, int(day2_summary["total_current_companies"]))
+            self.assertEqual(1, int(day2_summary["delta_companies"]))
+            self.assertEqual(1, int(day3_summary["total_current_companies"]))
+            self.assertEqual(0, int(day3_summary["delta_companies"]))
 
     def test_repository_claim_and_complete(self) -> None:
         from england_crawler.cluster.config import ClusterConfig
