@@ -6,7 +6,6 @@ import tempfile
 from unittest.mock import Mock
 from unittest.mock import patch
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
@@ -110,6 +109,61 @@ class DnbEnglandPipelineTests(unittest.TestCase):
         self.assertIn("construction|gb||", segment_ids)
         self.assertIn("general_medical_and_surgical_hospitals|gb||", segment_ids)
         self.assertIn("mining_quarrying_and_oil_and_gas_extraction|gb||", segment_ids)
+
+    def test_runner_uses_external_seed_file_when_configured(self) -> None:
+        from england_crawler.dnb.client import DnbClient
+        from england_crawler.dnb.config import DnbEnglandConfig
+        from england_crawler.dnb.pipeline import DnbEnglandPipelineRunner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed_path = root / "segments.jsonl"
+            seed_path.write_text(
+                '{"industry_path":"custom_industry","country_iso_two_code":"gb","region_name":"","city_name":"","expected_count":0}\n',
+                encoding="utf-8",
+            )
+            config = DnbEnglandConfig(
+                project_root=root,
+                output_dir=root / "output",
+                store_db_path=root / "output" / "store.db",
+                snov_client_id="id",
+                snov_client_secret="secret",
+                snov_timeout_seconds=30.0,
+                snov_retry_delay_seconds=10.0,
+                snov_max_retries=5,
+                max_companies=0,
+                dnb_pipeline_workers=1,
+                dnb_workers=2,
+                gmap_workers=1,
+                snov_workers=1,
+                queue_poll_interval=0.1,
+                stale_running_requeue_seconds=600,
+                gmap_max_retries=3,
+                detail_task_max_retries=8,
+                snov_task_max_retries=5,
+                retry_backoff_cap_seconds=180.0,
+                seed_file_path=seed_path,
+            )
+            base = DnbClient(cookie_header="foo=bar")
+            try:
+                runner = DnbEnglandPipelineRunner(
+                    config=config,
+                    client=base,
+                    skip_dnb=False,
+                    skip_gmap=True,
+                    skip_snov=True,
+                )
+
+                rows = runner._seed_rows()
+            finally:
+                runner._snov_domain_cache.close()
+                runner.detail_queue.close()
+                runner.store.close()
+                base.session.close()
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual("custom_industry", rows[0]["industry_path"])
+        self.assertEqual("custom_industry|gb||", rows[0]["segment_id"])
 
     def test_build_page_signature_uses_duns_and_url(self) -> None:
         from england_crawler.dnb.models import CompanyRecord

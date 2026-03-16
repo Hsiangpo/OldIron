@@ -24,6 +24,19 @@ class CompaniesHouseCliTests(unittest.TestCase):
 
         self.assertEqual(2, args.ch_workers)
 
+    def test_parser_accepts_input_file_and_output_dir(self) -> None:
+        from england_crawler.companies_house.cli import _build_parser
+
+        args = _build_parser().parse_args([
+            "--input-file",
+            "companies.txt",
+            "--output-dir",
+            "custom-output",
+        ])
+
+        self.assertEqual("companies.txt", args.input_file)
+        self.assertEqual("custom-output", args.output_dir)
+
     def test_dispatch_calls_companies_house_runner(self) -> None:
         module_name = "england_crawler.companies_house.cli"
         fake_module = types.ModuleType(module_name)

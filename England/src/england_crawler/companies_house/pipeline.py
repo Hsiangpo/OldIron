@@ -10,7 +10,7 @@ from pathlib import Path
 
 from england_crawler.companies_house.client import CompaniesHouseClient
 from england_crawler.companies_house.client import select_best_candidate
-from england_crawler.companies_house.input_xlsx import iter_company_names_from_xlsx
+from england_crawler.companies_house.input_source import iter_company_names_from_source
 from england_crawler.companies_house.store import CompaniesHouseStore
 from england_crawler.google_maps import GoogleMapsClient
 from england_crawler.google_maps import GoogleMapsConfig
@@ -272,7 +272,7 @@ class CompaniesHousePipelineRunner:
         inserted = 0
         loaded = 0
         last_progress = 0
-        for company_name in iter_company_names_from_xlsx(
+        for company_name in iter_company_names_from_source(
             self.source_xlsx_path,
             limit=self.max_companies,
         ):
@@ -645,6 +645,7 @@ def run_companies_house_pipeline(
         skip_firecrawl=skip_firecrawl,
     )
     runner.run()
+
 
 
 

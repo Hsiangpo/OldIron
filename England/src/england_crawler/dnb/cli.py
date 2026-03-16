@@ -125,6 +125,8 @@ def _release_run_lock(lock_path: Path) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="英国 DNB 协议爬虫（邮箱阶段默认 Firecrawl）")
+    parser.add_argument("--seed-file", default="", help="静态切片 seed 文件")
+    parser.add_argument("--output-dir", default="", help="输出目录")
     parser.add_argument("--max-companies", type=int, default=0, help="最大 DNB 公司数")
     parser.add_argument("--skip-dnb", action="store_true", help="跳过 DNB 生产阶段")
     parser.add_argument("--skip-gmap", action="store_true", help="跳过 Google Maps 官网补齐阶段")
@@ -142,7 +144,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def run_dnb(argv: list[str]) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    output_dir = ROOT / "output" / "dnb"
+    output_dir = Path(args.output_dir).resolve() if str(args.output_dir).strip() else ROOT / "output" / "dnb"
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = _configure_logging(output_dir, args.log_level)
     logging.getLogger(__name__).info("运行日志已落盘：%s", log_path)
@@ -157,6 +159,7 @@ def run_dnb(argv: list[str]) -> int:
         dnb_workers=max(int(args.dnb_workers or 1), 1),
         gmap_workers=max(int(args.gmap_workers or 1), 1),
         snov_workers=max(int(args.firecrawl_workers or 1), 1),
+        seed_file_path=Path(args.seed_file).resolve() if str(args.seed_file).strip() else None,
     )
 
     cookie_provider = DnbCookieProvider(
@@ -181,3 +184,5 @@ def run_dnb(argv: list[str]) -> int:
         return 0
     finally:
         _release_run_lock(lock_path)
+
+

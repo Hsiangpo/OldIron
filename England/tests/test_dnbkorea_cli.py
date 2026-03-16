@@ -17,6 +17,19 @@ import run  # noqa: E402
 
 
 class DnbEnglandCliTests(unittest.TestCase):
+    def test_parser_accepts_seed_file_and_output_dir(self) -> None:
+        from england_crawler.dnb.cli import _build_parser
+
+        args = _build_parser().parse_args([
+            "--seed-file",
+            "segments.jsonl",
+            "--output-dir",
+            "custom-output",
+        ])
+
+        self.assertEqual("segments.jsonl", args.seed_file)
+        self.assertEqual("custom-output", args.output_dir)
+
     def test_dispatch_calls_dnb_runner(self) -> None:
         module_name = "england_crawler.dnb.cli"
         fake_module = types.ModuleType(module_name)

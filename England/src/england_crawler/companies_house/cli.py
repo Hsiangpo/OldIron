@@ -124,6 +124,8 @@ def _release_run_lock(lock_path: Path) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="英国 Companies House + GMap + Firecrawl 协议爬虫")
     parser.add_argument("--input-xlsx", default=str(ROOT / "docs" / "英国.xlsx"), help="输入 xlsx 路径")
+    parser.add_argument("--input-file", default="", help="输入公司名文本路径")
+    parser.add_argument("--output-dir", default="", help="输出目录")
     parser.add_argument("--max-companies", type=int, default=0, help="最大导入公司数")
     parser.add_argument("--skip-ch", action="store_true", help="跳过 Companies House 阶段")
     parser.add_argument("--skip-gmap", action="store_true", help="跳过 Google Maps 阶段")
@@ -140,7 +142,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def run_companies_house(argv: list[str]) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    output_dir = ROOT / "output" / "companies_house"
+    output_dir = Path(args.output_dir).resolve() if str(args.output_dir).strip() else ROOT / "output" / "companies_house"
+    input_path = Path(args.input_file).resolve() if str(args.input_file).strip() else Path(args.input_xlsx)
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = _configure_logging(output_dir, args.log_level)
     logging.getLogger(__name__).info("运行日志已落盘：%s", log_path)
@@ -148,7 +151,7 @@ def run_companies_house(argv: list[str]) -> int:
     atexit.register(_release_run_lock, lock_path)
     config = CompaniesHouseConfig.from_env(
         project_root=ROOT,
-        input_xlsx=Path(args.input_xlsx),
+        input_xlsx=input_path,
         output_dir=output_dir,
         max_companies=max(int(args.max_companies or 0), 0),
         ch_workers=max(int(args.ch_workers or 1), 1),

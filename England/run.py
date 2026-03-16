@@ -22,6 +22,7 @@ USAGE_TEXT = """用法：
 站点：
   dnb               — dnb.com 英国全站行业目录（邮箱阶段默认 Firecrawl）
   companies-house   — 英国.xlsx -> Companies House + GMap + Firecrawl
+  dist              — England 静态切片执行与集中合并
   cluster           — England 集群模式（常用：coordinator / start-pools / submit England / produce）
 """
 
@@ -70,6 +71,10 @@ def _dispatch(argv: list[str]) -> int:
         from england_crawler.companies_house.cli import run_companies_house
 
         return run_companies_house(rest)
+    if site == "dist":
+        from england_crawler.distributed.cli import run_dist
+
+        return run_dist(rest)
     if site.startswith("cluster"):
         from england_crawler.cluster.cli import run_cluster
 

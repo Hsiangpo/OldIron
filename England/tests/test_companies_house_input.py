@@ -34,6 +34,20 @@ class CompaniesHouseInputTests(unittest.TestCase):
             names,
         )
 
+    def test_load_company_names_from_text_skips_blank_and_duplicates(self) -> None:
+        from england_crawler.companies_house.input_source import load_company_names_from_source
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "companies.txt"
+            path.write_text(
+                "CompanyName\nTPL SERVICES LTD\n\nTPL SERVICES LTD.\nZZZ DEVELOPMENTS LTD\n",
+                encoding="utf-8",
+            )
+
+            names = load_company_names_from_source(path)
+
+        self.assertEqual(["TPL SERVICES LTD", "ZZZ DEVELOPMENTS LTD"], names)
+
 
 if __name__ == "__main__":
     unittest.main()

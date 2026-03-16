@@ -98,6 +98,7 @@ class DnbEnglandConfig:
     firecrawl_prefilter_limit: int = 24
     firecrawl_llm_pick_count: int = 12
     firecrawl_extract_max_urls: int = 10
+    seed_file_path: Path | None = None
 
     @classmethod
     def from_env(
@@ -110,6 +111,7 @@ class DnbEnglandConfig:
         dnb_workers: int,
         gmap_workers: int,
         snov_workers: int,
+        seed_file_path: Path | None = None,
     ) -> "DnbEnglandConfig":
         output_dir = output_dir.resolve()
         return cls(
@@ -164,11 +166,14 @@ class DnbEnglandConfig:
             firecrawl_prefilter_limit=_env_int("FIRECRAWL_PREFILTER_LIMIT", 24),
             firecrawl_llm_pick_count=_env_int("FIRECRAWL_LLM_PICK_COUNT", 12),
             firecrawl_extract_max_urls=_env_int("FIRECRAWL_EXTRACT_MAX_URLS", 10),
+            seed_file_path=seed_file_path.resolve() if seed_file_path else None,
         )
 
     def validate(self, *, skip_firecrawl: bool = False, skip_snov: bool | None = None) -> None:
         if skip_snov is not None:
             skip_firecrawl = skip_snov
+        if self.seed_file_path and not self.seed_file_path.exists():
+            raise RuntimeError(f"未找到 DNB seed 文件: {self.seed_file_path}")
         if not skip_firecrawl:
             if not self.firecrawl_keys_inline:
                 raise RuntimeError("Firecrawl 阶段缺少 FIRECRAWL_KEYS，请检查根目录 .env。")

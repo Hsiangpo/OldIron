@@ -21,8 +21,9 @@ from england_crawler.dnb.config import DnbEnglandConfig
 from england_crawler.dnb.runtime.detail_queue import DetailQueueStore
 from england_crawler.dnb.runtime.detail_queue import DetailTask
 from england_crawler.dnb.store import DnbEnglandStore
-from england_crawler.dnb.store import GMapTask
 from england_crawler.dnb.store import FirecrawlTask
+from england_crawler.dnb.store import GMapTask
+from england_crawler.dnb.seed_segments import load_seed_rows
 from england_crawler.google_maps import GoogleMapsClient
 from england_crawler.google_maps import GoogleMapsConfig
 from england_crawler.google_maps import GoogleMapsPlaceResult
@@ -299,10 +300,15 @@ class DnbEnglandPipelineRunner:
             )
             time.sleep(max(self.config.queue_poll_interval, 2.0))
 
+    def _seed_rows(self) -> list[dict[str, object]]:
+        if self.config.seed_file_path:
+            return load_seed_rows(self.config.seed_file_path)
+        return _build_seed_rows("gb")
+
     def _dnb_worker(self) -> None:
         try:
             dnb_client = self._dnb_client_factory()
-            self.store.ensure_discovery_seeds(_build_seed_rows("gb"))
+            self.store.ensure_discovery_seeds(self._seed_rows())
             if self.store.has_discovery_work():
                 self._log_seed_loaded_once()
                 self._discover_stable_segments(dnb_client)
@@ -722,6 +728,8 @@ def run_dnb_pipeline(
         skip_firecrawl=skip_firecrawl,
     )
     runner.run()
+
+
 
 
 
