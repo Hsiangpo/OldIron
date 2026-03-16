@@ -6,15 +6,11 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
-
-load_dotenv(ROOT / ".env")
 
 USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
@@ -23,25 +19,54 @@ USAGE_TEXT = """用法：
   dnb               — dnb.com 英国全站行业目录（邮箱阶段默认 Firecrawl）
   companies-house   — 英国.xlsx -> Companies House + GMap + Firecrawl
   dist              — England 静态切片执行与集中合并
-  cluster           — England 集群模式（常用：coordinator / start-pools / submit England / produce）
 """
 
-REQUIRED_MODULES = (
+BASE_REQUIRED_MODULES = (("dotenv", "python-dotenv"),)
+DNB_REQUIRED_MODULES = (
     ("curl_cffi", "curl_cffi"),
-    ("dotenv", "python-dotenv"),
+    ("lxml", "lxml"),
+    ("requests", "requests"),
+    ("websocket", "websocket-client"),
+    ("openai", "openai"),
+)
+COMPANIES_HOUSE_REQUIRED_MODULES = (
+    ("curl_cffi", "curl_cffi"),
     ("lxml", "lxml"),
     ("requests", "requests"),
     ("openpyxl", "openpyxl"),
-    ("websocket", "websocket-client"),
     ("openai", "openai"),
-    ("psycopg", "psycopg[binary]"),
 )
+DIST_PLAN_CH_REQUIRED_MODULES = (("openpyxl", "openpyxl"),)
 
 
-def _ensure_runtime_dependencies() -> bool:
+def _load_project_env() -> bool:
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return False
+    load_dotenv(ROOT / ".env")
+    return True
+
+
+def _required_modules_for_command(site: str, rest: list[str]) -> tuple[tuple[str, str], ...]:
+    normalized = str(site or "").strip().lower()
+    if normalized == "dnb":
+        return BASE_REQUIRED_MODULES + DNB_REQUIRED_MODULES
+    if normalized in {"companies-house", "companies_house"}:
+        return BASE_REQUIRED_MODULES + COMPANIES_HOUSE_REQUIRED_MODULES
+    if normalized == "dist":
+        subcommand = str(rest[0]).strip().lower() if rest else ""
+        if subcommand == "plan-ch":
+            return BASE_REQUIRED_MODULES + DIST_PLAN_CH_REQUIRED_MODULES
+        return BASE_REQUIRED_MODULES
+    return BASE_REQUIRED_MODULES
+
+
+def _ensure_runtime_dependencies(site: str, rest: list[str]) -> bool:
+    required_modules = _required_modules_for_command(site, rest)
     missing = [
         package_name
-        for module_name, package_name in REQUIRED_MODULES
+        for module_name, package_name in required_modules
         if importlib.util.find_spec(module_name) is None
     ]
     if not missing:
@@ -55,14 +80,16 @@ def _ensure_runtime_dependencies() -> bool:
 
 
 def _dispatch(argv: list[str]) -> int:
-    if not _ensure_runtime_dependencies():
-        return 1
     if not argv or argv[0].lower() in {"-h", "--help", "help"}:
+        _load_project_env()
         print(USAGE_TEXT)
         return 0
 
     site = argv[0].strip().lower()
     rest = argv[1:]
+    if not _ensure_runtime_dependencies(site, rest):
+        return 1
+    _load_project_env()
     if site == "dnb":
         from england_crawler.dnb.cli import run_dnb
 
@@ -75,12 +102,6 @@ def _dispatch(argv: list[str]) -> int:
         from england_crawler.distributed.cli import run_dist
 
         return run_dist(rest)
-    if site.startswith("cluster"):
-        from england_crawler.cluster.cli import run_cluster
-
-        cluster_args = [site.removeprefix("cluster").strip("-_")] + rest if site != "cluster" else rest
-        cluster_args = [item for item in cluster_args if item]
-        return run_cluster(cluster_args)
 
     print(f"不支持的网站: {argv[0]}")
     print(USAGE_TEXT)

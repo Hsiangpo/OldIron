@@ -1,37 +1,38 @@
 # England
 
-England 目录是英国公司信息采集项目，当前集群模式统一走 Postgres + coordinator + 多机 worker。
+England 目录是英国公司信息采集项目，当前主路径是“单机执行 + 静态切片 + 主机集中合并”。
 
 ## 日常命令
 
-主控机：
+单机全量：
 
 ```bash
-python run.py cluster coordinator
-python run.py cluster submit England
-python run.py cluster produce day2
+python run.py dnb
+python run.py companies-house
+python product.py day2
 ```
 
-任意 worker 机：
+主机分片：
 
 ```bash
-python run.py cluster start-pools
+python run.py dist plan-ch --shards 2
+python run.py dist plan-dnb --shards 2
 ```
 
-## 命令说明
+子机执行：
 
-- `python run.py cluster coordinator`
-  - 自动读取 `England/.env`
-  - 自动初始化 England 集群 schema
-  - 不需要额外手工设置 `ENGLAND_CLUSTER_POSTGRES_DSN`
-- `python run.py cluster submit England`
-  - 自动处理 England 下全部已注册来源
-  - 当前包含 `DNB` 和 `Companies House`
-  - 已完成来源自动跳过
-  - 仅剩失败任务的来源会自动重挂失败任务
-- `python run.py cluster start-pools`
-  - 按 `.env` 中的并发配置启动本机全部 worker
-  - 前台直接打印各 worker 日志，`Ctrl+C` 可整体停止
+```bash
+python run.py companies-house --input-file output/distributed/ch/shard-001.txt --output-dir output/runs/ch-shard-001
+python run.py dnb --seed-file output/distributed/dnb/shard-001.segments.jsonl --output-dir output/runs/dnb-shard-001
+```
+
+主机合并与交付：
+
+```bash
+python run.py dist merge-site companies-house --run-dir output/runs/ch-shard-001 --run-dir output/runs/ch-shard-002
+python run.py dist merge-site dnb --run-dir output/runs/dnb-shard-001 --run-dir output/runs/dnb-shard-002
+python product.py dayN
+```
 
 ## 环境配置
 
@@ -39,7 +40,7 @@ python run.py cluster start-pools
 
 至少需要确认这些值：
 
-- `ENGLAND_CLUSTER_POSTGRES_DSN`
-- `ENGLAND_CLUSTER_BASE_URL`
+- `DNB_CHROME_DEBUG_URL`
+- `GOOGLE_MAPS_PROXY_URL`
 - `LLM_API_KEY`
 - `FIRECRAWL_KEYS` 或 `FIRECRAWL_KEYS_FILE`

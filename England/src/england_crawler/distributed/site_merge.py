@@ -33,11 +33,11 @@ def _load_run_records(run_dir: Path) -> list[dict[str, object]]:
 
 
 def _record_key(record: dict[str, object]) -> str:
-    domain = str(record.get("domain", "")).strip().lower()
-    if domain:
-        return f"domain|{domain}"
     company_name = normalize_company_name(str(record.get("company_name", "")).strip())
-    return f"name|{company_name}" if company_name else ""
+    if company_name:
+        return f"name|{company_name}"
+    domain = str(record.get("domain", "")).strip().lower()
+    return f"domain|{domain}" if domain else ""
 
 
 def _record_score(record: dict[str, object]) -> tuple[int, int, int, int]:

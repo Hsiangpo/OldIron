@@ -5,10 +5,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from england_crawler.distributed.ch_planner import plan_companies_house_shards
-from england_crawler.distributed.dnb_planner import plan_dnb_shards
-from england_crawler.distributed.site_merge import merge_site_runs
-
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -44,6 +40,8 @@ def _default_site_output(site: str) -> Path:
 def run_dist(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "plan-ch":
+        from england_crawler.distributed.ch_planner import plan_companies_house_shards
+
         summary = plan_companies_house_shards(
             args.input_xlsx,
             args.output_dir,
@@ -58,6 +56,8 @@ def run_dist(argv: list[str]) -> int:
         print(f"目录：{summary['output_dir']}")
         return 0
     if args.command == "plan-dnb":
+        from england_crawler.distributed.dnb_planner import plan_dnb_shards
+
         summary = plan_dnb_shards(
             args.output_dir,
             shard_count=max(int(args.shards), 1),
@@ -72,6 +72,8 @@ def run_dist(argv: list[str]) -> int:
         print(f"目录：{summary['output_dir']}")
         return 0
     if args.command == "merge-site":
+        from england_crawler.distributed.site_merge import merge_site_runs
+
         output_dir = Path(args.output_dir).resolve() if str(args.output_dir).strip() else _default_site_output(args.site)
         summary = merge_site_runs(list(args.run_dir), output_dir)
         print(

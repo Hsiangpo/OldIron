@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
 
 
 from england_crawler.delivery import build_delivery_bundle  # noqa: E402
+from england_crawler.distributed.site_merge import merge_site_runs  # noqa: E402
 
 
 class DeliveryDomainPriorityTests(unittest.TestCase):
@@ -273,6 +274,55 @@ class DeliveryDomainPriorityTests(unittest.TestCase):
                 rows = list(csv.DictReader(fp))
             self.assertEqual(1, len(rows))
             self.assertEqual("Acme Services Ltd", rows[0]["company_name"])
+
+    def test_day3_baseline_uses_merged_day2_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "output"
+            delivery_root = data_root / "delivery"
+            merged_site = data_root / "companies_house"
+            run_day1 = root / "run-day1"
+            run_day2 = root / "run-day2"
+            run_day1.mkdir(parents=True)
+            run_day2.mkdir(parents=True)
+
+            (run_day1 / "final_companies.jsonl").write_text(
+                json.dumps(
+                    {
+                        "company_name": "Alpha Ltd",
+                        "ceo": "Alice",
+                        "homepage": "https://alpha.co.uk",
+                        "domain": "alpha.co.uk",
+                        "emails": ["alice@alpha.co.uk"],
+                    },
+                    ensure_ascii=False,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            merge_site_runs([run_day1], merged_site)
+            day1 = build_delivery_bundle(data_root=data_root, delivery_root=delivery_root, day_label="day1")
+
+            (run_day2 / "final_companies.jsonl").write_text(
+                json.dumps(
+                    {
+                        "company_name": "Beta Ltd",
+                        "ceo": "Bob",
+                        "homepage": "https://beta.co.uk",
+                        "domain": "beta.co.uk",
+                        "emails": ["bob@beta.co.uk"],
+                    },
+                    ensure_ascii=False,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            merge_site_runs([run_day1, run_day2], merged_site)
+            day2 = build_delivery_bundle(data_root=data_root, delivery_root=delivery_root, day_label="day2")
+            day3 = build_delivery_bundle(data_root=data_root, delivery_root=delivery_root, day_label="day3")
+
+            self.assertEqual(1, day1["delta_companies"])
+            self.assertEqual(1, day2["delta_companies"])
+            self.assertEqual(0, day3["delta_companies"])
+            self.assertEqual(2, day3["total_current_companies"])
 
 
 if __name__ == "__main__":
