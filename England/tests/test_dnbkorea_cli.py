@@ -2,6 +2,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
 
@@ -45,6 +46,36 @@ class DnbEnglandCliTests(unittest.TestCase):
 
         self.assertEqual(7, code)
         self.assertEqual(["--max-companies", "5"], called["argv"])
+
+    def test_config_accepts_firecrawl_keys_file(self) -> None:
+        from england_crawler.dnb.config import DnbEnglandConfig
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            keys_file = root / "firecrawl_keys.txt"
+            keys_file.write_text("fc-demo-key\n", encoding="utf-8")
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "FIRECRAWL_KEYS": "",
+                    "FIRECRAWL_KEYS_FILE": str(keys_file),
+                    "LLM_API_KEY": "llm-demo",
+                    "LLM_MODEL": "gpt-5.1-codex-mini",
+                },
+                clear=False,
+            ):
+                config = DnbEnglandConfig.from_env(
+                    project_root=root,
+                    output_dir=root / "output",
+                    max_companies=10,
+                    dnb_pipeline_workers=1,
+                    dnb_workers=1,
+                    gmap_workers=1,
+                    snov_workers=1,
+                )
+
+                config.validate(skip_firecrawl=False)
 
 
 if __name__ == "__main__":

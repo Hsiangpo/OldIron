@@ -59,6 +59,16 @@ def _resolve_path(base: Path, raw: str, default: Path) -> Path:
     return (base / path).resolve()
 
 
+def _has_firecrawl_keys(inline_keys: list[str] | None, keys_file: Path | None) -> bool:
+    if inline_keys:
+        return True
+    if keys_file is None:
+        return False
+    if not keys_file.exists():
+        return False
+    return bool(str(keys_file.read_text(encoding="utf-8")).strip())
+
+
 @dataclass(slots=True)
 class DnbEnglandConfig:
     project_root: Path = Path(".")
@@ -175,7 +185,7 @@ class DnbEnglandConfig:
         if self.seed_file_path and not self.seed_file_path.exists():
             raise RuntimeError(f"未找到 DNB seed 文件: {self.seed_file_path}")
         if not skip_firecrawl:
-            if not self.firecrawl_keys_inline:
+            if not _has_firecrawl_keys(self.firecrawl_keys_inline, self.firecrawl_keys_file):
                 raise RuntimeError("Firecrawl 阶段缺少 FIRECRAWL_KEYS，请检查根目录 .env。")
             if not self.llm_api_key or not self.llm_model:
                 raise RuntimeError("Firecrawl 阶段缺少 LLM 配置，请检查 LLM_API_KEY / LLM_MODEL。")
