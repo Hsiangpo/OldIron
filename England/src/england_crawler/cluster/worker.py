@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import json
 import platform
 import random
 import re
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -227,6 +229,8 @@ class ClusterApiClient:
         headers = {"Content-Type": "application/json"}
         if self._config.cluster_token:
             headers["X-OldIron-Token"] = self._config.cluster_token
+        if sys.platform == "darwin":
+            return self._post_via_curl(path, headers, payload)
         response = self._session.post(
             self._config.coordinator_base_url + path,
             headers=headers,
@@ -241,6 +245,60 @@ class ClusterApiClient:
             if isinstance(data, dict) and data.get("error"):
                 raise RuntimeError(str(data["error"]))
             raise RuntimeError(f"协调器 HTTP {response.status_code}: {path}")
+        if not isinstance(data, dict):
+            raise RuntimeError(f"协调器返回非法响应：{path}")
+        if data.get("error"):
+            raise RuntimeError(str(data["error"]))
+        return data
+
+    def _post_via_curl(
+        self,
+        path: str,
+        headers: dict[str, str],
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        cmd = [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "30",
+            "--noproxy",
+            "*",
+            "-X",
+            "POST",
+            "-w",
+            "\n%{http_code}",
+            self._config.coordinator_base_url + path,
+        ]
+        for key, value in headers.items():
+            cmd.extend(["-H", f"{key}: {value}"])
+        cmd.extend(["--data-binary", json.dumps(payload, ensure_ascii=False)])
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        raw_output = str(result.stdout or "")
+        raw_body, _, status_text = raw_output.rpartition("\n")
+        if result.returncode != 0 and not status_text.strip():
+            error_text = str(result.stderr or "").strip() or f"curl exit {result.returncode}"
+            raise RuntimeError(error_text)
+        try:
+            status_code = int(status_text.strip() or "0")
+        except ValueError as exc:
+            raise RuntimeError(f"协调器返回非法状态码：{status_text}") from exc
+        try:
+            data = json.loads(raw_body or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        if status_code >= 400:
+            if isinstance(data, dict) and data.get("error"):
+                raise RuntimeError(str(data["error"]))
+            error_text = str(result.stderr or "").strip()
+            raise RuntimeError(error_text or f"协调器 HTTP {status_code}: {path}")
         if not isinstance(data, dict):
             raise RuntimeError(f"协调器返回非法响应：{path}")
         if data.get("error"):

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import json
 
 import requests
 
@@ -211,6 +212,29 @@ def _coordinator_healthz_url(config: ClusterConfig) -> str:
 
 
 def _coordinator_is_healthy(config: ClusterConfig) -> bool:
+    if sys.platform == "darwin":
+        result = subprocess.run(
+            [
+                "curl",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "3",
+                "--noproxy",
+                "*",
+                "-w",
+                "\n%{http_code}",
+                _coordinator_healthz_url(config),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if result.returncode != 0:
+            return False
+        _, _, status_text = result.stdout.rpartition("\n")
+        return str(status_text).strip() == "200"
     session = requests.Session()
     session.trust_env = False
     try:

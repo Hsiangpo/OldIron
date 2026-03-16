@@ -806,6 +806,24 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         self.assertFalse(bool(captured["trust_env"]))
         self.assertTrue(bool(captured["closed"]))
 
+    def test_coordinator_health_check_uses_curl_on_darwin(self) -> None:
+        from england_crawler.cluster.cli import _coordinator_is_healthy
+        from england_crawler.cluster.config import ClusterConfig
+
+        class _FakeCompleted:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.stdout = '{"ok": true}\n200'
+                self.stderr = ""
+
+        config = ClusterConfig.from_env(ROOT)
+        with patch("england_crawler.cluster.cli.sys.platform", "darwin"):
+            with patch("england_crawler.cluster.cli.subprocess.run", return_value=_FakeCompleted()) as mocked:
+                healthy = _coordinator_is_healthy(config)
+
+        self.assertTrue(healthy)
+        self.assertIn("--noproxy", mocked.call_args.args[0])
+
     def test_decode_process_output_handles_gbk_bytes(self) -> None:
         from england_crawler.cluster.cli import _decode_process_output
 
@@ -947,6 +965,25 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         api = ClusterApiClient(config, worker_id="worker-1")
 
         self.assertFalse(api._session.trust_env)
+
+    def test_cluster_api_client_uses_curl_on_darwin(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.worker import ClusterApiClient
+
+        class _FakeCompleted:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.stdout = '{"ok": true}\n200'
+                self.stderr = ""
+
+        config = ClusterConfig.from_env(ROOT)
+        with patch("england_crawler.cluster.worker.sys.platform", "darwin"):
+            api = ClusterApiClient(config, worker_id="worker-1")
+            with patch("england_crawler.cluster.worker.subprocess.run", return_value=_FakeCompleted()) as mocked:
+                payload = api._post("/api/v1/workers/heartbeat", {"worker_id": "worker-1"})
+
+        self.assertEqual({"ok": True}, payload)
+        self.assertIn("--noproxy", mocked.call_args.args[0])
 
     def test_dnb_worker_requires_cookie_from_9222(self) -> None:
         from england_crawler.cluster.config import ClusterConfig
