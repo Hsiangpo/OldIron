@@ -12,8 +12,8 @@ import subprocess
 import sys
 import threading
 import time
-from urllib.error import URLError
-from urllib.request import urlopen
+
+import requests
 
 from england_crawler.cluster.config import ClusterConfig
 from england_crawler.cluster.coordinator import CoordinatorRuntime
@@ -211,11 +211,15 @@ def _coordinator_healthz_url(config: ClusterConfig) -> str:
 
 
 def _coordinator_is_healthy(config: ClusterConfig) -> bool:
+    session = requests.Session()
+    session.trust_env = False
     try:
-        with urlopen(_coordinator_healthz_url(config), timeout=3.0) as response:  # noqa: S310
-            return int(getattr(response, "status", 0) or 0) == 200
-    except (OSError, URLError):
+        response = session.get(_coordinator_healthz_url(config), timeout=3.0)
+        return int(response.status_code or 0) == 200
+    except requests.RequestException:
         return False
+    finally:
+        session.close()
 
 
 def _start_local_worker_pools(config: ClusterConfig, *, detach: bool) -> tuple[int, int, list[subprocess.Popen], list[threading.Thread]]:

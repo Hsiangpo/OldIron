@@ -776,6 +776,36 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
 
         self.assertTrue(bool(captured["kwargs"]["start_new_session"]))
 
+    def test_coordinator_health_check_disables_env_proxy(self) -> None:
+        from england_crawler.cluster.cli import _coordinator_is_healthy
+        from england_crawler.cluster.config import ClusterConfig
+
+        captured: dict[str, object] = {}
+
+        class _FakeResponse:
+            status_code = 200
+
+        class _FakeSession:
+            def __init__(self) -> None:
+                self.trust_env = True
+
+            def get(self, url: str, timeout: float):
+                captured["url"] = url
+                captured["timeout"] = timeout
+                captured["trust_env"] = self.trust_env
+                return _FakeResponse()
+
+            def close(self) -> None:
+                captured["closed"] = True
+
+        config = ClusterConfig.from_env(ROOT)
+        with patch("england_crawler.cluster.cli.requests.Session", return_value=_FakeSession()):
+            healthy = _coordinator_is_healthy(config)
+
+        self.assertTrue(healthy)
+        self.assertFalse(bool(captured["trust_env"]))
+        self.assertTrue(bool(captured["closed"]))
+
     def test_decode_process_output_handles_gbk_bytes(self) -> None:
         from england_crawler.cluster.cli import _decode_process_output
 
@@ -908,6 +938,15 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
             worker = ClusterWorkerRuntime(config, role="gmap")
 
         self.assertIsNone(worker._dnb_client)
+
+    def test_cluster_api_client_disables_env_proxy(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.worker import ClusterApiClient
+
+        config = ClusterConfig.from_env(ROOT)
+        api = ClusterApiClient(config, worker_id="worker-1")
+
+        self.assertFalse(api._session.trust_env)
 
     def test_dnb_worker_requires_cookie_from_9222(self) -> None:
         from england_crawler.cluster.config import ClusterConfig

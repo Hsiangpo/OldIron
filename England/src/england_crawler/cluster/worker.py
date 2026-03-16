@@ -145,6 +145,7 @@ class ClusterApiClient:
         self._config = config
         self._worker_id = str(worker_id).strip()
         self._session = requests.Session()
+        self._session.trust_env = False
 
     def register_worker(self, capabilities: list[str]) -> None:
         self._post(
