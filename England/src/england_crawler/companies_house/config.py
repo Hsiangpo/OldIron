@@ -166,12 +166,12 @@ class CompaniesHouseConfig:
             firecrawl_keys_file=_resolve_path(
                 project_root,
                 os.getenv("FIRECRAWL_KEYS_FILE", "").strip(),
-                output_dir / "firecrawl_keys.txt",
+                project_root / "output" / "firecrawl_keys.txt",
             ),
             firecrawl_pool_db=_resolve_path(
                 project_root,
                 os.getenv("FIRECRAWL_KEY_POOL_DB", "").strip(),
-                output_dir / "cache" / "firecrawl_keys.db",
+                project_root / "output" / "cache" / "firecrawl_keys.db",
             ),
             firecrawl_base_url=_env_str("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev/v2/"),
             firecrawl_timeout_seconds=_env_float("FIRECRAWL_TIMEOUT_SECONDS", 45.0),

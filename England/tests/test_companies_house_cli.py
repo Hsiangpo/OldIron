@@ -86,6 +86,40 @@ class CompaniesHouseCliTests(unittest.TestCase):
 
                 config.validate(skip_firecrawl=False)
 
+    def test_config_defaults_firecrawl_key_file_to_project_output(self) -> None:
+        from england_crawler.companies_house.config import CompaniesHouseConfig
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_file = root / "companies.txt"
+            input_file.write_text("ALPHA LTD\n", encoding="utf-8")
+            project_keys = root / "output" / "firecrawl_keys.txt"
+            project_keys.parent.mkdir(parents=True, exist_ok=True)
+            project_keys.write_text("fc-demo-key\n", encoding="utf-8")
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "FIRECRAWL_KEYS": "",
+                    "FIRECRAWL_KEYS_FILE": "",
+                    "LLM_API_KEY": "llm-demo",
+                    "LLM_MODEL": "gpt-5.1-codex-mini",
+                },
+                clear=False,
+            ):
+                config = CompaniesHouseConfig.from_env(
+                    project_root=root,
+                    input_xlsx=input_file,
+                    output_dir=root / "smoke-run",
+                    max_companies=10,
+                    ch_workers=1,
+                    gmap_workers=1,
+                    snov_workers=1,
+                )
+
+                self.assertEqual(project_keys, config.firecrawl_keys_file)
+                config.validate(skip_firecrawl=False)
+
 
 if __name__ == "__main__":
     unittest.main()

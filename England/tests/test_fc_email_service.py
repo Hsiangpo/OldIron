@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,35 @@ if str(SRC) not in sys.path:
 
 
 class FirecrawlEmailServiceTests(unittest.TestCase):
+    def test_settings_validate_accepts_existing_keys_file(self) -> None:
+        from england_crawler.fc_email.email_service import FirecrawlEmailSettings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            keys_file = root / "firecrawl_keys.txt"
+            keys_file.write_text("fc-demo-key\n", encoding="utf-8")
+            settings = FirecrawlEmailSettings(
+                project_root=root,
+                keys_inline=[],
+                keys_file=keys_file,
+                llm_api_key="llm-demo",
+                llm_model="gpt-5.1-codex-mini",
+            )
+
+            settings.validate()
+
+    def test_ensure_keys_file_keeps_existing_file_when_inline_empty(self) -> None:
+        from england_crawler.fc_email.email_service import FirecrawlEmailService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            keys_file = root / "firecrawl_keys.txt"
+            keys_file.write_text("fc-demo-key\n", encoding="utf-8")
+
+            FirecrawlEmailService.ensure_keys_file(keys_file, [])
+
+            self.assertEqual("fc-demo-key", keys_file.read_text(encoding="utf-8").strip())
+
     def test_discover_emails_falls_back_to_single_page_extract(self) -> None:
         from england_crawler.fc_email.client import EmailExtractResult
         from england_crawler.fc_email.client import FirecrawlError

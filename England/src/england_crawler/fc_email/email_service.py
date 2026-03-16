@@ -60,6 +60,12 @@ _IGNORE_LOCAL_PARTS = {
 _KEY_FILE_WRITE_LOCK = threading.Lock()
 
 
+def _keys_file_has_content(keys_file: Path) -> bool:
+    if not keys_file.exists():
+        return False
+    return bool(str(keys_file.read_text(encoding="utf-8", errors="replace")).strip())
+
+
 @dataclass(slots=True)
 class FirecrawlEmailSettings:
     project_root: Path = Path(".")
@@ -97,7 +103,7 @@ class FirecrawlEmailSettings:
             self.llm_pick_count = self.llm_pick_limit
 
     def validate(self) -> None:
-        if not self.keys_inline:
+        if not self.keys_inline and not _keys_file_has_content(self.keys_file):
             raise RuntimeError("Firecrawl 阶段缺少 FIRECRAWL_KEYS，请检查根目录 .env。")
         if not self.llm_api_key or not self.llm_model:
             raise RuntimeError("Firecrawl 阶段缺少 LLM 配置，请检查 LLM_API_KEY / LLM_MODEL。")
@@ -155,6 +161,8 @@ class FirecrawlEmailService:
     def ensure_keys_file(target_path: Path, inline_keys: list[str]) -> None:
         cleaned = [str(item).strip() for item in inline_keys if str(item).strip()]
         if not cleaned:
+            if _keys_file_has_content(target_path):
+                return
             raise ValueError("Firecrawl keys 为空，请检查根目录 .env 中的 FIRECRAWL_KEYS。")
         unique: list[str] = []
         for item in cleaned:
