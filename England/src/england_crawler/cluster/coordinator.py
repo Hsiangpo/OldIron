@@ -18,6 +18,21 @@ from england_crawler.cluster.schema import initialize_schema
 
 
 logger = logging.getLogger(__name__)
+CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+
+
+def _send_json_response(handler: BaseHTTPRequestHandler, status_code: int, payload: dict[str, object]) -> bool:
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    try:
+        handler.send_response(status_code)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.end_headers()
+        handler.wfile.write(data)
+        return True
+    except CLIENT_DISCONNECT_ERRORS:
+        logger.debug("cluster-http client disconnected before response flush: path=%s", getattr(handler, "path", ""))
+        return False
 
 
 class CoordinatorRuntime:
@@ -192,11 +207,6 @@ class CoordinatorRuntime:
                 return payload if isinstance(payload, dict) else None
 
             def _write_json(self, status_code: int, payload: dict[str, object]) -> None:
-                data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-                self.send_response(status_code)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+                _send_json_response(self, status_code, payload)
 
         return Handler

@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import redirect_stdout
@@ -863,6 +864,32 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
         self.assertTrue(healthy)
         self.assertIn("--noproxy", mocked.call_args.args[0])
 
+    def test_send_json_response_ignores_client_disconnect(self) -> None:
+        from england_crawler.cluster.coordinator import _send_json_response
+
+        class _BrokenWriter:
+            def write(self, data: bytes) -> int:
+                raise ConnectionAbortedError(10053, "aborted")
+
+        class _FakeHandler:
+            path = "/api/v1/tasks/claim"
+
+            def __init__(self) -> None:
+                self.wfile = _BrokenWriter()
+
+            def send_response(self, status_code: int) -> None:
+                return None
+
+            def send_header(self, key: str, value: str) -> None:
+                return None
+
+            def end_headers(self) -> None:
+                return None
+
+        ok = _send_json_response(_FakeHandler(), 200, {"task": None})
+
+        self.assertFalse(ok)
+
     def test_decode_process_output_handles_gbk_bytes(self) -> None:
         from england_crawler.cluster.cli import _decode_process_output
 
@@ -1023,6 +1050,53 @@ class ClusterMigrationExportTests(ClusterPostgresCase):
 
         self.assertEqual({"ok": True}, payload)
         self.assertIn("--noproxy", mocked.call_args.args[0])
+
+    def test_cluster_api_client_wraps_transport_error(self) -> None:
+        import requests
+
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.worker import ClusterApiClient
+        from england_crawler.cluster.worker import CoordinatorUnavailableError
+
+        config = ClusterConfig.from_env(ROOT)
+        api = ClusterApiClient(config, worker_id="worker-1")
+        with patch.object(api._session, "post", side_effect=requests.ConnectionError("down")):
+            with self.assertRaises(CoordinatorUnavailableError):
+                api._post("/api/v1/workers/heartbeat", {"worker_id": "worker-1"})
+
+    def test_worker_exits_when_coordinator_unavailable_during_poll(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.worker import ClusterWorkerRuntime
+        from england_crawler.cluster.worker import CoordinatorUnavailableError
+
+        config = ClusterConfig.from_env(ROOT)
+        with patch("england_crawler.cluster.worker.ClusterEmailService"):
+            worker = ClusterWorkerRuntime(config, role="gmap", worker_id="worker-1")
+        with patch.object(worker, "_register_until_ready", return_value=None):
+            with patch.object(worker, "_maybe_heartbeat", return_value=None):
+                with patch.object(worker._api, "claim_task", side_effect=CoordinatorUnavailableError("down")):
+                    with self.assertRaises(SystemExit):
+                        worker.run_forever()
+
+    def test_worker_exits_when_complete_cannot_reach_coordinator(self) -> None:
+        from england_crawler.cluster.config import ClusterConfig
+        from england_crawler.cluster.worker import ClaimedTaskPayload
+        from england_crawler.cluster.worker import ClusterWorkerRuntime
+        from england_crawler.cluster.worker import CoordinatorUnavailableError
+
+        class _DummyThread:
+            def join(self, timeout: float | None = None) -> None:
+                return None
+
+        config = ClusterConfig.from_env(ROOT)
+        with patch("england_crawler.cluster.worker.ClusterEmailService"):
+            worker = ClusterWorkerRuntime(config, role="gmap", worker_id="worker-1")
+        task = ClaimedTaskPayload(task_id="t1", task_type="ch_gmap", retries=0, payload={"comp_id": "c1", "company_name": "Acme"})
+        with patch.object(worker, "_execute_task", return_value={"homepage": "https://acme.test", "phone": "020"}):
+            with patch.object(worker, "_start_task_lease_renewer", return_value=(threading.Event(), threading.Event(), _DummyThread())):
+                with patch.object(worker, "_report_complete", side_effect=CoordinatorUnavailableError("down")):
+                    with self.assertRaises(CoordinatorUnavailableError):
+                        worker._handle_task(task)
 
     def test_dnb_worker_requires_cookie_from_9222(self) -> None:
         from england_crawler.cluster.config import ClusterConfig

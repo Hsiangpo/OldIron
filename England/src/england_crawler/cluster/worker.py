@@ -140,6 +140,10 @@ class ClaimedTaskPayload:
     payload: dict[str, object]
 
 
+class CoordinatorUnavailableError(RuntimeError):
+    """协调器不可达，worker 应立即退出。"""
+
+
 class ClusterApiClient:
     """协调器 HTTP 客户端。"""
 
@@ -231,12 +235,15 @@ class ClusterApiClient:
             headers["X-OldIron-Token"] = self._config.cluster_token
         if sys.platform == "darwin":
             return self._post_via_curl(path, headers, payload)
-        response = self._session.post(
-            self._config.coordinator_base_url + path,
-            headers=headers,
-            json=payload,
-            timeout=30,
-        )
+        try:
+            response = self._session.post(
+                self._config.coordinator_base_url + path,
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise CoordinatorUnavailableError(str(exc)) from exc
         try:
             data = response.json()
         except Exception:  # noqa: BLE001
@@ -285,11 +292,11 @@ class ClusterApiClient:
         raw_body, _, status_text = raw_output.rpartition("\n")
         if result.returncode != 0 and not status_text.strip():
             error_text = str(result.stderr or "").strip() or f"curl exit {result.returncode}"
-            raise RuntimeError(error_text)
+            raise CoordinatorUnavailableError(error_text)
         try:
             status_code = int(status_text.strip() or "0")
         except ValueError as exc:
-            raise RuntimeError(f"协调器返回非法状态码：{status_text}") from exc
+            raise CoordinatorUnavailableError(f"协调器返回非法状态码：{status_text}") from exc
         try:
             data = json.loads(raw_body or "{}")
         except json.JSONDecodeError:
@@ -538,6 +545,9 @@ class ClusterWorkerRuntime:
             try:
                 self._maybe_heartbeat()
                 task = self._api.claim_task(self._capabilities)
+            except CoordinatorUnavailableError as exc:
+                logger.error("协调器不可达，worker 即将退出：worker=%s | 原因=%s", self._worker_id, exc)
+                raise SystemExit(1) from exc
             except Exception as exc:  # noqa: BLE001
                 logger.warning("集群 worker 无法连接协调器，稍后重试：%s", exc)
                 time.sleep(max(self._config.worker_poll_seconds, 2.0))
@@ -545,7 +555,11 @@ class ClusterWorkerRuntime:
             if task is None:
                 time.sleep(self._config.worker_poll_seconds)
                 continue
-            self._handle_task(task)
+            try:
+                self._handle_task(task)
+            except CoordinatorUnavailableError as exc:
+                logger.error("协调器不可达，worker 即将退出：worker=%s | task=%s | 原因=%s", self._worker_id, task.task_id, exc)
+                raise SystemExit(1) from exc
 
     def _register_until_ready(self) -> None:
         while True:
@@ -564,14 +578,19 @@ class ClusterWorkerRuntime:
         self._api.heartbeat()
         self._last_heartbeat = now
 
-    def _start_task_lease_renewer(self, task_id: str) -> tuple[threading.Event, threading.Thread]:
+    def _start_task_lease_renewer(self, task_id: str) -> tuple[threading.Event, threading.Event, threading.Thread]:
         stop_event = threading.Event()
+        lost_event = threading.Event()
         interval_seconds = max(float(self._config.task_lease_seconds) / 3.0, 15.0)
 
         def _runner() -> None:
             while not stop_event.wait(interval_seconds):
                 try:
                     self._api.renew_task_lease(task_id)
+                except CoordinatorUnavailableError as exc:
+                    logger.error("协调器不可达，任务续租停止：task=%s | 原因=%s", task_id, exc)
+                    lost_event.set()
+                    return
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("任务租约续期失败：task=%s | 原因=%s", task_id, exc)
 
@@ -581,7 +600,7 @@ class ClusterWorkerRuntime:
             daemon=True,
         )
         thread.start()
-        return stop_event, thread
+        return stop_event, lost_event, thread
 
     def _handle_task(self, task: ClaimedTaskPayload) -> None:
         logger.info(
@@ -591,33 +610,39 @@ class ClusterWorkerRuntime:
             task.task_type,
             task.payload.get("comp_id", task.payload.get("duns", task.entity_id if hasattr(task, "entity_id") else "")),
         )
-        renew_stop, renew_thread = self._start_task_lease_renewer(task.task_id)
+        renew_stop, renew_lost, renew_thread = self._start_task_lease_renewer(task.task_id)
         try:
             result = self._execute_task(task)
-            if not self._report_complete(task.task_id, result):
-                logger.warning("任务完成结果暂未回写，等待租约回收后重试：%s", task.task_id)
+            if renew_lost.is_set():
+                raise CoordinatorUnavailableError("任务执行期间与协调器失联。")
+            self._report_complete(task.task_id, result)
+        except CoordinatorUnavailableError:
+            raise
         except FirecrawlError as exc:
             fatal = exc.code in {"firecrawl_401", "firecrawl_402"}
             delay = max(float(exc.retry_after or 0.0), 5.0) if exc.code == "firecrawl_429" else 30.0
-            if not self._report_failure(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=fatal):
-                logger.warning("任务失败结果暂未回写，等待租约回收后重试：%s", task.task_id)
+            self._report_failure(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=fatal)
         except Exception as exc:  # noqa: BLE001
             delay = min((2 ** max(task.retries, 1)) * 5.0, 180.0)
-            if not self._report_failure(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=False):
-                logger.warning("任务异常结果暂未回写，等待租约回收后重试：%s", task.task_id)
+            self._report_failure(task.task_id, error_text=str(exc), retry_delay_seconds=delay, fatal=False)
         finally:
             renew_stop.set()
             renew_thread.join(timeout=1.0)
 
-    def _report_complete(self, task_id: str, result: dict[str, object]) -> bool:
+    def _report_complete(self, task_id: str, result: dict[str, object]) -> None:
+        last_error: CoordinatorUnavailableError | None = None
         for attempt in range(5):
             try:
                 self._api.complete_task(task_id, result)
-                return True
+                return
+            except CoordinatorUnavailableError as exc:
+                last_error = exc
+                logger.warning("回写完成结果失败：task=%s 第%d次 原因=%s", task_id, attempt + 1, exc)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("回写完成结果失败：task=%s 第%d次 原因=%s", task_id, attempt + 1, exc)
-                time.sleep(min(2 ** attempt, 15))
-        return False
+            time.sleep(min(2 ** attempt, 15))
+        if last_error is not None:
+            raise last_error
 
     def _report_failure(
         self,
@@ -626,7 +651,8 @@ class ClusterWorkerRuntime:
         error_text: str,
         retry_delay_seconds: float,
         fatal: bool,
-    ) -> bool:
+    ) -> None:
+        last_error: CoordinatorUnavailableError | None = None
         for attempt in range(5):
             try:
                 self._api.fail_task(
@@ -635,11 +661,15 @@ class ClusterWorkerRuntime:
                     retry_delay_seconds=retry_delay_seconds,
                     fatal=fatal,
                 )
-                return True
+                return
+            except CoordinatorUnavailableError as exc:
+                last_error = exc
+                logger.warning("回写失败结果失败：task=%s 第%d次 原因=%s", task_id, attempt + 1, exc)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("回写失败结果失败：task=%s 第%d次 原因=%s", task_id, attempt + 1, exc)
-                time.sleep(min(2 ** attempt, 15))
-        return False
+            time.sleep(min(2 ** attempt, 15))
+        if last_error is not None:
+            raise last_error
 
     def _execute_task(self, task: ClaimedTaskPayload) -> dict[str, object]:
         payload = task.payload
