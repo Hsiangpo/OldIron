@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import uuid
 from pathlib import Path
 
@@ -22,7 +23,35 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
     return rows
 
 
+def _sqlite_tables(db_path: Path) -> set[str]:
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {str(row[0]).strip() for row in rows}
+
+
+def _refresh_run_snapshot(run_dir: Path) -> None:
+    db_path = run_dir / "store.db"
+    if not db_path.exists():
+        return
+    tables = _sqlite_tables(db_path)
+    if "dnb_segments" in tables:
+        from england_crawler.dnb.runtime.snapshot_export import export_jsonl_snapshots
+
+        export_jsonl_snapshots(db_path, run_dir)
+        return
+    if "ch_queue" in tables:
+        from england_crawler.companies_house.snapshot_export import export_jsonl_snapshots
+
+        export_jsonl_snapshots(db_path, run_dir)
+
+
 def _load_run_records(run_dir: Path) -> list[dict[str, object]]:
+    _refresh_run_snapshot(run_dir)
     primary_path = run_dir / "companies_with_emails.jsonl"
     fallback_path = run_dir / "final_companies.jsonl"
     if primary_path.exists():

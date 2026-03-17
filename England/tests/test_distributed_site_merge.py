@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -188,6 +189,86 @@ class DistributedSiteMergeTests(unittest.TestCase):
                 ) + "\n",
                 encoding="utf-8",
             )
+
+            output_dir = root / "merged"
+            summary = merge_site_runs([run_dir], output_dir)
+            rows = [
+                json.loads(line)
+                for line in (output_dir / "final_companies.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(1, summary["merged_companies"])
+        self.assertEqual(["alice@alpha.co.uk"], rows[0]["emails"])
+
+    def test_merge_site_runs_refreshes_companies_house_snapshot_from_store(self) -> None:
+        from england_crawler.companies_house.store import CompaniesHouseStore
+        from england_crawler.distributed.site_merge import merge_site_runs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "run"
+            run_dir.mkdir()
+            store = CompaniesHouseStore(run_dir / "store.db")
+            try:
+                store.import_company_names(["Alpha Ltd"])
+                conn = sqlite3.connect(run_dir / "store.db")
+                try:
+                    conn.execute(
+                        """
+                        UPDATE companies
+                        SET ceo = 'Alice', homepage = 'https://alpha.co.uk', domain = 'alpha.co.uk',
+                            emails_json = '[\"alice@alpha.co.uk\"]', ch_status = 'done', gmap_status = 'done', snov_status = 'done'
+                        WHERE company_name = 'Alpha Ltd'
+                        """
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            finally:
+                store.close()
+            (run_dir / "companies_with_emails.jsonl").write_text("", encoding="utf-8")
+            (run_dir / "final_companies.jsonl").write_text("", encoding="utf-8")
+
+            output_dir = root / "merged"
+            summary = merge_site_runs([run_dir], output_dir)
+            rows = [
+                json.loads(line)
+                for line in (output_dir / "final_companies.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(1, summary["merged_companies"])
+        self.assertEqual(["alice@alpha.co.uk"], rows[0]["emails"])
+
+    def test_merge_site_runs_refreshes_dnb_snapshot_from_store(self) -> None:
+        from england_crawler.dnb.store import DnbEnglandStore
+        from england_crawler.distributed.site_merge import merge_site_runs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "run"
+            run_dir.mkdir()
+            store = DnbEnglandStore(run_dir / "store.db")
+            try:
+                store._upsert_company(
+                    duns="D1",
+                    company_name_en_dnb="Alpha Ltd",
+                    key_principal="Alice",
+                    dnb_website="https://alpha.co.uk",
+                    detail_done=True,
+                )
+                store.mark_gmap_done(
+                    duns="D1",
+                    website="https://alpha.co.uk",
+                    source="gmap",
+                    phone="020 0000 0000",
+                )
+                store.mark_firecrawl_done(duns="D1", emails=["alice@alpha.co.uk"])
+            finally:
+                store.close()
+            (run_dir / "companies_with_emails.jsonl").write_text("", encoding="utf-8")
+            (run_dir / "final_companies.jsonl").write_text("", encoding="utf-8")
 
             output_dir = root / "merged"
             summary = merge_site_runs([run_dir], output_dir)
