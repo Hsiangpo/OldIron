@@ -197,6 +197,7 @@ class DnbEnglandStore:
                     gmap_status TEXT NOT NULL DEFAULT '',
                     site_name_status TEXT NOT NULL DEFAULT '',
                     snov_status TEXT NOT NULL DEFAULT '',
+                    snov_retry_at TEXT NOT NULL DEFAULT '',
                     last_error TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
@@ -246,6 +247,14 @@ class DnbEnglandStore:
                 );
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in self._conn.execute("PRAGMA table_info(companies)").fetchall()
+            }
+            if "snov_retry_at" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE companies ADD COLUMN snov_retry_at TEXT NOT NULL DEFAULT ''"
+                )
             self._conn.commit()
 
     def _repair_runtime_state(self) -> None:
@@ -923,10 +932,10 @@ class DnbEnglandStore:
             self._conn.commit()
         self.refresh_final_company(duns)
 
-    def mark_firecrawl_done(self, *, duns: str, emails: list[str]) -> None:
-        self.mark_snov_done(duns=duns, emails=emails)
+    def mark_firecrawl_done(self, *, duns: str, emails: list[str], retry_after_seconds: float = 0.0) -> None:
+        self.mark_snov_done(duns=duns, emails=emails, retry_after_seconds=retry_after_seconds)
 
-    def mark_snov_done(self, *, duns: str, emails: list[str]) -> None:
+    def mark_snov_done(self, *, duns: str, emails: list[str], retry_after_seconds: float = 0.0) -> None:
         with self._lock:
             current = self._fetch_company_locked(duns)
             if not current:
@@ -939,9 +948,13 @@ class DnbEnglandStore:
             domain = current.get("domain", "")
             if not domain:
                 domain = extract_domain(str(current.get("website", "") or current.get("dnb_website", "")))
+            merged_json = _dump_json_list(merged)
+            has_email = merged_json != "[]"
+            status = "done" if has_email else "zero"
+            retry_at = "" if has_email or retry_after_seconds <= 0 else _utc_after(retry_after_seconds)
             self._conn.execute(
-                "UPDATE companies SET emails_json = ?, domain = ?, snov_status = 'done', updated_at = ? WHERE duns = ?",
-                (_dump_json_list(merged), domain, _utc_now(), duns),
+                "UPDATE companies SET emails_json = ?, domain = ?, snov_status = ?, snov_retry_at = ?, updated_at = ? WHERE duns = ?",
+                (merged_json, domain, status, retry_at, _utc_now(), duns),
             )
             self._conn.execute(
                 "UPDATE snov_queue SET status = 'done', updated_at = ?, last_error = '' WHERE duns = ?",
@@ -949,6 +962,43 @@ class DnbEnglandStore:
             )
             self._conn.commit()
         self.refresh_final_company(duns)
+
+    def requeue_expired_firecrawl_tasks(self) -> int:
+        now = _utc_now()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT duns
+                FROM companies
+                WHERE emails_json = '[]'
+                  AND snov_retry_at != ''
+                  AND snov_retry_at <= ?
+                  AND snov_status IN ('done', 'zero')
+                """,
+                (now,),
+            ).fetchall()
+            if not rows:
+                return 0
+            duns_list = [str(row["duns"]) for row in rows]
+            for duns in duns_list:
+                self._conn.execute(
+                    """
+                    UPDATE snov_queue
+                    SET status = 'pending', retries = 0, next_run_at = ?, last_error = '', updated_at = ?
+                    WHERE duns = ?
+                    """,
+                    (now, now, duns),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE companies
+                    SET snov_status = 'pending', snov_retry_at = '', last_error = '', updated_at = ?
+                    WHERE duns = ?
+                    """,
+                    (now, duns),
+                )
+            self._conn.commit()
+            return len(duns_list)
 
     def defer_gmap_task(self, *, duns: str, retries: int, delay_seconds: float, error_text: str) -> None:
         self._defer_task("gmap_queue", duns=duns, retries=retries, delay_seconds=delay_seconds, error_text=error_text)

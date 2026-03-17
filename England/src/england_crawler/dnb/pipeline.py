@@ -190,6 +190,13 @@ class DnbEnglandPipelineRunner:
             prefilter_limit=self.config.firecrawl_prefilter_limit,
             llm_pick_count=self.config.firecrawl_llm_pick_count,
             extract_max_urls=self.config.firecrawl_extract_max_urls,
+            zero_retry_seconds=self.config.firecrawl_zero_retry_seconds,
+            contact_form_retry_seconds=self.config.firecrawl_contact_form_retry_seconds,
+            relaxed_prefilter_limit=self.config.firecrawl_relaxed_prefilter_limit,
+            relaxed_llm_pick_count=self.config.firecrawl_relaxed_llm_pick_count,
+            relaxed_extract_max_urls=self.config.firecrawl_relaxed_extract_max_urls,
+            relaxed_include_subdomains=self.config.firecrawl_relaxed_include_subdomains,
+            relaxed_allow_external_links=self.config.firecrawl_relaxed_allow_external_links,
         )
         self._firecrawl_key_pool = None
         self._firecrawl_key_pool_lock = threading.Lock()
@@ -247,11 +254,17 @@ class DnbEnglandPipelineRunner:
     def _monitor_until_done(self) -> None:
         last_log = 0.0
         last_snapshot = 0.0
+        last_zero_retry = 0.0
         while not self.stop_event.is_set():
             self.store.requeue_stale_running_tasks(
                 older_than_seconds=self.config.stale_running_requeue_seconds
             )
             now = time.monotonic()
+            if now - last_zero_retry >= 60.0:
+                revived = self.store.requeue_expired_firecrawl_tasks()
+                if revived:
+                    logger.info("Firecrawl 0结果到期，已回队列：%d", revived)
+                last_zero_retry = now
             if now - last_snapshot >= SNAPSHOT_INTERVAL_SECONDS:
                 self.store.export_jsonl_snapshots(self.config.output_dir)
                 last_snapshot = now
@@ -608,7 +621,11 @@ class DnbEnglandPipelineRunner:
             return
         decision = self._firecrawl_domain_cache.prepare_lookup(effective_domain)
         if decision.status == "done":
-            self.store.mark_firecrawl_done(duns=task.duns, emails=decision.emails)
+            self.store.mark_firecrawl_done(
+                duns=task.duns,
+                emails=decision.emails,
+                retry_after_seconds=decision.retry_after_seconds,
+            )
             logger.info("Firecrawl 命中缓存：%s | 域名=%s | 邮箱=%d", task.duns, effective_domain, len(decision.emails))
             return
         if decision.status == "wait":
@@ -646,8 +663,16 @@ class DnbEnglandPipelineRunner:
             )
             self._retry_or_fail_firecrawl(task, exc, effective_domain, delay)
             return
-        self._firecrawl_domain_cache.mark_done(effective_domain, emails)
-        self.store.mark_firecrawl_done(duns=task.duns, emails=emails)
+        self._firecrawl_domain_cache.mark_done(
+            effective_domain,
+            emails,
+            retry_after_seconds=result.retry_after_seconds,
+        )
+        self.store.mark_firecrawl_done(
+            duns=task.duns,
+            emails=emails,
+            retry_after_seconds=result.retry_after_seconds,
+        )
         logger.info("Firecrawl 完成：%s | 域名=%s | 邮箱=%d", task.duns, effective_domain, len(emails))
 
     def _firecrawl_delay(self, attempt: int, exc: FirecrawlError) -> float:

@@ -13,6 +13,47 @@ if str(SRC) not in sys.path:
 
 
 class DnbEnglandPipelineTests(unittest.TestCase):
+    def test_store_requeues_expired_zero_email_firecrawl_tasks(self) -> None:
+        from england_crawler.dnb.store import DnbEnglandStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = DnbEnglandStore(root / "store.db")
+            try:
+                with store._lock:
+                    store._conn.execute(
+                        """
+                        INSERT INTO companies(
+                            duns, company_name_en_dnb, website, domain, emails_json, snov_status, updated_at
+                        ) VALUES(?, ?, ?, ?, '[]', 'done', '2026-01-01T00:00:00Z')
+                        """,
+                        ("D1", "Alpha Ltd", "https://alpha.com", "alpha.com"),
+                    )
+                    store._conn.execute(
+                        """
+                        INSERT INTO snov_queue(duns, status, retries, next_run_at, last_error, updated_at)
+                        VALUES(?, 'done', 0, '2026-01-01T00:00:00Z', '', '2026-01-01T00:00:00Z')
+                        """,
+                        ("D1",),
+                    )
+                    store._conn.commit()
+                store.mark_snov_done(duns="D1", emails=[], retry_after_seconds=3600)
+                with store._lock:
+                    store._conn.execute(
+                        "UPDATE companies SET snov_retry_at = '2000-01-01T00:00:00Z' WHERE duns = ?",
+                        ("D1",),
+                    )
+                    store._conn.commit()
+
+                requeued = store.requeue_expired_firecrawl_tasks()
+                task = store.claim_firecrawl_task()
+
+                self.assertEqual(1, requeued)
+                self.assertIsNotNone(task)
+                self.assertEqual("D1", task.duns)
+            finally:
+                store.close()
+
     def test_firecrawl_5xx_delay_is_zero(self) -> None:
         from england_crawler.dnb.pipeline import DnbEnglandPipelineRunner
         from england_crawler.fc_email.client import FirecrawlError

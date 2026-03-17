@@ -98,6 +98,7 @@ class CompaniesHouseStore:
                     ch_status TEXT NOT NULL DEFAULT 'pending',
                     gmap_status TEXT NOT NULL DEFAULT 'pending',
                     snov_status TEXT NOT NULL DEFAULT '',
+                    snov_retry_at TEXT NOT NULL DEFAULT '',
                     last_error TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
@@ -134,6 +135,14 @@ class CompaniesHouseStore:
                 ON snov_queue(status, next_run_at, updated_at, comp_id);
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in self._conn.execute("PRAGMA table_info(companies)").fetchall()
+            }
+            if "snov_retry_at" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE companies ADD COLUMN snov_retry_at TEXT NOT NULL DEFAULT ''"
+                )
             self._conn.commit()
 
     def _repair_runtime_state(self) -> None:
@@ -356,10 +365,10 @@ class CompaniesHouseStore:
             self._queue_firecrawl_if_ready_locked(comp_id, now)
             self._conn.commit()
 
-    def mark_firecrawl_done(self, *, comp_id: str, emails: list[str]) -> None:
-        self.mark_snov_done(comp_id=comp_id, emails=emails)
+    def mark_firecrawl_done(self, *, comp_id: str, emails: list[str], retry_after_seconds: float = 0.0) -> None:
+        self.mark_snov_done(comp_id=comp_id, emails=emails, retry_after_seconds=retry_after_seconds)
 
-    def mark_snov_done(self, *, comp_id: str, emails: list[str]) -> None:
+    def mark_snov_done(self, *, comp_id: str, emails: list[str], retry_after_seconds: float = 0.0) -> None:
         now = _utc_now()
         with self._lock:
             row = self._conn.execute(
@@ -369,19 +378,61 @@ class CompaniesHouseStore:
             if row is None:
                 return
             merged = _parse_json_list(str(row["emails_json"])) + emails
+            merged_list = _parse_json_list(str(row["emails_json"])) + emails
+            merged = _dump_json_list(merged_list)
+            has_email = merged != "[]"
+            status = "done" if has_email else "zero"
+            retry_at = "" if has_email or retry_after_seconds <= 0 else _utc_after(retry_after_seconds)
             self._conn.execute(
                 """
                 UPDATE companies
-                SET emails_json = ?, snov_status = 'done', last_error = '', updated_at = ?
+                SET emails_json = ?, snov_status = ?, snov_retry_at = ?, last_error = '', updated_at = ?
                 WHERE comp_id = ?
                 """,
-                (_dump_json_list(merged), now, comp_id),
+                (merged, status, retry_at, now, comp_id),
             )
             self._conn.execute(
                 "UPDATE snov_queue SET status = 'done', updated_at = ?, last_error = '' WHERE comp_id = ?",
                 (now, comp_id),
             )
             self._conn.commit()
+
+    def requeue_expired_firecrawl_tasks(self) -> int:
+        now = _utc_now()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT comp_id
+                FROM companies
+                WHERE emails_json = '[]'
+                  AND snov_retry_at != ''
+                  AND snov_retry_at <= ?
+                  AND snov_status IN ('done', 'zero')
+                """,
+                (now,),
+            ).fetchall()
+            if not rows:
+                return 0
+            comp_ids = [str(row["comp_id"]) for row in rows]
+            for comp_id in comp_ids:
+                self._conn.execute(
+                    """
+                    UPDATE snov_queue
+                    SET status = 'pending', retries = 0, next_run_at = ?, last_error = '', updated_at = ?
+                    WHERE comp_id = ?
+                    """,
+                    (now, now, comp_id),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE companies
+                    SET snov_status = 'pending', snov_retry_at = '', last_error = '', updated_at = ?
+                    WHERE comp_id = ?
+                    """,
+                    (now, comp_id),
+                )
+            self._conn.commit()
+            return len(comp_ids)
 
     def defer_ch_task(self, *, comp_id: str, retries: int, delay_seconds: float, error_text: str) -> None:
         self._defer_task("ch_queue", "ch_status", comp_id, retries, delay_seconds, error_text)

@@ -117,9 +117,16 @@ class CompaniesHouseConfig:
     llm_model: str = "gpt-5.1-codex-mini"
     llm_reasoning_effort: str = "medium"
     llm_timeout_seconds: float = 120.0
-    firecrawl_prefilter_limit: int = 24
-    firecrawl_llm_pick_count: int = 12
-    firecrawl_extract_max_urls: int = 10
+    firecrawl_prefilter_limit: int = 40
+    firecrawl_llm_pick_count: int = 16
+    firecrawl_extract_max_urls: int = 12
+    firecrawl_zero_retry_seconds: float = 43200.0
+    firecrawl_contact_form_retry_seconds: float = 259200.0
+    firecrawl_relaxed_prefilter_limit: int = 120
+    firecrawl_relaxed_llm_pick_count: int = 40
+    firecrawl_relaxed_extract_max_urls: int = 25
+    firecrawl_relaxed_include_subdomains: bool = True
+    firecrawl_relaxed_allow_external_links: bool = True
 
     @classmethod
     def from_env(
@@ -185,9 +192,16 @@ class CompaniesHouseConfig:
             llm_model=_env_str("LLM_MODEL", "gpt-5.1-codex-mini"),
             llm_reasoning_effort=_env_str("LLM_REASONING_EFFORT", "medium"),
             llm_timeout_seconds=_env_float("LLM_TIMEOUT_SECONDS", 120.0),
-            firecrawl_prefilter_limit=_env_int("FIRECRAWL_PREFILTER_LIMIT", 24),
-            firecrawl_llm_pick_count=_env_int("FIRECRAWL_LLM_PICK_COUNT", 12),
-            firecrawl_extract_max_urls=_env_int("FIRECRAWL_EXTRACT_MAX_URLS", 10),
+            firecrawl_prefilter_limit=_env_int("FIRECRAWL_PREFILTER_LIMIT", 40),
+            firecrawl_llm_pick_count=_env_int("FIRECRAWL_LLM_PICK_COUNT", 16),
+            firecrawl_extract_max_urls=_env_int("FIRECRAWL_EXTRACT_MAX_URLS", 12),
+            firecrawl_zero_retry_seconds=_env_float("FIRECRAWL_ZERO_RETRY_SECONDS", 43200.0),
+            firecrawl_contact_form_retry_seconds=_env_float("FIRECRAWL_CONTACT_FORM_RETRY_SECONDS", 259200.0),
+            firecrawl_relaxed_prefilter_limit=_env_int("FIRECRAWL_RELAXED_PREFILTER_LIMIT", 120),
+            firecrawl_relaxed_llm_pick_count=_env_int("FIRECRAWL_RELAXED_LLM_PICK_COUNT", 40),
+            firecrawl_relaxed_extract_max_urls=_env_int("FIRECRAWL_RELAXED_EXTRACT_MAX_URLS", 25),
+            firecrawl_relaxed_include_subdomains=_env_bool("FIRECRAWL_RELAXED_INCLUDE_SUBDOMAINS", True),
+            firecrawl_relaxed_allow_external_links=_env_bool("FIRECRAWL_RELAXED_ALLOW_EXTERNAL_LINKS", True),
         )
 
     def validate(self, *, skip_firecrawl: bool = False, skip_snov: bool | None = None) -> None:

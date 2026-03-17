@@ -17,6 +17,38 @@ if str(SRC) not in sys.path:
 
 
 class CompaniesHousePipelineTests(unittest.TestCase):
+    def test_store_requeues_expired_zero_email_firecrawl_tasks(self) -> None:
+        from england_crawler.companies_house.store import CompaniesHouseStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = CompaniesHouseStore(root / "store.db")
+            try:
+                store.import_companies([("c1", "Alpha Ltd", "alpha ltd")])
+                with store._lock:
+                    store._conn.execute(
+                        "UPDATE companies SET company_name = ?, ceo = ?, homepage = ?, domain = ? WHERE comp_id = ?",
+                        ("Alpha Ltd", "Boss", "https://alpha.com", "alpha.com", "c1"),
+                    )
+                    store._enqueue_task_locked("snov_queue", "c1", "2026-01-01T00:00:00Z")
+                    store._conn.commit()
+                store.mark_snov_done(comp_id="c1", emails=[], retry_after_seconds=3600)
+                with store._lock:
+                    store._conn.execute(
+                        "UPDATE companies SET snov_retry_at = '2000-01-01T00:00:00Z' WHERE comp_id = ?",
+                        ("c1",),
+                    )
+                    store._conn.commit()
+
+                requeued = store.requeue_expired_firecrawl_tasks()
+                task = store.claim_firecrawl_task()
+
+                self.assertEqual(1, requeued)
+                self.assertIsNotNone(task)
+                self.assertEqual("c1", task.comp_id)
+            finally:
+                store.close()
+
     def test_firecrawl_5xx_delay_is_zero(self) -> None:
         from england_crawler.companies_house.pipeline import CompaniesHousePipelineRunner
         from england_crawler.fc_email.client import FirecrawlError

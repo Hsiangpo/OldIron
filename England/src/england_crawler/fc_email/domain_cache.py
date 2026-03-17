@@ -81,6 +81,7 @@ class FirecrawlDomainDecision:
     status: str
     emails: list[str]
     wait_seconds: float = 0.0
+    retry_after_seconds: float = 0.0
 
 
 class FirecrawlDomainCache:
@@ -148,7 +149,32 @@ class FirecrawlDomainCache:
 
                 status = str(row["status"])
                 if status == "done":
-                    return FirecrawlDomainDecision(status="done", emails=_parse_json_list(row["emails_json"]))
+                    emails = _parse_json_list(row["emails_json"])
+                    next_retry_at = str(row["next_retry_at"] or "").strip()
+                    if emails:
+                        return FirecrawlDomainDecision(status="done", emails=emails)
+                    if next_retry_at and next_retry_at <= now:
+                        self._conn.execute("BEGIN IMMEDIATE")
+                        self._conn.execute(
+                            """
+                            UPDATE firecrawl_domain_cache
+                            SET status = 'running', updated_at = ?, next_retry_at = '', last_error = ''
+                            WHERE domain = ?
+                            """,
+                            (now, clean_domain),
+                        )
+                        self._conn.commit()
+                        return FirecrawlDomainDecision(status="claimed", emails=[])
+                    retry_after_seconds = (
+                        _seconds_until(next_retry_at, fallback=RUNNING_RECHECK_SECONDS)
+                        if next_retry_at
+                        else 0.0
+                    )
+                    return FirecrawlDomainDecision(
+                        status="done",
+                        emails=[],
+                        retry_after_seconds=retry_after_seconds,
+                    )
                 if status == "pending" and str(row["next_retry_at"] or "") > now:
                     return FirecrawlDomainDecision(
                         status="wait",
@@ -179,22 +205,24 @@ class FirecrawlDomainCache:
 
             return _run_with_retry(self._conn, _op)
 
-    def mark_done(self, domain: str, emails: list[str]) -> None:
+    def mark_done(self, domain: str, emails: list[str], *, retry_after_seconds: float = 0.0) -> None:
         clean_domain = str(domain or "").strip().lower()
         with self._lock:
             def _op() -> None:
+                has_emails = bool([item for item in emails if str(item or "").strip()])
+                next_retry_at = "" if has_emails or retry_after_seconds <= 0 else _utc_after(retry_after_seconds)
                 self._conn.execute(
                     """
                     INSERT INTO firecrawl_domain_cache(domain, status, emails_json, next_retry_at, updated_at, last_error)
-                    VALUES(?, 'done', ?, '', ?, '')
+                    VALUES(?, 'done', ?, ?, ?, '')
                     ON CONFLICT(domain) DO UPDATE SET
                         status = 'done',
                         emails_json = excluded.emails_json,
-                        next_retry_at = '',
+                        next_retry_at = excluded.next_retry_at,
                         updated_at = excluded.updated_at,
                         last_error = ''
                     """,
-                    (clean_domain, _dump_json_list(emails), _utc_now()),
+                    (clean_domain, _dump_json_list(emails), next_retry_at, _utc_now()),
                 )
                 self._conn.commit()
             _run_with_retry(self._conn, _op)

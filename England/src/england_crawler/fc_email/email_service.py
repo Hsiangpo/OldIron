@@ -86,9 +86,16 @@ class FirecrawlEmailSettings:
     llm_reasoning_effort: str = "medium"
     llm_timeout_seconds: float = 120.0
     map_limit: int = 200
-    prefilter_limit: int = 24
-    llm_pick_count: int = 12
-    extract_max_urls: int = 10
+    prefilter_limit: int = 40
+    llm_pick_count: int = 16
+    extract_max_urls: int = 12
+    zero_retry_seconds: float = 43200.0
+    contact_form_retry_seconds: float = 259200.0
+    relaxed_prefilter_limit: int = 120
+    relaxed_llm_pick_count: int = 40
+    relaxed_extract_max_urls: int = 25
+    relaxed_include_subdomains: bool = True
+    relaxed_allow_external_links: bool = True
     per_key_limit: int = 0
     candidate_limit: int = 0
     llm_pick_limit: int = 0
@@ -119,6 +126,16 @@ class EmailDiscoveryResult:
     evidence_quote: str = ""
     contact_form_only: bool = False
     selected_urls: list[str] | None = None
+    retry_after_seconds: float = 0.0
+
+
+@dataclass(slots=True)
+class _EmailPassPlan:
+    prefilter_limit: int
+    llm_pick_count: int
+    extract_max_urls: int
+    include_subdomains: bool = False
+    allow_external_links: bool = False
 
 
 class FirecrawlEmailService:
@@ -194,17 +211,70 @@ class FirecrawlEmailService:
         start_url = self._normalize_start_url(homepage, domain)
         if not start_url:
             return EmailDiscoveryResult(emails=[])
-        mapped_urls = self._firecrawl.map_site(start_url, limit=self._settings.map_limit)
-        candidate_urls = self._prefilter_urls(start_url, mapped_urls)
+        primary = self._discover_pass(
+            company_name=company_name,
+            start_url=start_url,
+            plan=_EmailPassPlan(
+                prefilter_limit=max(self._settings.prefilter_limit, 1),
+                llm_pick_count=max(self._settings.llm_pick_count, 1),
+                extract_max_urls=max(self._settings.extract_max_urls, 1),
+            ),
+        )
+        if primary.emails:
+            return primary
+        relaxed = self._discover_pass(
+            company_name=company_name,
+            start_url=start_url,
+            plan=_EmailPassPlan(
+                prefilter_limit=max(self._settings.relaxed_prefilter_limit, 1),
+                llm_pick_count=max(self._settings.relaxed_llm_pick_count, 1),
+                extract_max_urls=max(self._settings.relaxed_extract_max_urls, 1),
+                include_subdomains=bool(self._settings.relaxed_include_subdomains),
+                allow_external_links=bool(self._settings.relaxed_allow_external_links),
+            ),
+        )
+        if relaxed.emails:
+            return relaxed
+        if primary.contact_form_only or relaxed.contact_form_only:
+            relaxed.retry_after_seconds = max(float(self._settings.contact_form_retry_seconds), 1.0)
+            relaxed.contact_form_only = True
+            return relaxed
+        relaxed.retry_after_seconds = max(float(self._settings.zero_retry_seconds), 1.0)
+        return relaxed
+
+    def _normalize_start_url(self, homepage: str, domain: str) -> str:
+        if str(homepage or "").strip().startswith("http"):
+            return str(homepage).strip()
+        clean_domain = str(domain or "").strip().lower()
+        if not clean_domain:
+            return ""
+        return f"https://{clean_domain}"
+
+    def _discover_pass(self, *, company_name: str, start_url: str, plan: _EmailPassPlan) -> EmailDiscoveryResult:
+        mapped_urls = self._firecrawl.map_site(
+            start_url,
+            limit=self._settings.map_limit,
+            include_subdomains=plan.include_subdomains,
+        )
+        candidate_urls = self._prefilter_urls(start_url, mapped_urls, limit=plan.prefilter_limit)
         ranked_urls = self._llm.pick_candidate_urls(
             company_name=company_name,
             domain=extract_domain(start_url),
             homepage=start_url,
             candidate_urls=candidate_urls,
-            target_count=self._settings.llm_pick_count,
+            target_count=plan.llm_pick_count,
         )
-        final_urls = self._build_final_urls(start_url, ranked_urls, candidate_urls)
-        extracted = self._extract_emails_with_fallback(final_urls)
+        final_urls = self._build_final_urls(
+            start_url,
+            ranked_urls,
+            candidate_urls,
+            limit=plan.extract_max_urls,
+        )
+        extracted = self._extract_emails_with_fallback(
+            final_urls,
+            include_subdomains=plan.include_subdomains,
+            allow_external_links=plan.allow_external_links,
+        )
         emails = self._filter_same_domain_emails(start_url, extracted.emails)
         if not emails:
             emails = extracted.emails
@@ -217,15 +287,7 @@ class FirecrawlEmailService:
             selected_urls=final_urls,
         )
 
-    def _normalize_start_url(self, homepage: str, domain: str) -> str:
-        if str(homepage or "").strip().startswith("http"):
-            return str(homepage).strip()
-        clean_domain = str(domain or "").strip().lower()
-        if not clean_domain:
-            return ""
-        return f"https://{clean_domain}"
-
-    def _prefilter_urls(self, start_url: str, mapped_urls: list[str]) -> list[str]:
+    def _prefilter_urls(self, start_url: str, mapped_urls: list[str], *, limit: int) -> list[str]:
         host = urlparse(start_url).netloc.lower()
         ranked: list[tuple[int, str]] = []
         seen: set[str] = set()
@@ -238,12 +300,10 @@ class FirecrawlEmailService:
             seen.add(url)
             ranked.append((self._score_url(start_url, url), url))
         ranked.sort(key=lambda item: (-item[0], item[1]))
-        limit = max(self._settings.prefilter_limit, 1)
         return [url for _score, url in ranked[:limit]]
 
-    def _build_final_urls(self, start_url: str, ranked_urls: list[str], candidate_urls: list[str]) -> list[str]:
+    def _build_final_urls(self, start_url: str, ranked_urls: list[str], candidate_urls: list[str], *, limit: int) -> list[str]:
         urls: list[str] = []
-        limit = max(self._settings.extract_max_urls, 1)
         for url in [start_url, *ranked_urls, *candidate_urls]:
             value = str(url or "").strip()
             if value and value not in urls:
@@ -252,9 +312,19 @@ class FirecrawlEmailService:
                 break
         return urls
 
-    def _extract_emails_with_fallback(self, urls: list[str]) -> EmailDiscoveryResult:
+    def _extract_emails_with_fallback(
+        self,
+        urls: list[str],
+        *,
+        include_subdomains: bool = False,
+        allow_external_links: bool = False,
+    ) -> EmailDiscoveryResult:
         try:
-            return self._firecrawl.extract_emails(urls)
+            return self._firecrawl.extract_emails(
+                urls,
+                include_subdomains=include_subdomains,
+                allow_external_links=allow_external_links,
+            )
         except FirecrawlError as exc:
             if exc.code not in {"firecrawl_extract_failed", "firecrawl_extract_timeout", "firecrawl_http_404"}:
                 raise
@@ -265,7 +335,11 @@ class FirecrawlEmailService:
         any_success = False
         for url in urls:
             try:
-                result = self._firecrawl.extract_emails([url])
+                result = self._firecrawl.extract_emails(
+                    [url],
+                    include_subdomains=include_subdomains,
+                    allow_external_links=allow_external_links,
+                )
             except FirecrawlError as exc:
                 if exc.code in {"firecrawl_http_404", "firecrawl_extract_failed", "firecrawl_extract_timeout"}:
                     continue

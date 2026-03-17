@@ -137,8 +137,16 @@ class CompaniesHousePipelineRunner:
             llm_model=str(getattr(config, "llm_model", "gpt-5.1-codex-mini") or "").strip(),
             llm_reasoning_effort=str(getattr(config, "llm_reasoning_effort", "medium") or "").strip(),
             llm_timeout_seconds=_config_float(config, "llm_timeout_seconds", 120.0),
-            candidate_limit=max(_config_int(config, "firecrawl_prefilter_limit", 24), 1),
-            llm_pick_limit=max(_config_int(config, "firecrawl_llm_pick_count", 12), 1),
+            candidate_limit=max(_config_int(config, "firecrawl_prefilter_limit", 40), 1),
+            llm_pick_limit=max(_config_int(config, "firecrawl_llm_pick_count", 16), 1),
+            extract_max_urls=max(_config_int(config, "firecrawl_extract_max_urls", 12), 1),
+            zero_retry_seconds=_config_float(config, "firecrawl_zero_retry_seconds", 43200.0),
+            contact_form_retry_seconds=_config_float(config, "firecrawl_contact_form_retry_seconds", 259200.0),
+            relaxed_prefilter_limit=max(_config_int(config, "firecrawl_relaxed_prefilter_limit", 120), 1),
+            relaxed_llm_pick_count=max(_config_int(config, "firecrawl_relaxed_llm_pick_count", 40), 1),
+            relaxed_extract_max_urls=max(_config_int(config, "firecrawl_relaxed_extract_max_urls", 25), 1),
+            relaxed_include_subdomains=bool(getattr(config, "firecrawl_relaxed_include_subdomains", True)),
+            relaxed_allow_external_links=bool(getattr(config, "firecrawl_relaxed_allow_external_links", True)),
         )
         self._firecrawl_key_pool = None
         self._firecrawl_key_pool_lock = threading.Lock()
@@ -535,7 +543,11 @@ class CompaniesHousePipelineRunner:
             return
         decision = self.firecrawl_domain_cache.prepare_lookup(domain)
         if decision.status == "done":
-            self.store.mark_firecrawl_done(comp_id=task.comp_id, emails=decision.emails)
+            self.store.mark_firecrawl_done(
+                comp_id=task.comp_id,
+                emails=decision.emails,
+                retry_after_seconds=decision.retry_after_seconds,
+            )
             logger.info("Firecrawl 命中缓存：%s | 域名=%s | 邮箱=%d", task.comp_id, domain, len(decision.emails))
             return
         if decision.status == "wait":
@@ -549,9 +561,22 @@ class CompaniesHousePipelineRunner:
             return
         try:
             logger.info("Firecrawl 开始：%s | 域名=%s", task.comp_id, domain)
-            emails = self._get_firecrawl_service().get_domain_emails(domain)
-            self.firecrawl_domain_cache.mark_done(domain, emails)
-            self.store.mark_firecrawl_done(comp_id=task.comp_id, emails=emails)
+            result = self._get_firecrawl_service().discover_emails(
+                company_name=task.company_name,
+                homepage=task.homepage or domain,
+                domain=domain,
+            )
+            emails = result.emails
+            self.firecrawl_domain_cache.mark_done(
+                domain,
+                emails,
+                retry_after_seconds=result.retry_after_seconds,
+            )
+            self.store.mark_firecrawl_done(
+                comp_id=task.comp_id,
+                emails=emails,
+                retry_after_seconds=result.retry_after_seconds,
+            )
             logger.info("Firecrawl 完成：%s | 域名=%s | 邮箱=%d", task.comp_id, domain, len(emails))
         except FirecrawlError as exc:
             retries = task.retries + 1
@@ -596,6 +621,7 @@ class CompaniesHousePipelineRunner:
         last_progress = 0.0
         last_export = 0.0
         last_requeue = 0.0
+        last_zero_retry = 0.0
         while not self.stop_event.is_set():
             now = time.monotonic()
             if now - last_requeue >= 60.0:
@@ -605,6 +631,11 @@ class CompaniesHousePipelineRunner:
                 if recovered:
                     logger.warning("检测到卡死任务并已回收：%d", recovered)
                 last_requeue = now
+            if now - last_zero_retry >= 60.0:
+                revived = self.store.requeue_expired_firecrawl_tasks()
+                if revived:
+                    logger.info("Firecrawl 0结果到期，已回队列：%d", revived)
+                last_zero_retry = now
             if now - last_export >= self.snapshot_interval:
                 self.store.export_jsonl_snapshots(self.output_dir)
                 logger.info("快照刷新：%s", self.output_dir)

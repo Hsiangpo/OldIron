@@ -91,12 +91,12 @@ class FirecrawlClient:
         self._session = cffi_requests.Session(impersonate="chrome110")
         self._session.headers.update({"Accept": "application/json"})
 
-    def map_site(self, url: str, *, limit: int = 200) -> list[str]:
+    def map_site(self, url: str, *, limit: int = 200, include_subdomains: bool = False) -> list[str]:
         payload = {
             "url": url,
             "limit": max(int(limit), 1),
             "ignoreQueryParameters": True,
-            "includeSubdomains": False,
+            "includeSubdomains": bool(include_subdomains),
             "sitemap": "include",
         }
         data = self._request_json("POST", "map", json_body=payload)
@@ -107,7 +107,13 @@ class FirecrawlClient:
             return [str(item).strip() for item in body.get("links", []) if str(item).strip()]
         return []
 
-    def extract_emails(self, urls: list[str]) -> EmailExtractResult:
+    def extract_emails(
+        self,
+        urls: list[str],
+        *,
+        include_subdomains: bool = False,
+        allow_external_links: bool = False,
+    ) -> EmailExtractResult:
         schema = {
             "type": "object",
             "properties": {
@@ -129,9 +135,9 @@ class FirecrawlClient:
             "urls": urls,
             "prompt": prompt,
             "schema": schema,
-            "allowExternalLinks": False,
+            "allowExternalLinks": bool(allow_external_links),
             "enableWebSearch": False,
-            "includeSubdomains": False,
+            "includeSubdomains": bool(include_subdomains),
         }
         start = self._request_json("POST", "extract", json_body=payload)
         data = start.get("data") if isinstance(start.get("data"), dict) else None
