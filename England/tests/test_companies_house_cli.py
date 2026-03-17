@@ -18,12 +18,12 @@ import run  # noqa: E402
 
 
 class CompaniesHouseCliTests(unittest.TestCase):
-    def test_parser_defaults_ch_workers_to_two(self) -> None:
+    def test_parser_defaults_ch_workers_to_four(self) -> None:
         from england_crawler.companies_house.cli import _build_parser
 
         args = _build_parser().parse_args([])
 
-        self.assertEqual(2, args.ch_workers)
+        self.assertEqual(4, args.ch_workers)
 
     def test_parser_accepts_input_file_and_output_dir(self) -> None:
         from england_crawler.companies_house.cli import _build_parser

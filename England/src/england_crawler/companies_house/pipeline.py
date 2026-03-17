@@ -111,7 +111,7 @@ class CompaniesHousePipelineRunner:
             "retry_backoff_cap_seconds",
             180.0,
         )
-        self.ch_workers = max(_config_int(config, "ch_workers", 2), 1)
+        self.ch_workers = max(_config_int(config, "ch_workers", 4), 1)
         self.gmap_workers = max(_config_int(config, "gmap_workers", 32), 1)
         self.firecrawl_workers = max(_config_int(config, "snov_workers", 4), 1)
         self.max_companies = _config_int(config, "max_companies", 0)
