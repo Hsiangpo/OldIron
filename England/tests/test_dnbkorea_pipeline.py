@@ -13,6 +13,67 @@ if str(SRC) not in sys.path:
 
 
 class DnbEnglandPipelineTests(unittest.TestCase):
+    def test_firecrawl_services_share_key_pool_across_threads(self) -> None:
+        from england_crawler.dnb.client import DnbClient
+        from england_crawler.dnb.config import DnbEnglandConfig
+        from england_crawler.dnb.pipeline import DnbEnglandPipelineRunner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = DnbEnglandConfig(
+                project_root=root,
+                output_dir=root / "output",
+                store_db_path=root / "output" / "store.db",
+                snov_client_id="id",
+                snov_client_secret="secret",
+                snov_timeout_seconds=30.0,
+                snov_retry_delay_seconds=10.0,
+                snov_max_retries=5,
+                max_companies=0,
+                dnb_pipeline_workers=1,
+                dnb_workers=1,
+                gmap_workers=1,
+                snov_workers=2,
+                queue_poll_interval=0.1,
+                stale_running_requeue_seconds=600,
+                gmap_max_retries=3,
+                detail_task_max_retries=8,
+                snov_task_max_retries=5,
+                retry_backoff_cap_seconds=180.0,
+                firecrawl_keys_inline=["fc-test"],
+                firecrawl_keys_file=root / "output" / "firecrawl_keys.txt",
+                firecrawl_pool_db=root / "output" / "cache" / "firecrawl_keys.db",
+                llm_api_key="llm-test",
+                llm_model="gpt-5.1-codex-mini",
+            )
+            base = DnbClient(cookie_header="foo=bar")
+            try:
+                runner = DnbEnglandPipelineRunner(
+                    config=config,
+                    client=base,
+                    skip_dnb=True,
+                    skip_gmap=True,
+                    skip_snov=False,
+                )
+                main_service = runner._get_firecrawl_service()
+                worker_services: list[object] = []
+
+                def _worker() -> None:
+                    worker_services.append(runner._get_firecrawl_service())
+
+                thread = threading.Thread(target=_worker)
+                thread.start()
+                thread.join()
+
+                self.assertEqual(1, len(worker_services))
+                self.assertIsNot(main_service, worker_services[0])
+                self.assertIs(main_service._key_pool, worker_services[0]._key_pool)
+            finally:
+                runner._firecrawl_domain_cache.close()
+                runner.detail_queue.close()
+                runner.store.close()
+                base.session.close()
+
     def test_detail_worker_does_not_resync_queue_every_loop(self) -> None:
         from england_crawler.dnb.client import DnbClient
         from england_crawler.dnb.config import DnbEnglandConfig

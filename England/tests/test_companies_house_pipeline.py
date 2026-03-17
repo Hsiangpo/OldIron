@@ -17,6 +17,71 @@ if str(SRC) not in sys.path:
 
 
 class CompaniesHousePipelineTests(unittest.TestCase):
+    def test_firecrawl_services_share_key_pool_across_threads(self) -> None:
+        from england_crawler.companies_house.pipeline import CompaniesHousePipelineRunner
+        from england_crawler.companies_house.proxy import BlurpathProxyConfig
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_path = root / "英国.xlsx"
+            source_path.write_text("placeholder", encoding="utf-8")
+            output_dir = root / "output"
+            config = SimpleNamespace(
+                project_root=root,
+                output_dir=output_dir,
+                store_db_path=output_dir / "store.db",
+                input_xlsx=source_path,
+                max_companies=0,
+                ch_workers=1,
+                gmap_workers=1,
+                snov_workers=2,
+                queue_poll_interval=0.05,
+                snapshot_flush_interval=30.0,
+                stale_running_requeue_seconds=300,
+                retry_backoff_cap_seconds=1.0,
+                ch_proxy=BlurpathProxyConfig(False, "", 0, "", "", "GB", 10),
+                firecrawl_keys_inline=["fc-test"],
+                firecrawl_keys_file=output_dir / "firecrawl_keys.txt",
+                firecrawl_pool_db=output_dir / "cache" / "firecrawl_keys.db",
+                firecrawl_base_url="https://api.firecrawl.dev/v2/",
+                firecrawl_timeout_seconds=1.0,
+                firecrawl_max_retries=0,
+                firecrawl_key_per_limit=1,
+                firecrawl_key_wait_seconds=1,
+                firecrawl_key_cooldown_seconds=1,
+                firecrawl_key_failure_threshold=1,
+                llm_api_key="llm-test",
+                llm_base_url="https://api.gpteamservices.com/v1",
+                llm_model="gpt-5.1-codex-mini",
+                llm_reasoning_effort="medium",
+                llm_timeout_seconds=1.0,
+                firecrawl_prefilter_limit=4,
+                firecrawl_llm_pick_count=2,
+            )
+            runner = CompaniesHousePipelineRunner(
+                config,
+                skip_ch=True,
+                skip_gmap=True,
+                skip_firecrawl=False,
+            )
+            try:
+                main_service = runner._get_firecrawl_service()
+                worker_services: list[object] = []
+
+                def _worker() -> None:
+                    worker_services.append(runner._get_firecrawl_service())
+
+                thread = threading.Thread(target=_worker)
+                thread.start()
+                thread.join()
+
+                self.assertEqual(1, len(worker_services))
+                self.assertIsNot(main_service, worker_services[0])
+                self.assertIs(main_service._key_pool, worker_services[0]._key_pool)
+            finally:
+                runner.firecrawl_domain_cache.close()
+                runner.store.close()
+
     def test_ch_worker_handles_claimed_task(self) -> None:
         from england_crawler.companies_house.pipeline import CompaniesHousePipelineRunner
         from england_crawler.companies_house.proxy import BlurpathProxyConfig

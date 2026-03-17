@@ -191,6 +191,8 @@ class DnbEnglandPipelineRunner:
             llm_pick_count=self.config.firecrawl_llm_pick_count,
             extract_max_urls=self.config.firecrawl_extract_max_urls,
         )
+        self._firecrawl_key_pool = None
+        self._firecrawl_key_pool_lock = threading.Lock()
         self._firecrawl_domain_cache = FirecrawlDomainCache(self.config.project_root / "output" / "firecrawl_cache.db")
         self._snov_domain_cache = self._firecrawl_domain_cache
         self._seed_firecrawl_domain_cache()
@@ -663,9 +665,20 @@ class DnbEnglandPipelineRunner:
         self.store.defer_firecrawl_task(duns=task.duns, retries=attempt, delay_seconds=delay, error_text=str(exc))
         logger.warning("Firecrawl 重试：%s | 域名=%s | 第%d次 | 等待=%.1fs | 原因=%s", task.duns, domain, attempt, delay, exc)
 
+    def _get_firecrawl_key_pool(self):
+        if self._firecrawl_key_pool is not None:
+            return self._firecrawl_key_pool
+        with self._firecrawl_key_pool_lock:
+            if self._firecrawl_key_pool is None:
+                self._firecrawl_key_pool = FirecrawlEmailService.build_key_pool(self._firecrawl_settings)
+        return self._firecrawl_key_pool
+
     def _get_firecrawl_service(self) -> FirecrawlEmailService:
         if not hasattr(self._firecrawl_local, "service"):
-            self._firecrawl_local.service = FirecrawlEmailService(self._firecrawl_settings)
+            self._firecrawl_local.service = FirecrawlEmailService(
+                self._firecrawl_settings,
+                key_pool=self._get_firecrawl_key_pool(),
+            )
         return self._firecrawl_local.service
 
     def _retry_or_fail_gmap(self, task: GMapTask, error_text: str) -> None:

@@ -140,6 +140,8 @@ class CompaniesHousePipelineRunner:
             candidate_limit=max(_config_int(config, "firecrawl_prefilter_limit", 24), 1),
             llm_pick_limit=max(_config_int(config, "firecrawl_llm_pick_count", 12), 1),
         )
+        self._firecrawl_key_pool = None
+        self._firecrawl_key_pool_lock = threading.Lock()
         self.firecrawl_domain_cache = FirecrawlDomainCache(self.config.project_root / "output" / "firecrawl_cache.db")
         self.snov_domain_cache = self.firecrawl_domain_cache
         self._seed_firecrawl_domain_cache()
@@ -225,9 +227,20 @@ class CompaniesHousePipelineRunner:
             return max(float(exc.retry_after), 5.0)
         return _backoff_seconds(retries, self.retry_backoff_cap_seconds)
 
+    def _get_firecrawl_key_pool(self):
+        if self._firecrawl_key_pool is not None:
+            return self._firecrawl_key_pool
+        with self._firecrawl_key_pool_lock:
+            if self._firecrawl_key_pool is None:
+                self._firecrawl_key_pool = FirecrawlEmailService.build_key_pool(self.firecrawl_service_config)
+        return self._firecrawl_key_pool
+
     def _get_firecrawl_service(self) -> FirecrawlEmailService:
         if not hasattr(self._firecrawl_local, "service"):
-            self._firecrawl_local.service = FirecrawlEmailService(self.firecrawl_service_config)
+            self._firecrawl_local.service = FirecrawlEmailService(
+                self.firecrawl_service_config,
+                key_pool=self._get_firecrawl_key_pool(),
+            )
         return self._firecrawl_local.service
 
     def _resolve_firecrawl_domain(self, task) -> str:

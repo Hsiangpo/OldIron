@@ -124,21 +124,9 @@ class EmailDiscoveryResult:
 class FirecrawlEmailService:
     """基于 Firecrawl 与外部 LLM 的邮箱发现服务。"""
 
-    def __init__(self, settings: FirecrawlEmailSettings) -> None:
+    def __init__(self, settings: FirecrawlEmailSettings, *, key_pool: FirecrawlKeyPool | None = None) -> None:
         self._settings = settings
-        self.ensure_keys_file(settings.keys_file, settings.keys_inline)
-        keys = FirecrawlKeyPool.load_keys(settings.keys_file)
-        self._key_pool = FirecrawlKeyPool(
-            keys=keys,
-            key_file=settings.keys_file,
-            db_path=settings.pool_db,
-            config=KeyPoolConfig(
-                per_key_limit=settings.key_per_limit,
-                wait_seconds=settings.key_wait_seconds,
-                cooldown_seconds=settings.key_cooldown_seconds,
-                failure_threshold=settings.key_failure_threshold,
-            ),
-        )
+        self._key_pool = key_pool or self.build_key_pool(settings)
         self._firecrawl = FirecrawlClient(
             key_pool=self._key_pool,
             config=FirecrawlClientConfig(
@@ -154,6 +142,7 @@ class FirecrawlEmailService:
             reasoning_effort=settings.llm_reasoning_effort,
             timeout_seconds=settings.llm_timeout_seconds,
         )
+
     def close(self) -> None:
         return None
 
@@ -175,6 +164,22 @@ class FirecrawlEmailService:
                 if current:
                     return
             target_path.write_text("\n".join(unique) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def build_key_pool(settings: FirecrawlEmailSettings) -> FirecrawlKeyPool:
+        FirecrawlEmailService.ensure_keys_file(settings.keys_file, settings.keys_inline)
+        keys = FirecrawlKeyPool.load_keys(settings.keys_file)
+        return FirecrawlKeyPool(
+            keys=keys,
+            key_file=settings.keys_file,
+            db_path=settings.pool_db,
+            config=KeyPoolConfig(
+                per_key_limit=settings.key_per_limit,
+                wait_seconds=settings.key_wait_seconds,
+                cooldown_seconds=settings.key_cooldown_seconds,
+                failure_threshold=settings.key_failure_threshold,
+            ),
+        )
 
     def build_domain_cache(self, db_path: Path) -> FirecrawlDomainCache:
         return FirecrawlDomainCache(db_path)
