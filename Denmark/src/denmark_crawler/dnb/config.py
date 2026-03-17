@@ -1,4 +1,4 @@
-"""英国 DNB 流式配置。"""
+"""丹麦 DNB 流式配置。"""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ def _has_firecrawl_keys(inline_keys: list[str] | None, keys_file: Path | None) -
 
 
 @dataclass(slots=True)
-class DnbEnglandConfig:
+class DnbDenmarkConfig:
     project_root: Path = Path(".")
     output_dir: Path = Path(".")
     store_db_path: Path = Path("store.db")
@@ -143,7 +143,7 @@ class DnbEnglandConfig:
         gmap_workers: int,
         snov_workers: int,
         seed_file_path: Path | None = None,
-    ) -> "DnbEnglandConfig":
+    ) -> "DnbDenmarkConfig":
         output_dir = output_dir.resolve()
         return cls(
             project_root=project_root.resolve(),
@@ -159,16 +159,16 @@ class DnbEnglandConfig:
             dnb_workers=max(dnb_workers, 1),
             gmap_workers=max(gmap_workers, 1),
             snov_workers=max(snov_workers, 1),
-            queue_poll_interval=_env_float("DNB_ENGLAND_QUEUE_POLL_INTERVAL", 2.0),
+            queue_poll_interval=_env_float("DNB_DENMARK_QUEUE_POLL_INTERVAL", 2.0),
             stale_running_requeue_seconds=_env_int(
-                "DNB_ENGLAND_STALE_RUNNING_REQUEUE_SECONDS",
+                "DNB_DENMARK_STALE_RUNNING_REQUEUE_SECONDS",
                 600,
             ),
-            gmap_max_retries=_env_int("DNB_ENGLAND_GMAP_MAX_RETRIES", 3),
-            detail_task_max_retries=_env_int("DNB_ENGLAND_DETAIL_TASK_MAX_RETRIES", 8),
-            snov_task_max_retries=_env_int("DNB_ENGLAND_FIRECRAWL_TASK_MAX_RETRIES", 5),
+            gmap_max_retries=_env_int("DNB_DENMARK_GMAP_MAX_RETRIES", 3),
+            detail_task_max_retries=_env_int("DNB_DENMARK_DETAIL_TASK_MAX_RETRIES", 8),
+            snov_task_max_retries=_env_int("DNB_DENMARK_FIRECRAWL_TASK_MAX_RETRIES", 5),
             retry_backoff_cap_seconds=_env_float(
-                "DNB_ENGLAND_RETRY_BACKOFF_CAP_SECONDS",
+                "DNB_DENMARK_RETRY_BACKOFF_CAP_SECONDS",
                 180.0,
             ),
             firecrawl_keys_inline=_env_list("FIRECRAWL_KEYS"),
@@ -217,3 +217,4 @@ class DnbEnglandConfig:
                 raise RuntimeError("Firecrawl 阶段缺少 FIRECRAWL_KEYS，请检查根目录 .env。")
             if not self.llm_api_key or not self.llm_model:
                 raise RuntimeError("Firecrawl 阶段缺少 LLM 配置，请检查 LLM_API_KEY / LLM_MODEL。")
+

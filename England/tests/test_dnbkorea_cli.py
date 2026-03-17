@@ -23,7 +23,7 @@ class DnbEnglandCliTests(unittest.TestCase):
 
         args = _build_parser().parse_args([])
 
-        self.assertEqual(128, args.firecrawl_workers)
+        self.assertEqual(64, args.firecrawl_workers)
 
     def test_parser_accepts_seed_file_and_output_dir(self) -> None:
         from england_crawler.dnb.cli import _build_parser

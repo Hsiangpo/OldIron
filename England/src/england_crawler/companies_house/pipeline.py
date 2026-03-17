@@ -113,7 +113,7 @@ class CompaniesHousePipelineRunner:
         )
         self.ch_workers = max(_config_int(config, "ch_workers", 4), 1)
         self.gmap_workers = max(_config_int(config, "gmap_workers", 32), 1)
-        self.firecrawl_workers = max(_config_int(config, "snov_workers", 128), 1)
+        self.firecrawl_workers = max(_config_int(config, "snov_workers", 64), 1)
         self.max_companies = _config_int(config, "max_companies", 0)
         self.ch_task_max_retries = max(_config_int(config, "ch_max_retries", 4), 1)
         self.gmap_task_max_retries = max(_config_int(config, "gmap_max_retries", 3), 1)

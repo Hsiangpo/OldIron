@@ -135,7 +135,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dnb-pipeline-workers", type=int, default=8, help="DNB pipeline 并发数")
     parser.add_argument("--dnb-workers", type=int, default=8, help="DNB 详情并发数")
     parser.add_argument("--gmap-workers", type=int, default=32, help="Google Maps 并发数")
-    parser.add_argument("--firecrawl-workers", type=int, default=128, help="Firecrawl 并发数")
+    parser.add_argument("--firecrawl-workers", type=int, default=64, help="Firecrawl 并发数")
     parser.add_argument("--snov-workers", dest="firecrawl_workers", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     return parser
