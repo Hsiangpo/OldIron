@@ -23,6 +23,16 @@ def _build_parser() -> argparse.ArgumentParser:
     plan_dnb.add_argument("--country", default="gb")
     plan_dnb.add_argument("--shards", type=int, required=True)
 
+    bootstrap_ch = sub.add_parser("bootstrap-ch", help="把旧 CH store 迁移到 shard run 目录")
+    bootstrap_ch.add_argument("--legacy-db", default=str(ROOT / "output" / "companies_house" / "store.db"))
+    bootstrap_ch.add_argument("--shard-dir", default=str(ROOT / "output" / "distributed" / "ch"))
+    bootstrap_ch.add_argument("--output-root", default=str(ROOT / "output" / "runs"))
+
+    bootstrap_dnb = sub.add_parser("bootstrap-dnb", help="把旧 DNB store 迁移到 shard run 目录")
+    bootstrap_dnb.add_argument("--legacy-db", default=str(ROOT / "output" / "dnb" / "store.db"))
+    bootstrap_dnb.add_argument("--shard-dir", default=str(ROOT / "output" / "distributed" / "dnb"))
+    bootstrap_dnb.add_argument("--output-root", default=str(ROOT / "output" / "runs"))
+
     merge_site = sub.add_parser("merge-site", help="合并站点产物")
     merge_site.add_argument("site", choices=["dnb", "companies-house"])
     merge_site.add_argument("--run-dir", action="append", required=True)
@@ -70,6 +80,36 @@ def run_dist(argv: list[str]) -> int:
             )
         )
         print(f"目录：{summary['output_dir']}")
+        return 0
+    if args.command == "bootstrap-ch":
+        from england_crawler.distributed.bootstrap import bootstrap_companies_house_shards
+
+        summary = bootstrap_companies_house_shards(
+            args.legacy_db,
+            args.shard_dir,
+            args.output_root,
+        )
+        print(
+            "England CH 旧进度迁移完成：shards={shards}".format(
+                shards=int(summary["shard_count"]),
+            )
+        )
+        print(f"目录：{args.output_root}")
+        return 0
+    if args.command == "bootstrap-dnb":
+        from england_crawler.distributed.bootstrap import bootstrap_dnb_shards
+
+        summary = bootstrap_dnb_shards(
+            args.legacy_db,
+            args.shard_dir,
+            args.output_root,
+        )
+        print(
+            "England DNB 旧进度迁移完成：shards={shards}".format(
+                shards=int(summary["shard_count"]),
+            )
+        )
+        print(f"目录：{args.output_root}")
         return 0
     if args.command == "merge-site":
         from england_crawler.distributed.site_merge import merge_site_runs
