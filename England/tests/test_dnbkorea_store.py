@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import json
+import hashlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,20 @@ if str(SRC) not in sys.path:
 
 
 class DnbEnglandStoreTests(unittest.TestCase):
+    def test_ensure_seed_signature_rejects_different_shard_identity(self) -> None:
+        from england_crawler.dnb.store import DnbEnglandStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = DnbEnglandStore(Path(tmp) / "store.db")
+            try:
+                seed_a = [{"segment_id": "construction|gb||"}]
+                seed_b = [{"segment_id": "manufacturing|gb||"}]
+                store.ensure_seed_signature(seed_a)
+                with self.assertRaisesRegex(RuntimeError, "当前 output-dir 对应的 DNB shard 已变更"):
+                    store.ensure_seed_signature(seed_b)
+            finally:
+                store.close()
+
     def test_snapshot_writer_tolerates_invalid_unicode(self) -> None:
         from england_crawler.dnb.runtime.snapshot_export import _write_json_line
 
@@ -144,6 +159,32 @@ class DnbEnglandStoreTests(unittest.TestCase):
             self.assertIsNotNone(claimed_again)
             self.assertEqual(claimed.segment_id, claimed_again.segment_id)
             store.close()
+
+    def test_store_reopen_requeues_running_segment(self) -> None:
+        from england_crawler.dnb.store import DnbEnglandStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "store.db"
+            store = DnbEnglandStore(db_path)
+            store.upsert_leaf_segment(
+                segment_id="construction|gb||",
+                industry_path="construction",
+                country_iso_two_code="gb",
+                region_name="",
+                city_name="",
+                expected_count=100,
+            )
+            claimed = store.claim_segment(50)
+            self.assertIsNotNone(claimed)
+            store.close()
+
+            reopened = DnbEnglandStore(db_path)
+            try:
+                claimed_again = reopened.claim_segment(50)
+                self.assertIsNotNone(claimed_again)
+                self.assertEqual("construction|gb||", claimed_again.segment_id)
+            finally:
+                reopened.close()
 
     def test_store_reopen_keeps_generic_segments(self) -> None:
         from england_crawler.dnb.store import DnbEnglandStore
@@ -278,6 +319,48 @@ class DnbEnglandStoreTests(unittest.TestCase):
                 self.assertEqual(20, claimed.total_pages)
             finally:
                 store.close()
+
+    def test_requeue_stale_running_tasks_requeues_running_segment(self) -> None:
+        from england_crawler.dnb.store import DnbEnglandStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = DnbEnglandStore(Path(tmp) / "store.db")
+            try:
+                store.upsert_leaf_segment(
+                    segment_id="construction|gb||",
+                    industry_path="construction",
+                    country_iso_two_code="gb",
+                    region_name="",
+                    city_name="",
+                    expected_count=100,
+                )
+                claimed = store.claim_segment(50)
+                self.assertIsNotNone(claimed)
+                store._conn.execute(
+                    "UPDATE dnb_segments SET updated_at = ? WHERE segment_id = ?",
+                    ("2000-01-01T00:00:00Z", claimed.segment_id),
+                )
+                store._conn.commit()
+
+                affected = store.requeue_stale_running_tasks(older_than_seconds=1)
+                claimed_again = store.claim_segment(50)
+
+                self.assertGreaterEqual(affected, 1)
+                self.assertIsNotNone(claimed_again)
+                self.assertEqual(claimed.segment_id, claimed_again.segment_id)
+            finally:
+                store.close()
+
+    def test_seed_signature_is_stable_for_same_seed_set(self) -> None:
+        from england_crawler.dnb.store import _seed_signature
+
+        seed_rows = [
+            {"segment_id": "construction|gb||"},
+            {"segment_id": "manufacturing|gb||"},
+        ]
+        expected = hashlib.sha256("construction|gb||\nmanufacturing|gb||".encode("utf-8")).hexdigest()
+
+        self.assertEqual(expected, _seed_signature(seed_rows))
 
     def test_export_snapshots_filters_dirty_gmap_domains(self) -> None:
         from england_crawler.dnb.store import DnbEnglandStore

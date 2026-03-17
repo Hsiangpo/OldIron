@@ -308,7 +308,9 @@ class DnbEnglandPipelineRunner:
     def _dnb_worker(self) -> None:
         try:
             dnb_client = self._dnb_client_factory()
-            self.store.ensure_discovery_seeds(self._seed_rows())
+            seed_rows = self._seed_rows()
+            self.store.ensure_seed_signature(seed_rows)
+            self.store.ensure_discovery_seeds(seed_rows)
             if self.store.has_discovery_work():
                 self._log_seed_loaded_once()
                 self._discover_stable_segments(dnb_client)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -61,6 +62,18 @@ def _record_score(record: dict[str, object]) -> tuple[int, int, int, int]:
     has_ceo = 1 if str(record.get("ceo", "")).strip() else 0
     has_name = 1 if str(record.get("company_name", "")).strip() else 0
     return has_email, len(email_list), has_ceo, has_name
+
+
+def _seed_signature(seed_rows: list[dict[str, object]]) -> str:
+    segment_ids = sorted(
+        {
+            str(row.get("segment_id", "")).strip()
+            for row in seed_rows
+            if str(row.get("segment_id", "")).strip()
+        }
+    )
+    payload = "\n".join(segment_ids).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 @dataclass(slots=True)
 class SegmentCursor:
@@ -226,6 +239,11 @@ class DnbEnglandStore:
                     phone TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS runtime_meta (
+                    meta_key TEXT PRIMARY KEY,
+                    meta_value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._conn.commit()
@@ -237,12 +255,40 @@ class DnbEnglandStore:
                 "UPDATE dnb_discovery_queue SET status = 'pending', updated_at = ? WHERE status = 'running'",
                 (now,),
             )
+            self._conn.execute(
+                "UPDATE dnb_segments SET status = 'pending', updated_at = ? WHERE status = 'running'",
+                (now,),
+            )
             for table in ("gmap_queue", "site_queue", "snov_queue"):
                 self._conn.execute(
                     f"UPDATE {table} SET status = 'pending', next_run_at = ?, updated_at = ? WHERE status = 'running'",
                     (now, now),
-                )
+            )
             self._conn.commit()
+
+    def ensure_seed_signature(self, seed_rows: list[dict[str, object]]) -> None:
+        signature = _seed_signature(seed_rows)
+        if not signature:
+            return
+        now = _utc_now()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT meta_value FROM runtime_meta WHERE meta_key = 'dnb_seed_signature'"
+            ).fetchone()
+            if row is None:
+                self._conn.execute(
+                    """
+                    INSERT INTO runtime_meta(meta_key, meta_value, updated_at)
+                    VALUES('dnb_seed_signature', ?, ?)
+                    """,
+                    (signature, now),
+                )
+                self._conn.commit()
+                return
+            current = str(row["meta_value"] or "").strip()
+            if current == signature:
+                return
+            raise RuntimeError("当前 output-dir 对应的 DNB shard 已变更，请使用原 shard 或新的 output-dir。")
 
     def ensure_discovery_seed(self, segment_id: str, expected_count: int = 0) -> None:
         target_parts = [part.strip() for part in str(segment_id).split("|")]
@@ -1024,6 +1070,13 @@ class DnbEnglandStore:
             if discovery_rows:
                 self._conn.execute("UPDATE dnb_discovery_queue SET status = 'pending', updated_at = ? WHERE status = 'running' AND updated_at <= ?", (now, cutoff))
                 total += len(discovery_rows)
+            segment_rows = self._conn.execute("SELECT segment_id FROM dnb_segments WHERE status = 'running' AND updated_at <= ?", (cutoff,)).fetchall()
+            if segment_rows:
+                self._conn.execute(
+                    "UPDATE dnb_segments SET status = 'pending', updated_at = ? WHERE status = 'running' AND updated_at <= ?",
+                    (now, cutoff),
+                )
+                total += len(segment_rows)
             for table in ("gmap_queue", "site_queue", "snov_queue"):
                 rows = self._conn.execute(f"SELECT duns FROM {table} WHERE status = 'running' AND updated_at <= ?", (cutoff,)).fetchall()
                 if not rows:
