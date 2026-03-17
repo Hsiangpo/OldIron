@@ -83,7 +83,7 @@ class DnbEnglandConfig:
     dnb_pipeline_workers: int = 1
     dnb_workers: int = 1
     gmap_workers: int = 1
-    snov_workers: int = 1
+    snov_workers: int = 128
     queue_poll_interval: float = 2.0
     stale_running_requeue_seconds: int = 600
     gmap_max_retries: int = 3

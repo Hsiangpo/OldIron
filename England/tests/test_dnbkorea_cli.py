@@ -18,6 +18,13 @@ import run  # noqa: E402
 
 
 class DnbEnglandCliTests(unittest.TestCase):
+    def test_parser_defaults_firecrawl_workers_to_one_hundred_twenty_eight(self) -> None:
+        from england_crawler.dnb.cli import _build_parser
+
+        args = _build_parser().parse_args([])
+
+        self.assertEqual(128, args.firecrawl_workers)
+
     def test_parser_accepts_seed_file_and_output_dir(self) -> None:
         from england_crawler.dnb.cli import _build_parser
 

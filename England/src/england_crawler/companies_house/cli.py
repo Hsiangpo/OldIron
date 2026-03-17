@@ -133,7 +133,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-snov", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--ch-workers", type=int, default=4, help="Companies House 并发数")
     parser.add_argument("--gmap-workers", type=int, default=32, help="Google Maps 并发数")
-    parser.add_argument("--firecrawl-workers", type=int, default=16, help="Firecrawl 并发数")
+    parser.add_argument("--firecrawl-workers", type=int, default=128, help="Firecrawl 并发数")
     parser.add_argument("--snov-workers", dest="firecrawl_workers", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     return parser
