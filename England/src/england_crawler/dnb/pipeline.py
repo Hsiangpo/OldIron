@@ -651,6 +651,8 @@ class DnbEnglandPipelineRunner:
         logger.info("Firecrawl 完成：%s | 域名=%s | 邮箱=%d", task.duns, effective_domain, len(emails))
 
     def _firecrawl_delay(self, attempt: int, exc: FirecrawlError) -> float:
+        if exc.code == "firecrawl_5xx":
+            return 0.0
         if exc.code == "firecrawl_429" and exc.retry_after:
             return max(float(exc.retry_after), 5.0)
         return _backoff_seconds(attempt=attempt, base=10.0, cap=self.config.retry_backoff_cap_seconds)

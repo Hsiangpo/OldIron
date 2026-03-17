@@ -223,6 +223,8 @@ class CompaniesHousePipelineRunner:
         self.firecrawl_domain_cache.seed_done(pairs)
 
     def _firecrawl_delay(self, retries: int, exc: FirecrawlError) -> float:
+        if exc.code == "firecrawl_5xx":
+            return 0.0
         if exc.code == "firecrawl_429" and exc.retry_after:
             return max(float(exc.retry_after), 5.0)
         return _backoff_seconds(retries, self.retry_backoff_cap_seconds)

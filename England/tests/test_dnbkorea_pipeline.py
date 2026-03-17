@@ -13,6 +13,17 @@ if str(SRC) not in sys.path:
 
 
 class DnbEnglandPipelineTests(unittest.TestCase):
+    def test_firecrawl_5xx_delay_is_zero(self) -> None:
+        from england_crawler.dnb.pipeline import DnbEnglandPipelineRunner
+        from england_crawler.fc_email.client import FirecrawlError
+
+        runner = DnbEnglandPipelineRunner.__new__(DnbEnglandPipelineRunner)
+        runner.config = type("Config", (), {"retry_backoff_cap_seconds": 180.0})()
+
+        delay = runner._firecrawl_delay(1, FirecrawlError("firecrawl_5xx"))
+
+        self.assertEqual(0.0, delay)
+
     def test_firecrawl_services_share_key_pool_across_threads(self) -> None:
         from england_crawler.dnb.client import DnbClient
         from england_crawler.dnb.config import DnbEnglandConfig

@@ -14,6 +14,45 @@ if str(SRC) not in sys.path:
 
 
 class FirecrawlEmailServiceTests(unittest.TestCase):
+    def test_firecrawl_client_does_not_sleep_between_5xx_retries(self) -> None:
+        from england_crawler.fc_email.client import FirecrawlClient
+        from england_crawler.fc_email.client import FirecrawlClientConfig
+        from england_crawler.fc_email.client import FirecrawlError
+        from england_crawler.fc_email.key_pool import KeyLease
+
+        class _FakeKeyPool:
+            def acquire(self):
+                return KeyLease(key="fc-demo-key", index=0)
+
+            def release(self, lease):
+                return None
+
+            def mark_success(self, lease):
+                return None
+
+            def mark_rate_limited(self, lease, retry_after=None):
+                return None
+
+            def mark_failure(self, lease):
+                return None
+
+        client = FirecrawlClient(key_pool=_FakeKeyPool(), config=FirecrawlClientConfig(max_retries=2))
+        calls = {"count": 0}
+
+        def _request_once(lease, method, path, *, json_body=None):
+            calls["count"] += 1
+            raise FirecrawlError("firecrawl_5xx")
+
+        sleeps: list[float] = []
+        client._request_once = _request_once  # type: ignore[method-assign]
+
+        with patch("england_crawler.fc_email.client.time.sleep", side_effect=lambda seconds: sleeps.append(seconds)):
+            with self.assertRaises(FirecrawlError):
+                client._request_json("POST", "extract", json_body={"urls": ["https://example.com"]})
+
+        self.assertEqual(3, calls["count"])
+        self.assertEqual([], sleeps)
+
     def test_key_pool_acquire_retries_when_database_locked_once(self) -> None:
         from england_crawler.fc_email.key_pool import FirecrawlKeyPool
         from england_crawler.fc_email.key_pool import KeyPoolConfig

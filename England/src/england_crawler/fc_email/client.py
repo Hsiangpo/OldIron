@@ -191,7 +191,8 @@ class FirecrawlClient:
             finally:
                 self._key_pool.release(lease)
             if attempt_index < attempts - 1:
-                time.sleep(0.6 * (attempt_index + 1))
+                if not isinstance(last_error, FirecrawlError) or last_error.code != "firecrawl_5xx":
+                    time.sleep(0.6 * (attempt_index + 1))
         if isinstance(last_error, FirecrawlError):
             raise last_error
         raise FirecrawlError("firecrawl_request_failed", str(last_error or "unknown"))

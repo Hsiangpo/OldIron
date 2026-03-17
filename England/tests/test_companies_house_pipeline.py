@@ -17,6 +17,17 @@ if str(SRC) not in sys.path:
 
 
 class CompaniesHousePipelineTests(unittest.TestCase):
+    def test_firecrawl_5xx_delay_is_zero(self) -> None:
+        from england_crawler.companies_house.pipeline import CompaniesHousePipelineRunner
+        from england_crawler.fc_email.client import FirecrawlError
+
+        runner = CompaniesHousePipelineRunner.__new__(CompaniesHousePipelineRunner)
+        runner.retry_backoff_cap_seconds = 180.0
+
+        delay = runner._firecrawl_delay(1, FirecrawlError("firecrawl_5xx"))
+
+        self.assertEqual(0.0, delay)
+
     def test_firecrawl_services_share_key_pool_across_threads(self) -> None:
         from england_crawler.companies_house.pipeline import CompaniesHousePipelineRunner
         from england_crawler.companies_house.proxy import BlurpathProxyConfig
