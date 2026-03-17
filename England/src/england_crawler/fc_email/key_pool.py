@@ -32,6 +32,21 @@ def _should_remove_key(reason: str) -> bool:
     return code in {"payment_required", "insufficient_credits", "insufficient_tokens"}
 
 
+def _run_with_retry(conn: sqlite3.Connection, operation, attempts: int = 6):
+    for attempt in range(max(int(attempts), 1)):
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt + 1 >= max(int(attempts), 1):
+                raise
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            time.sleep(min(0.05 * (2**attempt), 0.5))
+    raise RuntimeError("sqlite retry unreachable")
+
+
 class FirecrawlKeyPool:
     """基于 sqlite 的 Firecrawl Key 池。"""
 
@@ -66,42 +81,46 @@ class FirecrawlKeyPool:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA busy_timeout = 30000;")
         return conn
 
     def _init_db(self) -> None:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS keys (
-                        key TEXT PRIMARY KEY,
-                        idx INTEGER NOT NULL,
-                        state TEXT NOT NULL,
-                        cooldown_until REAL,
-                        failure_count INTEGER NOT NULL DEFAULT 0,
-                        in_flight INTEGER NOT NULL DEFAULT 0,
-                        disabled_reason TEXT,
-                        last_used REAL
-                    )
-                    """
-                )
-                for idx, key in enumerate(self._keys):
+                def _op() -> None:
                     conn.execute(
                         """
-                        INSERT INTO keys(key, idx, state, cooldown_until, failure_count, in_flight, disabled_reason, last_used)
-                        VALUES(?, ?, 'active', NULL, 0, 0, NULL, NULL)
-                        ON CONFLICT(key) DO UPDATE SET idx = excluded.idx
-                        """,
-                        (key, idx),
+                        CREATE TABLE IF NOT EXISTS keys (
+                            key TEXT PRIMARY KEY,
+                            idx INTEGER NOT NULL,
+                            state TEXT NOT NULL,
+                            cooldown_until REAL,
+                            failure_count INTEGER NOT NULL DEFAULT 0,
+                            in_flight INTEGER NOT NULL DEFAULT 0,
+                            disabled_reason TEXT,
+                            last_used REAL
+                        )
+                        """
                     )
-                placeholders = ",".join("?" for _ in self._keys)
-                conn.execute(
-                    f"DELETE FROM keys WHERE key NOT IN ({placeholders})",
-                    tuple(self._keys),
-                )
-                conn.execute("UPDATE keys SET in_flight = 0")
-                conn.commit()
+                    for idx, key in enumerate(self._keys):
+                        conn.execute(
+                            """
+                            INSERT INTO keys(key, idx, state, cooldown_until, failure_count, in_flight, disabled_reason, last_used)
+                            VALUES(?, ?, 'active', NULL, 0, 0, NULL, NULL)
+                            ON CONFLICT(key) DO UPDATE SET idx = excluded.idx
+                            """,
+                            (key, idx),
+                        )
+                    placeholders = ",".join("?" for _ in self._keys)
+                    conn.execute(
+                        f"DELETE FROM keys WHERE key NOT IN ({placeholders})",
+                        tuple(self._keys),
+                    )
+                    conn.execute("UPDATE keys SET in_flight = 0")
+                    conn.commit()
+
+                _run_with_retry(conn, _op)
             finally:
                 conn.close()
 
@@ -120,37 +139,44 @@ class FirecrawlKeyPool:
             now = _utc_now_unix()
             conn = self._connect()
             try:
-                conn.execute(
-                    """
-                    UPDATE keys
-                    SET state = 'active', cooldown_until = NULL
-                    WHERE state = 'cooldown' AND cooldown_until IS NOT NULL AND cooldown_until <= ?
-                    """,
-                    (now,),
-                )
-                row = conn.execute(
-                    """
-                    SELECT key, idx
-                    FROM keys
-                    WHERE state != 'disabled'
-                      AND (state != 'cooldown' OR cooldown_until IS NULL OR cooldown_until <= ?)
-                      AND in_flight < ?
-                    ORDER BY in_flight ASC, COALESCE(last_used, 0) ASC, idx ASC
-                    LIMIT 1
-                    """,
-                    (now, max(self._config.per_key_limit, 1)),
-                ).fetchone()
-                if row is None:
+                holder: dict[str, KeyLease | None] = {"lease": None}
+
+                def _op() -> None:
+                    conn.execute(
+                        """
+                        UPDATE keys
+                        SET state = 'active', cooldown_until = NULL
+                        WHERE state = 'cooldown' AND cooldown_until IS NOT NULL AND cooldown_until <= ?
+                        """,
+                        (now,),
+                    )
+                    row = conn.execute(
+                        """
+                        SELECT key, idx
+                        FROM keys
+                        WHERE state != 'disabled'
+                          AND (state != 'cooldown' OR cooldown_until IS NULL OR cooldown_until <= ?)
+                          AND in_flight < ?
+                        ORDER BY in_flight ASC, COALESCE(last_used, 0) ASC, idx ASC
+                        LIMIT 1
+                        """,
+                        (now, max(self._config.per_key_limit, 1)),
+                    ).fetchone()
+                    if row is None:
+                        conn.commit()
+                        holder["lease"] = None
+                        return
+                    key = str(row["key"])
+                    idx = int(row["idx"])
+                    conn.execute(
+                        "UPDATE keys SET in_flight = in_flight + 1, last_used = ? WHERE key = ?",
+                        (now, key),
+                    )
                     conn.commit()
-                    return None
-                key = str(row["key"])
-                idx = int(row["idx"])
-                conn.execute(
-                    "UPDATE keys SET in_flight = in_flight + 1, last_used = ? WHERE key = ?",
-                    (now, key),
-                )
-                conn.commit()
-                return KeyLease(key=key, index=idx)
+                    holder["lease"] = KeyLease(key=key, index=idx)
+
+                _run_with_retry(conn, _op)
+                return holder["lease"]
             finally:
                 conn.close()
 
@@ -158,11 +184,14 @@ class FirecrawlKeyPool:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(
-                    "UPDATE keys SET in_flight = CASE WHEN in_flight > 0 THEN in_flight - 1 ELSE 0 END WHERE key = ?",
-                    (lease.key,),
-                )
-                conn.commit()
+                def _op() -> None:
+                    conn.execute(
+                        "UPDATE keys SET in_flight = CASE WHEN in_flight > 0 THEN in_flight - 1 ELSE 0 END WHERE key = ?",
+                        (lease.key,),
+                    )
+                    conn.commit()
+
+                _run_with_retry(conn, _op)
             finally:
                 conn.close()
 
@@ -170,11 +199,14 @@ class FirecrawlKeyPool:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(
-                    "UPDATE keys SET failure_count = 0, state = 'active', cooldown_until = NULL, disabled_reason = NULL WHERE key = ?",
-                    (lease.key,),
-                )
-                conn.commit()
+                def _op() -> None:
+                    conn.execute(
+                        "UPDATE keys SET failure_count = 0, state = 'active', cooldown_until = NULL, disabled_reason = NULL WHERE key = ?",
+                        (lease.key,),
+                    )
+                    conn.commit()
+
+                _run_with_retry(conn, _op)
             finally:
                 conn.close()
 
@@ -184,11 +216,14 @@ class FirecrawlKeyPool:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(
-                    "UPDATE keys SET failure_count = failure_count + 1, state = 'cooldown', cooldown_until = ?, disabled_reason = NULL WHERE key = ?",
-                    (until, lease.key),
-                )
-                conn.commit()
+                def _op() -> None:
+                    conn.execute(
+                        "UPDATE keys SET failure_count = failure_count + 1, state = 'cooldown', cooldown_until = ?, disabled_reason = NULL WHERE key = ?",
+                        (until, lease.key),
+                    )
+                    conn.commit()
+
+                _run_with_retry(conn, _op)
             finally:
                 conn.close()
 
@@ -196,21 +231,24 @@ class FirecrawlKeyPool:
         with self._lock:
             conn = self._connect()
             try:
-                row = conn.execute("SELECT failure_count FROM keys WHERE key = ?", (lease.key,)).fetchone()
-                current = int(row["failure_count"]) if row is not None else 0
-                next_count = current + 1
-                if next_count >= max(self._config.failure_threshold, 1):
-                    cooldown_until = _utc_now_unix() + max(self._config.cooldown_seconds, 1)
-                    conn.execute(
-                        "UPDATE keys SET failure_count = ?, state = 'cooldown', cooldown_until = ?, disabled_reason = NULL WHERE key = ?",
-                        (next_count, cooldown_until, lease.key),
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE keys SET failure_count = ?, disabled_reason = NULL WHERE key = ?",
-                        (next_count, lease.key),
-                    )
-                conn.commit()
+                def _op() -> None:
+                    row = conn.execute("SELECT failure_count FROM keys WHERE key = ?", (lease.key,)).fetchone()
+                    current = int(row["failure_count"]) if row is not None else 0
+                    next_count = current + 1
+                    if next_count >= max(self._config.failure_threshold, 1):
+                        cooldown_until = _utc_now_unix() + max(self._config.cooldown_seconds, 1)
+                        conn.execute(
+                            "UPDATE keys SET failure_count = ?, state = 'cooldown', cooldown_until = ?, disabled_reason = NULL WHERE key = ?",
+                            (next_count, cooldown_until, lease.key),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE keys SET failure_count = ?, disabled_reason = NULL WHERE key = ?",
+                            (next_count, lease.key),
+                        )
+                    conn.commit()
+
+                _run_with_retry(conn, _op)
             finally:
                 conn.close()
 
@@ -218,11 +256,14 @@ class FirecrawlKeyPool:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(
-                    "UPDATE keys SET state = 'disabled', disabled_reason = ?, cooldown_until = NULL, in_flight = 0 WHERE key = ?",
-                    (reason, lease.key),
-                )
-                conn.commit()
+                def _op() -> None:
+                    conn.execute(
+                        "UPDATE keys SET state = 'disabled', disabled_reason = ?, cooldown_until = NULL, in_flight = 0 WHERE key = ?",
+                        (reason, lease.key),
+                    )
+                    conn.commit()
+
+                _run_with_retry(conn, _op)
             finally:
                 conn.close()
             if _should_remove_key(reason):

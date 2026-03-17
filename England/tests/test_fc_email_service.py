@@ -1,8 +1,10 @@
 import sys
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +14,53 @@ if str(SRC) not in sys.path:
 
 
 class FirecrawlEmailServiceTests(unittest.TestCase):
+    def test_key_pool_acquire_retries_when_database_locked_once(self) -> None:
+        from england_crawler.fc_email.key_pool import FirecrawlKeyPool
+        from england_crawler.fc_email.key_pool import KeyPoolConfig
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            keys_file = root / "firecrawl_keys.txt"
+            db_path = root / "cache" / "firecrawl_keys.db"
+            keys_file.write_text("fc-demo-key\n", encoding="utf-8")
+            pool = FirecrawlKeyPool(
+                keys=["fc-demo-key"],
+                key_file=keys_file,
+                db_path=db_path,
+                config=KeyPoolConfig(per_key_limit=1, wait_seconds=1),
+            )
+            real_connect = pool._connect
+            attempts = {"count": 0}
+
+            class _WrappedConnection:
+                def __init__(self, conn):
+                    self._conn = conn
+
+                def execute(self, *args, **kwargs):
+                    if attempts["count"] == 0:
+                        attempts["count"] += 1
+                        raise sqlite3.OperationalError("database is locked")
+                    return self._conn.execute(*args, **kwargs)
+
+                def commit(self):
+                    return self._conn.commit()
+
+                def rollback(self):
+                    return self._conn.rollback()
+
+                def close(self):
+                    return self._conn.close()
+
+                def __getattr__(self, name):
+                    return getattr(self._conn, name)
+
+            with patch.object(pool, "_connect", side_effect=lambda: _WrappedConnection(real_connect())):
+                with patch("england_crawler.fc_email.key_pool.time.sleep", return_value=None):
+                    lease = pool.acquire()
+
+            self.assertEqual("fc-demo-key", lease.key)
+            self.assertEqual(1, attempts["count"])
+
     def test_settings_validate_accepts_existing_keys_file(self) -> None:
         from england_crawler.fc_email.email_service import FirecrawlEmailSettings
 
