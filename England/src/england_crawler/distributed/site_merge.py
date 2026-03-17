@@ -23,10 +23,10 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 def _load_run_records(run_dir: Path) -> list[dict[str, object]]:
-    final_path = run_dir / "final_companies.jsonl"
-    fallback_path = run_dir / "companies_with_emails.jsonl"
-    if final_path.exists():
-        return _read_jsonl(final_path)
+    primary_path = run_dir / "companies_with_emails.jsonl"
+    fallback_path = run_dir / "final_companies.jsonl"
+    if primary_path.exists():
+        return _read_jsonl(primary_path)
     if fallback_path.exists():
         return _read_jsonl(fallback_path)
     return []

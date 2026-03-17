@@ -324,6 +324,80 @@ class DeliveryDomainPriorityTests(unittest.TestCase):
             self.assertEqual(0, day3["delta_companies"])
             self.assertEqual(2, day3["total_current_companies"])
 
+    def test_day3_keeps_historical_baseline_when_current_outputs_shrink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "output"
+            delivery_root = data_root / "delivery"
+            site_dir = data_root / "companies_house"
+            site_dir.mkdir(parents=True)
+
+            day1_dir = delivery_root / "England_day001"
+            day1_dir.mkdir(parents=True)
+            (day1_dir / "companies.csv").write_text(
+                "company_name,ceo,homepage,domain,phone,emails\n"
+                "Alpha Ltd,Alice,https://alpha.co.uk,alpha.co.uk,111,alice@alpha.co.uk\n",
+                encoding="utf-8",
+            )
+            (day1_dir / "keys.txt").write_text("name|alphaltd\n", encoding="utf-8")
+            (day1_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "day": 1,
+                        "baseline_day": 0,
+                        "total_current_companies": 1,
+                        "delta_companies": 1,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            day2_dir = delivery_root / "England_day002"
+            day2_dir.mkdir(parents=True)
+            (day2_dir / "companies.csv").write_text(
+                "company_name,ceo,homepage,domain,phone,emails\n"
+                "Beta Ltd,Bob,https://beta.co.uk,beta.co.uk,222,bob@beta.co.uk\n",
+                encoding="utf-8",
+            )
+            (day2_dir / "keys.txt").write_text(
+                "name|alphaltd\nname|betaltd\n",
+                encoding="utf-8",
+            )
+            (day2_dir / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "day": 2,
+                        "baseline_day": 1,
+                        "total_current_companies": 2,
+                        "delta_companies": 1,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            current_row = {
+                "comp_id": "B1",
+                "company_name": "Beta Ltd",
+                "ceo": "Bob",
+                "homepage": "https://beta.co.uk",
+                "emails": ["bob@beta.co.uk"],
+            }
+            (site_dir / "final_companies.jsonl").write_text(
+                json.dumps(current_row, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            summary = build_delivery_bundle(
+                data_root=data_root,
+                delivery_root=delivery_root,
+                day_label="day3",
+            )
+
+            self.assertEqual(2, summary["total_current_companies"])
+            self.assertEqual(0, summary["delta_companies"])
+
 
 if __name__ == "__main__":
     unittest.main()

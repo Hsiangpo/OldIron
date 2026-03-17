@@ -55,6 +55,17 @@ def _build_domain_key(domain: str) -> str:
     return f"domain|{value}" if value else ""
 
 
+def _record_score(record: dict[str, object]) -> tuple[int, int, int, int]:
+    emails = record.get("emails", [])
+    email_count = len(emails) if isinstance(emails, list) else 0
+    return (
+        1 if str(record.get("homepage", "")).strip() else 0,
+        email_count,
+        1 if str(record.get("ceo", "")).strip() else 0,
+        1 if str(record.get("phone", "")).strip() else 0,
+    )
+
+
 def _looks_suspicious_uk_record(homepage: str, phone: str) -> bool:
     domain = _extract_domain(homepage)
     lower_homepage = str(homepage or "").strip().lower()
@@ -136,6 +147,54 @@ def _load_all_records(data_root: Path) -> list[dict]:
     return records
 
 
+def _load_historical_baseline_records(
+    delivery_root: Path,
+    baseline_day: int,
+    baseline_keys: set[str],
+) -> list[dict[str, object]]:
+    """从历史交付增量恢复截至基线日的全量当前集。"""
+    if baseline_day <= 0 or not baseline_keys:
+        return []
+
+    best_by_key: dict[str, dict[str, object]] = {}
+    order: list[str] = []
+    for day in range(1, baseline_day + 1):
+        csv_path = delivery_root / f"England_day{day:03d}" / "companies.csv"
+        if not csv_path.exists():
+            continue
+        with csv_path.open("r", encoding="utf-8", newline="") as fp:
+            reader = csv.DictReader(fp)
+            for row in reader:
+                company_name = str(row.get("company_name", "")).strip()
+                ceo = str(row.get("ceo", "")).strip()
+                homepage = str(row.get("homepage", "")).strip()
+                domain = str(row.get("domain", "")).strip() or _extract_domain(homepage)
+                phone = str(row.get("phone", "")).strip()
+                emails_text = str(row.get("emails", "")).strip()
+                emails = [item.strip() for item in emails_text.split(";") if item.strip()]
+                key = _build_key(company_name, domain)
+                domain_key = _build_domain_key(domain)
+                if key not in baseline_keys and (not domain_key or domain_key not in baseline_keys):
+                    continue
+                record = {
+                    "company_name": company_name,
+                    "ceo": ceo,
+                    "homepage": homepage,
+                    "domain": domain,
+                    "phone": phone,
+                    "emails": emails,
+                    "_source": "zz_delivery_history",
+                    "_history_baseline": True,
+                }
+                if key not in best_by_key:
+                    best_by_key[key] = record
+                    order.append(key)
+                    continue
+                if _record_score(record) > _record_score(best_by_key[key]):
+                    best_by_key[key] = record
+    return [best_by_key[key] for key in order]
+
+
 def _remove_dir_safe(day_dir: Path) -> None:
     """安全删除交付目录（Windows 兼容）。"""
     if not day_dir.exists():
@@ -192,6 +251,7 @@ def build_delivery_bundle(
 
     # 加载所有站点数据
     all_records = _load_all_records(data_root)
+    all_records.extend(_load_historical_baseline_records(delivery_root, baseline_day, baseline_keys))
 
     # 过滤：只保留同时有 公司名+法人+邮箱 的完整记录
     qualified: list[dict] = []
@@ -204,9 +264,10 @@ def build_delivery_bundle(
         has_emails = bool(emails and any(e.strip() for e in emails)) if isinstance(emails, list) else bool(str(emails).strip())
         homepage = str(record.get("homepage", "")).strip()
         phone = str(record.get("phone", "")).strip()
+        is_history_baseline = bool(record.get("_history_baseline"))
 
         if company_name and ceo and has_emails:
-            if _looks_suspicious_uk_record(homepage, phone):
+            if not is_history_baseline and _looks_suspicious_uk_record(homepage, phone):
                 suspicious += 1
                 continue
             qualified.append(record)
