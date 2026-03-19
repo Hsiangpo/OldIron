@@ -171,6 +171,8 @@ class FirecrawlEmailService:
         )
 
     def close(self) -> None:
+        if self._key_pool is not None:
+            self._key_pool.close()
         return None
 
     @staticmethod

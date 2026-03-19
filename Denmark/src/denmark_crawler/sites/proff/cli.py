@@ -99,6 +99,11 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _env_flag(name: str) -> bool:
+    value = str(os.getenv(name, "")).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def run_proff(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
     output_dir = Path(args.output_dir).resolve() if str(args.output_dir).strip() else ROOT / "output" / "proff"
@@ -154,7 +159,7 @@ def _auto_start_go_backends(
     skip_firecrawl: bool,
 ) -> list[str]:
     services: list[str] = []
-    if str(os.getenv("MYIP_ENABLED", "")).strip():
+    if _env_flag("MYIP_ENABLED"):
         services.append("myip")
     if not skip_gmap:
         services.append("gmap")

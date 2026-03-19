@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -556,7 +557,10 @@ class ProffStore:
             next_phone = str(current.get("phone", "")).strip()
             if override_mode == "website_override":
                 next_company_name = str(company_name or "").strip() or str(current.get("gmap_company_name", "")).strip()
-                next_representative = str(representative or "").strip()
+                next_representative = (
+                    str(representative or "").strip()
+                    or str(current.get("representative", "")).strip()
+                )
                 next_phone = str(current.get("gmap_phone", "")).strip() or next_phone
             elif not next_representative and str(representative or "").strip():
                 next_representative = str(representative).strip()
@@ -830,7 +834,8 @@ class ProffStore:
         representative = str(record.get("representative", "")).strip()
         homepage = str(record.get("homepage", "")).strip()
         now = _utc_now()
-        if representative and emails:
+        company_name = str(record.get("company_name", "")).strip()
+        if company_name and representative and emails:
             self._mark_queue_done_locked("gmap_queue", orgnr, now)
             self._mark_queue_done_locked("firecrawl_queue", orgnr, now)
             return

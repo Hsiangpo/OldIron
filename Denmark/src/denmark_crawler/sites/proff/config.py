@@ -136,9 +136,7 @@ class ProffDenmarkConfig:
     firecrawl_zero_retry_seconds: float
     firecrawl_contact_form_retry_seconds: float
     prefer_go_gmap_backend: bool
-    prefer_go_firecrawl_backend: bool
     gmap_service_url: str
-    firecrawl_service_url: str
 
     @classmethod
     def from_env(
@@ -203,9 +201,7 @@ class ProffDenmarkConfig:
             firecrawl_zero_retry_seconds=_env_float("FIRECRAWL_ZERO_RETRY_SECONDS", 43200.0),
             firecrawl_contact_form_retry_seconds=_env_float("FIRECRAWL_CONTACT_FORM_RETRY_SECONDS", 259200.0),
             prefer_go_gmap_backend=_env_bool("PROFF_USE_GO_GMAP_BACKEND", True),
-            prefer_go_firecrawl_backend=_env_bool("PROFF_USE_GO_FIRECRAWL_BACKEND", False),
             gmap_service_url=_env_str("GMAP_SERVICE_URL", "http://127.0.0.1:8082"),
-            firecrawl_service_url=_env_str("FIRECRAWL_SERVICE_URL", "http://127.0.0.1:8081"),
         )
 
     def validate(self, *, skip_firecrawl: bool = False) -> None:

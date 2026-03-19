@@ -43,7 +43,7 @@ python run.py proff --query ApS --max-pages-per-query 5 --search-workers 16 --gm
 - `proff` 会在内部自动拉起它需要的共享后端
 - `MyIP` 不是默认启用；只有显式开了 `MYIP_ENABLED=1` 才会走住宅轮询出口
 - `GMap` 默认优先走共享 Go 后端
-- `Firecrawl` 当前默认走 Python 新链路，不默认走旧 Go Firecrawl 抽取
+- `Firecrawl` 当前统一走 Python 新链路，不走旧 Go Firecrawl 抽取
 
 ## 交付
 

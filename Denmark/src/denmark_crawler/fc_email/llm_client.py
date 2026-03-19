@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+LOGGER = logging.getLogger(__name__)
 
 
 def _parse_json_text(raw: str) -> dict[str, object]:
@@ -139,12 +141,17 @@ class EmailUrlLlmClient:
         return emails
 
     def _call_json(self, prompt: str) -> dict[str, Any]:
+        last_exc: Exception | None = None
         for model in self._candidate_models():
             try:
                 return self._call_json_with_model(model, prompt)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                LOGGER.warning("LLM 调用失败，模型=%s，错误=%s", model, exc)
                 continue
-        return {}
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("LLM 调用失败：无可用模型")
 
     def _candidate_models(self) -> list[str]:
         values: list[str] = []

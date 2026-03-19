@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 import sys
 from pathlib import Path
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SHARED_ROOT = PROJECT_ROOT / "shared"
@@ -19,20 +21,29 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
     """构建 Denmark 日交付包，只输出公司名、代表人、邮箱。"""
     day = parse_day_label(day_label)
     delivery_dir = Path(delivery_root) / f"Denmark_day{day:03d}"
+    if delivery_dir.exists():
+        shutil.rmtree(delivery_dir)
     delivery_dir.mkdir(parents=True, exist_ok=True)
-    records = _load_final_records(Path(data_root))
-    deduped = _deduplicate(records)
+    current_records = _deduplicate(_load_final_records(Path(data_root)))
+    baseline_records = _load_previous_records(Path(delivery_root), day - 1)
+    baseline_keys = {_record_key(record) for record in baseline_records}
+    delta_records = [record for record in current_records if _record_key(record) not in baseline_keys]
     csv_path = delivery_dir / "companies.csv"
     with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
         writer = csv.DictWriter(fp, fieldnames=["company_name", "representative", "email"])
         writer.writeheader()
-        writer.writerows(deduped)
+        writer.writerows(delta_records)
+    keys_path = delivery_dir / "keys.txt"
+    keys_path.write_text(
+        "\n".join(_record_key(record) for record in current_records),
+        encoding="utf-8",
+    )
     summary = {
         "country": "Denmark",
         "day": day,
         "baseline_day": max(day - 1, 0),
-        "delta_companies": len(deduped),
-        "total_current_companies": len(deduped),
+        "delta_companies": len(delta_records),
+        "total_current_companies": len(current_records),
     }
     (delivery_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
@@ -67,16 +78,40 @@ def _load_final_records(data_root: Path) -> list[dict[str, str]]:
     return records
 
 
+def _load_previous_records(delivery_root: Path, baseline_day: int) -> list[dict[str, str]]:
+    if baseline_day <= 0:
+        return []
+    csv_path = Path(delivery_root) / f"Denmark_day{baseline_day:03d}" / "companies.csv"
+    if not csv_path.exists():
+        return []
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        return [
+            {
+                "company_name": str(row.get("company_name", "")).strip(),
+                "representative": str(row.get("representative", "")).strip(),
+                "email": str(row.get("email", "")).strip().lower(),
+            }
+            for row in reader
+        ]
+
+
+def _record_key(record: dict[str, str]) -> str:
+    return "|".join(
+        [
+            str(record.get("company_name", "")).strip().lower(),
+            str(record.get("representative", "")).strip().lower(),
+            str(record.get("email", "")).strip().lower(),
+        ]
+    )
+
+
 def _deduplicate(records: list[dict[str, str]]) -> list[dict[str, str]]:
     deduped: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[str] = set()
     for record in records:
-        key = (
-            record["company_name"].strip().lower(),
-            record["representative"].strip().lower(),
-            record["email"].strip().lower(),
-        )
-        if not all(key) or key in seen:
+        key = _record_key(record)
+        if not key.replace("|", "") or key in seen:
             continue
         seen.add(key)
         deduped.append(record)

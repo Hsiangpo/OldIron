@@ -76,6 +76,12 @@ class _FakeFirecrawlService:
         )
 
 
+class _BrokenFirecrawlService:
+    def discover_emails(self, *, company_name: str, homepage: str, domain: str = "") -> EmailDiscoveryResult:
+        _ = company_name, homepage, domain
+        raise RuntimeError("llm unavailable")
+
+
 class ProffPipelineTests(unittest.TestCase):
     def test_pipeline_runs_search_gmap_and_firecrawl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -113,6 +119,44 @@ class ProffPipelineTests(unittest.TestCase):
             try:
                 progress = store.get_progress()
                 self.assertEqual(2, progress.final_total)
+            finally:
+                store.close()
+
+    def test_pipeline_does_not_silently_swallow_llm_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            keys_file = root / "firecrawl_keys.txt"
+            keys_file.write_text("fc-test-key\n", encoding="utf-8")
+            config = ProffDenmarkConfig.from_env(
+                project_root=root,
+                output_dir=root / "output",
+                query_file=None,
+                inline_queries=["ApS"],
+                max_pages_per_query=1,
+                max_companies=0,
+                search_workers=1,
+                gmap_workers=1,
+                firecrawl_workers=1,
+            )
+            config.firecrawl_keys_file = keys_file
+            config.firecrawl_keys_inline = ["fc-test-key"]
+            config.llm_api_key = "llm-test"
+            config.llm_model = "gpt-test"
+            runner = ProffPipelineRunner(
+                config=config,
+                client=_FakeSearchClient(),
+                skip_gmap=False,
+                skip_firecrawl=False,
+            )
+            with patch.object(ProffPipelineRunner, "_get_gmap_client", return_value=_FakeGMapClient()):
+                with patch.object(ProffPipelineRunner, "_get_firecrawl_service", return_value=_BrokenFirecrawlService()):
+                    runner.run()
+            from denmark_crawler.sites.proff.store import ProffStore  # noqa: E402
+
+            store = ProffStore(config.store_db_path)
+            try:
+                progress = store.get_progress()
+                self.assertEqual(1, progress.final_total)
             finally:
                 store.close()
 

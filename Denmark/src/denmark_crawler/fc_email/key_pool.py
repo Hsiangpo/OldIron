@@ -59,6 +59,7 @@ class FirecrawlKeyPool:
         self._db_path = db_path
         self._config = config or KeyPoolConfig()
         self._lock = threading.Lock()
+        self._conn = self._connect()
         self._init_db()
 
     @staticmethod
@@ -86,43 +87,39 @@ class FirecrawlKeyPool:
 
     def _init_db(self) -> None:
         with self._lock:
-            conn = self._connect()
-            try:
-                def _op() -> None:
-                    conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS keys (
-                            key TEXT PRIMARY KEY,
-                            idx INTEGER NOT NULL,
-                            state TEXT NOT NULL,
-                            cooldown_until REAL,
-                            failure_count INTEGER NOT NULL DEFAULT 0,
-                            in_flight INTEGER NOT NULL DEFAULT 0,
-                            disabled_reason TEXT,
-                            last_used REAL
-                        )
-                        """
+            def _op() -> None:
+                self._conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS keys (
+                        key TEXT PRIMARY KEY,
+                        idx INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        cooldown_until REAL,
+                        failure_count INTEGER NOT NULL DEFAULT 0,
+                        in_flight INTEGER NOT NULL DEFAULT 0,
+                        disabled_reason TEXT,
+                        last_used REAL
                     )
-                    for idx, key in enumerate(self._keys):
-                        conn.execute(
-                            """
-                            INSERT INTO keys(key, idx, state, cooldown_until, failure_count, in_flight, disabled_reason, last_used)
-                            VALUES(?, ?, 'active', NULL, 0, 0, NULL, NULL)
-                            ON CONFLICT(key) DO UPDATE SET idx = excluded.idx
-                            """,
-                            (key, idx),
-                        )
-                    placeholders = ",".join("?" for _ in self._keys)
-                    conn.execute(
-                        f"DELETE FROM keys WHERE key NOT IN ({placeholders})",
-                        tuple(self._keys),
+                    """
+                )
+                for idx, key in enumerate(self._keys):
+                    self._conn.execute(
+                        """
+                        INSERT INTO keys(key, idx, state, cooldown_until, failure_count, in_flight, disabled_reason, last_used)
+                        VALUES(?, ?, 'active', NULL, 0, 0, NULL, NULL)
+                        ON CONFLICT(key) DO UPDATE SET idx = excluded.idx
+                        """,
+                        (key, idx),
                     )
-                    conn.execute("UPDATE keys SET in_flight = 0")
-                    conn.commit()
+                placeholders = ",".join("?" for _ in self._keys)
+                self._conn.execute(
+                    f"DELETE FROM keys WHERE key NOT IN ({placeholders})",
+                    tuple(self._keys),
+                )
+                self._conn.execute("UPDATE keys SET in_flight = 0")
+                self._conn.commit()
 
-                _run_with_retry(conn, _op)
-            finally:
-                conn.close()
+            _run_with_retry(self._conn, _op)
 
     def acquire(self) -> KeyLease:
         while True:
@@ -135,111 +132,95 @@ class FirecrawlKeyPool:
 
     def _has_enabled_key(self) -> bool:
         with self._lock:
-            conn = self._connect()
-            try:
-                row = conn.execute(
-                    "SELECT 1 FROM keys WHERE state != 'disabled' LIMIT 1"
-                ).fetchone()
-                return row is not None
-            finally:
-                conn.close()
+            row = self._conn.execute(
+                "SELECT 1 FROM keys WHERE state != 'disabled' LIMIT 1"
+            ).fetchone()
+            return row is not None
 
     def _try_acquire_once(self) -> KeyLease | None:
         with self._lock:
             now = _utc_now_unix()
-            conn = self._connect()
-            try:
-                holder: dict[str, KeyLease | None] = {"lease": None}
+            holder: dict[str, KeyLease | None] = {"lease": None}
 
-                def _op() -> None:
-                    conn.execute(
-                        """
-                        UPDATE keys
-                        SET state = 'active', cooldown_until = NULL
-                        WHERE state = 'cooldown' AND cooldown_until IS NOT NULL AND cooldown_until <= ?
-                        """,
-                        (now,),
-                    )
-                    row = conn.execute(
-                        """
-                        SELECT key, idx
-                        FROM keys
-                        WHERE state != 'disabled'
-                          AND (state != 'cooldown' OR cooldown_until IS NULL OR cooldown_until <= ?)
-                          AND in_flight < ?
-                        ORDER BY in_flight ASC, COALESCE(last_used, 0) ASC, idx ASC
-                        LIMIT 1
-                        """,
-                        (now, max(self._config.per_key_limit, 1)),
-                    ).fetchone()
-                    if row is None:
-                        conn.commit()
-                        holder["lease"] = None
-                        return
-                    key = str(row["key"])
-                    idx = int(row["idx"])
-                    conn.execute(
-                        "UPDATE keys SET in_flight = in_flight + 1, last_used = ? WHERE key = ?",
-                        (now, key),
-                    )
-                    conn.commit()
-                    holder["lease"] = KeyLease(key=key, index=idx)
+            def _op() -> None:
+                self._conn.execute(
+                    """
+                    UPDATE keys
+                    SET state = 'active', cooldown_until = NULL
+                    WHERE state = 'cooldown' AND cooldown_until IS NOT NULL AND cooldown_until <= ?
+                    """,
+                    (now,),
+                )
+                row = self._conn.execute(
+                    """
+                    SELECT key, idx
+                    FROM keys
+                    WHERE state != 'disabled'
+                      AND (state != 'cooldown' OR cooldown_until IS NULL OR cooldown_until <= ?)
+                      AND in_flight < ?
+                    ORDER BY in_flight ASC, COALESCE(last_used, 0) ASC, idx ASC
+                    LIMIT 1
+                    """,
+                    (now, max(self._config.per_key_limit, 1)),
+                ).fetchone()
+                if row is None:
+                    self._conn.commit()
+                    holder["lease"] = None
+                    return
+                key = str(row["key"])
+                idx = int(row["idx"])
+                self._conn.execute(
+                    "UPDATE keys SET in_flight = in_flight + 1, last_used = ? WHERE key = ?",
+                    (now, key),
+                )
+                self._conn.commit()
+                holder["lease"] = KeyLease(key=key, index=idx)
 
-                _run_with_retry(conn, _op)
-                return holder["lease"]
-            finally:
-                conn.close()
+            _run_with_retry(self._conn, _op)
+            return holder["lease"]
 
     def release(self, lease: KeyLease) -> None:
         with self._lock:
-            conn = self._connect()
-            try:
-                def _op() -> None:
-                    conn.execute(
-                        "UPDATE keys SET in_flight = CASE WHEN in_flight > 0 THEN in_flight - 1 ELSE 0 END WHERE key = ?",
-                        (lease.key,),
-                    )
-                    conn.commit()
+            def _op() -> None:
+                self._conn.execute(
+                    "UPDATE keys SET in_flight = CASE WHEN in_flight > 0 THEN in_flight - 1 ELSE 0 END WHERE key = ?",
+                    (lease.key,),
+                )
+                self._conn.commit()
 
-                _run_with_retry(conn, _op)
-            finally:
-                conn.close()
+            _run_with_retry(self._conn, _op)
 
     def mark_success(self, lease: KeyLease) -> None:
         with self._lock:
-            conn = self._connect()
-            try:
-                def _op() -> None:
-                    conn.execute(
-                        "UPDATE keys SET failure_count = 0, state = 'active', cooldown_until = NULL, disabled_reason = NULL WHERE key = ?",
-                        (lease.key,),
-                    )
-                    conn.commit()
+            def _op() -> None:
+                self._conn.execute(
+                    "UPDATE keys SET failure_count = 0, state = 'active', cooldown_until = NULL, disabled_reason = NULL WHERE key = ?",
+                    (lease.key,),
+                )
+                self._conn.commit()
 
-                _run_with_retry(conn, _op)
-            finally:
-                conn.close()
+            _run_with_retry(self._conn, _op)
 
     def mark_rate_limited(self, lease: KeyLease, retry_after: float | None = None) -> None:
+        _ = lease, retry_after
+        # Firecrawl 官方 429 不做本地 key 惩罚，只交给任务级退避。
         return None
 
     def mark_failure(self, lease: KeyLease) -> None:
+        _ = lease
+        # 普通失败不做 key 惩罚，只在 401/402 时禁用 key。
         return None
 
     def disable(self, lease: KeyLease, reason: str) -> None:
         with self._lock:
-            conn = self._connect()
-            try:
-                def _op() -> None:
-                    conn.execute(
-                        "UPDATE keys SET state = 'disabled', disabled_reason = ?, cooldown_until = NULL, in_flight = 0 WHERE key = ?",
-                        (reason, lease.key),
-                    )
-                    conn.commit()
+            def _op() -> None:
+                self._conn.execute(
+                    "UPDATE keys SET state = 'disabled', disabled_reason = ?, cooldown_until = NULL, in_flight = 0 WHERE key = ?",
+                    (reason, lease.key),
+                )
+                self._conn.commit()
 
-                _run_with_retry(conn, _op)
-            finally:
-                conn.close()
+            _run_with_retry(self._conn, _op)
             if _should_remove_key(reason):
                 self._remove_key_from_file(lease.key)
 
@@ -260,4 +241,8 @@ class FirecrawlKeyPool:
         text = "\n".join(kept_lines).strip()
         payload = text + "\n" if text else ""
         self._key_file.write_text(payload, encoding="utf-8")
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
 
