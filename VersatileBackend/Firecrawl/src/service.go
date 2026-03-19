@@ -95,13 +95,58 @@ func (service *Service) DiscoverEmails(request DiscoverEmailsRequest) (DiscoverE
 	return result, nil
 }
 
+func (service *Service) MapSite(request MapSiteRequest) (MapSiteResponse, error) {
+	startURL := normalizeStartURL(request.Homepage, request.Domain)
+	if startURL == "" {
+		return MapSiteResponse{}, nil
+	}
+	limit := request.Limit
+	if limit <= 0 {
+		limit = service.config.MapLimit
+	}
+	links, err := service.mapSiteWithOptions(startURL, limit, request.IncludeSubdomains)
+	if err != nil {
+		return MapSiteResponse{}, err
+	}
+	return MapSiteResponse{
+		StartURL: startURL,
+		Links:    links,
+	}, nil
+}
+
+func (service *Service) ScrapeHTMLPages(request ScrapeHTMLPagesRequest) (ScrapeHTMLPagesResponse, error) {
+	pages := make([]HTMLPage, 0, len(request.URLs))
+	for _, rawURL := range request.URLs {
+		targetURL := strings.TrimSpace(rawURL)
+		if targetURL == "" {
+			continue
+		}
+		html, err := service.scrapeHTML(targetURL)
+		if err != nil {
+			return ScrapeHTMLPagesResponse{}, err
+		}
+		if strings.TrimSpace(html) == "" {
+			continue
+		}
+		pages = append(pages, HTMLPage{
+			URL:  targetURL,
+			HTML: html,
+		})
+	}
+	return ScrapeHTMLPagesResponse{Pages: pages}, nil
+}
+
 func (service *Service) mapSite(startURL string) ([]string, error) {
+	return service.mapSiteWithOptions(startURL, service.config.MapLimit, false)
+}
+
+func (service *Service) mapSiteWithOptions(startURL string, limit int, includeSubdomains bool) ([]string, error) {
 	payload := map[string]any{
-		"url":                  startURL,
-		"limit":                service.config.MapLimit,
+		"url":                   startURL,
+		"limit":                 limit,
 		"ignoreQueryParameters": true,
-		"includeSubdomains":    false,
-		"sitemap":              "include",
+		"includeSubdomains":     includeSubdomains,
+		"sitemap":               "include",
 	}
 	response, err := service.requestJSON(http.MethodPost, "map", payload)
 	if err != nil {
@@ -116,6 +161,19 @@ func (service *Service) mapSite(startURL string) ([]string, error) {
 		}
 	}
 	return nil, nil
+}
+
+func (service *Service) scrapeHTML(targetURL string) (string, error) {
+	payload := map[string]any{
+		"url":             targetURL,
+		"formats":         []string{"rawHtml"},
+		"onlyMainContent": false,
+	}
+	response, err := service.requestJSON(http.MethodPost, "scrape", payload)
+	if err != nil {
+		return "", err
+	}
+	return extractHTMLPayload(response), nil
 }
 
 func (service *Service) extractEmails(urls []string) (DiscoverEmailsResponse, error) {
@@ -281,6 +339,19 @@ func extractJSONPayload(payload map[string]any) map[string]any {
 		}
 	}
 	return payload
+}
+
+func extractHTMLPayload(payload map[string]any) string {
+	if data, ok := payload["data"].(map[string]any); ok {
+		payload = data
+	}
+	for _, key := range []string{"rawHtml", "html"} {
+		value := strings.TrimSpace(toString(payload[key]))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func normalizeEmails(value any) []string {

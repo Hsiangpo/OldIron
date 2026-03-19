@@ -163,6 +163,8 @@ def _auto_start_go_backends(
         services.append("myip")
     if not skip_gmap:
         services.append("gmap")
+    if not skip_firecrawl and config.prefer_go_firecrawl_backend:
+        services.append("firecrawl")
     if not services:
         return []
     started = ensure_services_started(services, quiet=True)

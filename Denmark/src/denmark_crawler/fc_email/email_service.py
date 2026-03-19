@@ -151,10 +151,16 @@ class _EmailPassPlan:
 class FirecrawlEmailService:
     """基于 Firecrawl 与外部 LLM 的邮箱发现服务。"""
 
-    def __init__(self, settings: FirecrawlEmailSettings, *, key_pool: FirecrawlKeyPool | None = None) -> None:
+    def __init__(
+        self,
+        settings: FirecrawlEmailSettings,
+        *,
+        key_pool: FirecrawlKeyPool | None = None,
+        firecrawl_client: object | None = None,
+    ) -> None:
         self._settings = settings
         self._key_pool = key_pool or self.build_key_pool(settings)
-        self._firecrawl = FirecrawlClient(
+        self._firecrawl = firecrawl_client or FirecrawlClient(
             key_pool=self._key_pool,
             config=FirecrawlClientConfig(
                 base_url=settings.base_url,
@@ -249,10 +255,7 @@ class FirecrawlEmailService:
         return f"https://{clean_domain}"
 
     def _discover_pass(self, *, company_name: str, start_url: str, plan: _EmailPassPlan) -> EmailDiscoveryResult:
-        mapped_urls = self._firecrawl.map_site(
-            start_url,
-            limit=self._settings.map_limit,
-        )
+        mapped_urls = self._map_site(start_url)
         candidate_urls = self._prefilter_urls(start_url, mapped_urls, limit=plan.prefilter_limit)
         ranked_urls = self._llm.pick_candidate_urls(
             company_name=company_name,
@@ -313,6 +316,8 @@ class FirecrawlEmailService:
         return urls
 
     def _scrape_html_pages(self, urls: list[str]) -> list[HtmlPageResult]:
+        if hasattr(self._firecrawl, "scrape_html_pages"):
+            return self._firecrawl.scrape_html_pages(urls)
         pages: list[HtmlPageResult] = []
         for url in urls:
             try:
@@ -324,6 +329,18 @@ class FirecrawlEmailService:
             if page.html.strip():
                 pages.append(page)
         return pages
+
+    def _map_site(self, start_url: str) -> list[str]:
+        if type(self._firecrawl).__name__ == "GoFirecrawlService":
+            return self._firecrawl.map_site(
+                homepage=start_url,
+                domain=extract_domain(start_url),
+                limit=self._settings.map_limit,
+            )
+        return self._firecrawl.map_site(
+            start_url,
+            limit=self._settings.map_limit,
+        )
 
     def _score_url(self, start_url: str, url: str) -> int:
         if url == start_url:

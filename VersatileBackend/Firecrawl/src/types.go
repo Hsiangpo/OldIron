@@ -15,6 +15,31 @@ type DiscoverEmailsResponse struct {
 	SelectedURLs      []string `json:"selected_urls"`
 }
 
+type MapSiteRequest struct {
+	Homepage          string `json:"homepage"`
+	Domain            string `json:"domain"`
+	Limit             int    `json:"limit"`
+	IncludeSubdomains bool   `json:"include_subdomains"`
+}
+
+type MapSiteResponse struct {
+	StartURL string   `json:"start_url"`
+	Links    []string `json:"links"`
+}
+
+type HTMLPage struct {
+	URL  string `json:"url"`
+	HTML string `json:"html"`
+}
+
+type ScrapeHTMLPagesRequest struct {
+	URLs []string `json:"urls"`
+}
+
+type ScrapeHTMLPagesResponse struct {
+	Pages []HTMLPage `json:"pages"`
+}
+
 type Config struct {
 	BaseURL         string
 	TimeoutSeconds  int
@@ -27,4 +52,3 @@ type Config struct {
 	ContactRetryS   float64
 	ProxyURL        string
 }
-

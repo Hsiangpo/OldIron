@@ -15,6 +15,7 @@ from denmark_crawler.fc_email.email_service import FirecrawlEmailSettings
 from denmark_crawler.google_maps import GoogleMapsClient
 from denmark_crawler.google_maps import GoogleMapsConfig
 from denmark_crawler.google_maps import GoogleMapsPlaceResult
+from denmark_crawler.sites.proff.backend_clients import GoFirecrawlService
 from denmark_crawler.sites.proff.backend_clients import GoGMapClient
 from denmark_crawler.sites.proff.client import ProffClient
 from denmark_crawler.sites.proff.config import ProffDenmarkConfig
@@ -71,8 +72,11 @@ class ProffPipelineRunner:
             self.config.project_root / "output" / "firecrawl_cache.db"
         )
         self._gmap_backend_checked = False
+        self._firecrawl_backend_checked = False
         self._gmap_backend_enabled = False
+        self._firecrawl_backend_enabled = False
         self._gmap_backend_lock = threading.Lock()
+        self._firecrawl_backend_lock = threading.Lock()
         self._firecrawl_settings = FirecrawlEmailSettings(
             keys_inline=list(self.config.firecrawl_keys_inline or []),
             keys_file=Path(self.config.firecrawl_keys_file or (self.config.project_root / "output" / "firecrawl_keys.txt")),
@@ -418,9 +422,16 @@ class ProffPipelineRunner:
 
     def _get_firecrawl_service(self) -> FirecrawlEmailService:
         if not hasattr(self._firecrawl_local, "service"):
+            firecrawl_client = None
+            if self._use_go_firecrawl_backend():
+                firecrawl_client = GoFirecrawlService(
+                    self.config.firecrawl_service_url,
+                    timeout_seconds=self.config.llm_timeout_seconds,
+                )
             self._firecrawl_local.service = FirecrawlEmailService(
                 self._firecrawl_settings,
                 key_pool=self._get_firecrawl_key_pool(),
+                firecrawl_client=firecrawl_client,
             )
         return self._firecrawl_local.service
 
@@ -439,6 +450,25 @@ class ProffPipelineRunner:
                 LOGGER.warning("Proff GMap Go 后端不可用，回退 Python：%s", exc)
                 self._gmap_backend_enabled = False
         return self._gmap_backend_enabled
+
+    def _use_go_firecrawl_backend(self) -> bool:
+        if not self.config.prefer_go_firecrawl_backend:
+            return False
+        with self._firecrawl_backend_lock:
+            if self._firecrawl_backend_checked:
+                return self._firecrawl_backend_enabled
+            self._firecrawl_backend_checked = True
+            try:
+                client = GoFirecrawlService(
+                    self.config.firecrawl_service_url,
+                    timeout_seconds=self.config.llm_timeout_seconds,
+                )
+                health = client.health()
+                self._firecrawl_backend_enabled = bool(health.ok)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Proff Firecrawl Go 后端不可用，回退 Python：%s", exc)
+                self._firecrawl_backend_enabled = False
+            return self._firecrawl_backend_enabled
 
     def _search_company_profile(self, query: str, company_name: str) -> GoogleMapsPlaceResult:
         client = self._get_gmap_client()

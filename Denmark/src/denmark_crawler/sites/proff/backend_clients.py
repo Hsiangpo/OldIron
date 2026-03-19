@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import requests
 
-from denmark_crawler.fc_email.email_service import EmailDiscoveryResult
+from denmark_crawler.fc_email.client import HtmlPageResult
 from denmark_crawler.google_maps import GoogleMapsPlaceResult
 
 
@@ -47,7 +47,7 @@ class GoGMapClient:
 
 
 class GoFirecrawlService:
-    """Firecrawl Go 服务客户端。"""
+    """Firecrawl Go 传输客户端。"""
 
     def __init__(self, base_url: str, *, timeout_seconds: float = 120.0) -> None:
         self.base_url = str(base_url or "").rstrip("/")
@@ -60,19 +60,35 @@ class GoFirecrawlService:
         payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
         return GoBackendHealth(ok=str(payload.get("status", "")) == "ok", service=str(payload.get("service", "")))
 
-    def discover_emails(self, *, company_name: str, homepage: str, domain: str = "") -> EmailDiscoveryResult:
+    def map_site(self, *, homepage: str, domain: str = "", limit: int = 200, include_subdomains: bool = False) -> list[str]:
         response = self._session.post(
-            f"{self.base_url}/v1/discover-emails",
-            json={"company_name": company_name, "homepage": homepage, "domain": domain},
+            f"{self.base_url}/v1/map-site",
+            json={
+                "homepage": homepage,
+                "domain": domain,
+                "limit": limit,
+                "include_subdomains": include_subdomains,
+            },
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
         payload = response.json()
-        return EmailDiscoveryResult(
-            emails=[str(item).strip().lower() for item in payload.get("emails", []) if str(item).strip()],
-            evidence_url=str(payload.get("evidence_url", "")).strip(),
-            evidence_quote=str(payload.get("evidence_quote", "")).strip(),
-            contact_form_only=bool(payload.get("contact_form_only")),
-            selected_urls=[str(item).strip() for item in payload.get("selected_urls", []) if str(item).strip()],
-            retry_after_seconds=float(payload.get("retry_after_seconds", 0.0) or 0.0),
+        return [str(item).strip() for item in payload.get("links", []) if str(item).strip()]
+
+    def scrape_html_pages(self, urls: list[str]) -> list[HtmlPageResult]:
+        response = self._session.post(
+            f"{self.base_url}/v1/scrape-html-pages",
+            json={"urls": urls},
+            timeout=self.timeout_seconds,
         )
+        response.raise_for_status()
+        payload = response.json()
+        pages: list[HtmlPageResult] = []
+        for item in payload.get("pages", []) or []:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url", "")).strip()
+            html = str(item.get("html", "")).strip()
+            if url and html:
+                pages.append(HtmlPageResult(url=url, html=html))
+        return pages

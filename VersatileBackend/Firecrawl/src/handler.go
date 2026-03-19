@@ -11,6 +11,12 @@ func RegisterRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("/v1/discover-emails", func(writer http.ResponseWriter, _ *http.Request) {
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
 		})
+		mux.HandleFunc("/v1/map-site", func(writer http.ResponseWriter, _ *http.Request) {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+		})
+		mux.HandleFunc("/v1/scrape-html-pages", func(writer http.ResponseWriter, _ *http.Request) {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+		})
 		return
 	}
 	mux.HandleFunc("/v1/discover-emails", func(writer http.ResponseWriter, request *http.Request) {
@@ -24,6 +30,42 @@ func RegisterRoutes(mux *http.ServeMux) {
 			return
 		}
 		result, callErr := service.DiscoverEmails(payload)
+		if callErr != nil {
+			http.Error(writer, callErr.Error(), http.StatusBadGateway)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(writer).Encode(result)
+	})
+	mux.HandleFunc("/v1/map-site", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var payload MapSiteRequest
+		if decodeErr := json.NewDecoder(request.Body).Decode(&payload); decodeErr != nil {
+			http.Error(writer, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		result, callErr := service.MapSite(payload)
+		if callErr != nil {
+			http.Error(writer, callErr.Error(), http.StatusBadGateway)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(writer).Encode(result)
+	})
+	mux.HandleFunc("/v1/scrape-html-pages", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var payload ScrapeHTMLPagesRequest
+		if decodeErr := json.NewDecoder(request.Body).Decode(&payload); decodeErr != nil {
+			http.Error(writer, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		result, callErr := service.ScrapeHTMLPages(payload)
 		if callErr != nil {
 			http.Error(writer, callErr.Error(), http.StatusBadGateway)
 			return
