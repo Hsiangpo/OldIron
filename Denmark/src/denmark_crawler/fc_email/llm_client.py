@@ -1,9 +1,10 @@
-"""候选 URL 重排 LLM。"""
+"""Proff Firecrawl 外部 LLM 客户端。"""
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -29,8 +30,17 @@ def _parse_json_text(raw: str) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+@dataclass(slots=True)
+class HtmlContactExtraction:
+    company_name: str
+    representative: str
+    emails: list[str]
+    evidence_url: str
+    evidence_quote: str
+
+
 class EmailUrlLlmClient:
-    """候选 URL 重排客户端。"""
+    """负责选链和 HTML 抽取。"""
 
     def __init__(
         self,
@@ -40,6 +50,7 @@ class EmailUrlLlmClient:
         model: str,
         reasoning_effort: str,
         timeout_seconds: float,
+        fallback_model: str = "gpt-5.1-codex-mini",
     ) -> None:
         from openai import OpenAI
 
@@ -49,6 +60,7 @@ class EmailUrlLlmClient:
             timeout=max(timeout_seconds, 20.0),
         )
         self._model = model
+        self._fallback_model = fallback_model
         self._reasoning_effort = reasoning_effort
 
     def pick_candidate_urls(
@@ -61,14 +73,16 @@ class EmailUrlLlmClient:
         target_count: int,
     ) -> list[str]:
         prompt = (
-            "你是企业官网联系页选择器。目标是从候选 URL 中选择最可能包含公开邮箱的页面。\n"
-            "优先级：contact, support, about, team, leadership, management, privacy, legal, imprint, careers, press, media, terms, PDF。\n"
-            "只允许从给定候选 URL 中选择，不要编造 URL。\n"
-            "返回 JSON：{\"selected_urls\": [\"...\"]}\n\n"
+            "你是企业官网信息页选择器。\n"
+            "任务：从候选 URL 中，按最可能出现公开邮箱或代表人的概率排序，并返回前 N 个。\n"
+            "优先页面：contact, about, team, leadership, management, board, imprint, legal, privacy, careers, press。\n"
+            "首页也可以入选。\n"
+            "不允许编造 URL，只能从给定列表里选。\n"
+            '返回 JSON：{"selected_urls": ["..."]}\n\n'
             f"公司名: {company_name}\n"
             f"域名: {domain}\n"
             f"首页: {homepage}\n"
-            f"目标数量: {max(int(target_count), 1)}\n"
+            f"最多返回: {max(int(target_count), 1)}\n"
             f"候选 URL(JSON): {json.dumps(candidate_urls, ensure_ascii=False)}"
         )
         data = self._call_json(prompt)
@@ -78,15 +92,70 @@ class EmailUrlLlmClient:
         allowed = set(candidate_urls)
         picked: list[str] = []
         for item in selected:
-            if not isinstance(item, str):
-                continue
-            value = item.strip()
+            value = str(item or "").strip()
             if value and value in allowed and value not in picked:
                 picked.append(value)
         return picked[: max(int(target_count), 1)]
 
+    def extract_contacts_from_html(
+        self,
+        *,
+        company_name: str,
+        homepage: str,
+        pages: list[dict[str, str]],
+    ) -> HtmlContactExtraction:
+        prompt = (
+            "你是企业官网联系人抽取器。\n"
+            "目标：从给定网页 HTML 中抽取公司名、最大的代表人、所有公开邮箱。\n"
+            "规则：\n"
+            "1. 代表人只保留一个最大的，优先 CEO / Adm. Direktør / Managing Director / Director / Founder / Owner。\n"
+            "2. 邮箱只保留真实公开邮箱，不要占位符、不要社媒账号。\n"
+            "3. company_name 如果网页明确显示公司名称，就返回官网上的名称，否则返回输入公司名。\n"
+            "4. evidence_url 返回最能证明代表人或邮箱的页面。\n"
+            "5. evidence_quote 返回最短直接证据。\n"
+            '返回 JSON：{"company_name":"","representative":"","emails":[],"evidence_url":"","evidence_quote":""}\n\n'
+            f"输入公司名: {company_name}\n"
+            f"首页: {homepage}\n"
+            f"页面(JSON): {json.dumps(pages, ensure_ascii=False)}"
+        )
+        data = self._call_json(prompt)
+        emails = self._normalize_emails(data.get("emails"))
+        return HtmlContactExtraction(
+            company_name=str(data.get("company_name", "") or company_name).strip(),
+            representative=str(data.get("representative", "") or "").strip(),
+            emails=emails,
+            evidence_url=str(data.get("evidence_url", "") or "").strip(),
+            evidence_quote=str(data.get("evidence_quote", "") or "").strip(),
+        )
+
+    def _normalize_emails(self, values: object) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        emails: list[str] = []
+        for item in values:
+            text = str(item or "").strip().lower()
+            if text and "@" in text and text not in emails:
+                emails.append(text)
+        return emails
+
     def _call_json(self, prompt: str) -> dict[str, Any]:
-        base_kwargs: dict[str, Any] = {"model": self._model, "input": prompt}
+        for model in self._candidate_models():
+            try:
+                return self._call_json_with_model(model, prompt)
+            except Exception:  # noqa: BLE001
+                continue
+        return {}
+
+    def _candidate_models(self) -> list[str]:
+        values: list[str] = []
+        for model in (self._model, self._fallback_model):
+            text = str(model or "").strip()
+            if text and text not in values:
+                values.append(text)
+        return values
+
+    def _call_json_with_model(self, model: str, prompt: str) -> dict[str, Any]:
+        base_kwargs: dict[str, Any] = {"model": model, "input": prompt}
         if self._reasoning_effort:
             base_kwargs["reasoning"] = {"effort": self._reasoning_effort}
         plans = ((False, True), (False, False), (True, True), (True, False))
@@ -122,4 +191,3 @@ class EmailUrlLlmClient:
                 "content": [{"type": "input_text", "text": prompt}],
             }
         ]
-

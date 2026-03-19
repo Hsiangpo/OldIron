@@ -1,4 +1,4 @@
-"""丹麦站点执行入口。"""
+"""丹麦新框架执行入口。"""
 
 from __future__ import annotations
 
@@ -16,16 +16,13 @@ USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
 
 站点：
-  dnb    — dnb.com 丹麦全站行业目录（邮箱阶段默认 Firecrawl）
-  dist   — Denmark 静态切片执行与集中合并
+  proff  — proff.dk 新框架主站点
 """
 
-BASE_REQUIRED_MODULES = (("dotenv", "python-dotenv"),)
-DNB_REQUIRED_MODULES = (
-    ("curl_cffi", "curl_cffi"),
-    ("lxml", "lxml"),
+BASE_REQUIRED_MODULES = (
+    ("dotenv", "python-dotenv"),
     ("requests", "requests"),
-    ("websocket", "websocket-client"),
+    ("curl_cffi", "curl_cffi"),
     ("openai", "openai"),
 )
 
@@ -41,8 +38,8 @@ def _load_project_env() -> bool:
 
 def _required_modules_for_command(site: str) -> tuple[tuple[str, str], ...]:
     normalized = str(site or "").strip().lower()
-    if normalized == "dnb":
-        return BASE_REQUIRED_MODULES + DNB_REQUIRED_MODULES
+    if normalized == "proff":
+        return BASE_REQUIRED_MODULES
     return BASE_REQUIRED_MODULES
 
 
@@ -56,7 +53,7 @@ def _ensure_runtime_dependencies(site: str) -> bool:
     if not missing:
         return True
     requirements_path = ROOT / "requirements.txt"
-    print("当前 Python 缺少 Denmark 运行依赖。")
+    print("当前 Python 缺少 Denmark 新框架运行依赖。")
     print(f"解释器: {sys.executable}")
     print(f"缺少: {', '.join(missing)}")
     print(f"安装命令: {sys.executable} -m pip install -r {requirements_path}")
@@ -74,14 +71,10 @@ def _dispatch(argv: list[str]) -> int:
     if not _ensure_runtime_dependencies(site):
         return 1
     _load_project_env()
-    if site == "dnb":
-        from denmark_crawler.dnb.cli import run_dnb
+    if site == "proff":
+        from denmark_crawler.sites.proff.cli import run_proff
 
-        return run_dnb(rest)
-    if site == "dist":
-        from denmark_crawler.distributed.cli import run_dist
-
-        return run_dist(rest)
+        return run_proff(rest)
 
     print(f"不支持的网站: {argv[0]}")
     print(USAGE_TEXT)

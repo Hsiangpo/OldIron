@@ -125,14 +125,24 @@ class FirecrawlKeyPool:
                 conn.close()
 
     def acquire(self) -> KeyLease:
-        deadline = _utc_now_unix() + max(self._config.wait_seconds, 1)
         while True:
             lease = self._try_acquire_once()
             if lease is not None:
                 return lease
-            if _utc_now_unix() >= deadline:
+            if not self._has_enabled_key():
                 raise RuntimeError("没有可用 firecrawl key。")
-            time.sleep(0.8)
+            time.sleep(0.2)
+
+    def _has_enabled_key(self) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM keys WHERE state != 'disabled' LIMIT 1"
+                ).fetchone()
+                return row is not None
+            finally:
+                conn.close()
 
     def _try_acquire_once(self) -> KeyLease | None:
         with self._lock:
@@ -211,46 +221,10 @@ class FirecrawlKeyPool:
                 conn.close()
 
     def mark_rate_limited(self, lease: KeyLease, retry_after: float | None = None) -> None:
-        cooldown = retry_after if retry_after and retry_after > 0 else self._config.cooldown_seconds
-        until = _utc_now_unix() + max(cooldown, 1)
-        with self._lock:
-            conn = self._connect()
-            try:
-                def _op() -> None:
-                    conn.execute(
-                        "UPDATE keys SET failure_count = failure_count + 1, state = 'cooldown', cooldown_until = ?, disabled_reason = NULL WHERE key = ?",
-                        (until, lease.key),
-                    )
-                    conn.commit()
-
-                _run_with_retry(conn, _op)
-            finally:
-                conn.close()
+        return None
 
     def mark_failure(self, lease: KeyLease) -> None:
-        with self._lock:
-            conn = self._connect()
-            try:
-                def _op() -> None:
-                    row = conn.execute("SELECT failure_count FROM keys WHERE key = ?", (lease.key,)).fetchone()
-                    current = int(row["failure_count"]) if row is not None else 0
-                    next_count = current + 1
-                    if next_count >= max(self._config.failure_threshold, 1):
-                        cooldown_until = _utc_now_unix() + max(self._config.cooldown_seconds, 1)
-                        conn.execute(
-                            "UPDATE keys SET failure_count = ?, state = 'cooldown', cooldown_until = ?, disabled_reason = NULL WHERE key = ?",
-                            (next_count, cooldown_until, lease.key),
-                        )
-                    else:
-                        conn.execute(
-                            "UPDATE keys SET failure_count = ?, disabled_reason = NULL WHERE key = ?",
-                            (next_count, lease.key),
-                        )
-                    conn.commit()
-
-                _run_with_retry(conn, _op)
-            finally:
-                conn.close()
+        return None
 
     def disable(self, lease: KeyLease, reason: str) -> None:
         with self._lock:

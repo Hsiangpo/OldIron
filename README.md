@@ -14,7 +14,30 @@
   - 代表人 / 法人 / 董事抽取
   - 增量交付
 
-当前仓库已经覆盖英国、韩国、日本、印尼、马来西亚、泰国、印度等方向，后续还会继续扩国家和扩站点。
+当前仓库已经覆盖英国、丹麦、韩国、日本、印尼、马来西亚、泰国、印度等方向，后续还会继续扩国家和扩站点。
+
+## 当前开发口径
+
+从现在开始，这个仓库按下面这套新口径推进：
+
+- 多机协作不再做“同一站点多机分片”。
+- 多机协作改为“不同机器跑不同站点”或者“不同机器跑同一国家的不同完整流水线”。
+- 老旧实现统一归档到各国家自己的 `bak/`，或者放进根目录 `former/`。
+- 新功能、新站点、新重写，全部接入新框架，不再往旧实现上打补丁。
+
+通俗点说：
+
+- `Mac` 跑英国 `dnb`
+- 本机跑英国 `companies-house`
+
+这是允许的。
+
+但不再推荐：
+
+- `Mac` 跑英国 `dnb shard-002`
+- 本机跑英国 `dnb shard-001`
+
+这种“同站点多机分片”以后不作为主模型。
 
 ## 老板视角的交付目标
 
@@ -36,15 +59,16 @@
 
 ## 当前国家与站点覆盖
 
-| 国家 | 当前主站点 / 数据源 | 主要链路 | 当前邮箱路线 |
-| --- | --- | --- | --- |
-| England | `dnb.com`、`Companies House`、`Google Maps` | 名录 / 详情 -> 官网 -> 邮箱 -> 交付 | `Firecrawl` 默认主链路 |
-| SouthKorea | `catch`、`incheon`、`dart`、`saramin`、`khia`、`kssba`、`dsnuri`、`gpsc`、`dnb.com` | 列表 / 详情 -> 官网 -> 邮箱 -> 交付 | 以 `Snov` 为主，部分站点配 `Firecrawl` 辅助 |
-| Japan | `Google Maps`、官网抓取、法人数据 | 官网发现 -> 官网抽取 -> 邮箱 / 电话 / 代表人 | `Firecrawl + 规则 + Snov` |
-| Indonesia | `gapensi.or.id`、`indonesiayp.com`、`AHU` | 列表 -> 详情 -> 法人 -> 邮箱 | `Snov` 主链路 |
-| Malaysia | `CTOS`、`BusinessList` | 公司名池 -> 官网 / 管理人 -> 邮箱 -> 交付 | `Snov` 主链路，管理人补齐用 `Firecrawl + LLM` |
-| Thailand | `dnb.com` | DNB -> 官网解析 -> 站点抽取 -> 邮箱 | `Snov` 主链路 |
-| India | `ZaubaCorp` | 列表 -> 详情 -> 联系方式 / 董事 | 站点内字段为主 |
+| 国家       | 当前主站点 / 数据源                                                                 | 主要链路                                      | 当前邮箱路线                                  |
+| ---------- | ----------------------------------------------------------------------------------- | --------------------------------------------- | --------------------------------------------- |
+| Denmark    | `dnb.com`、`datacvr.virk.dk`、`proff.dk`、`Google Maps`                             | `DNB / Virk / Proff -> GMap / Firecrawl -> delivery` | `Virk / Proff` 直出邮箱优先，缺邮箱时再补强 |
+| England    | `dnb.com`、`Companies House`、`Google Maps`                                         | 名录 / 详情 -> 官网 -> 邮箱 -> 交付           | `Firecrawl` 默认主链路                        |
+| SouthKorea | `catch`、`incheon`、`dart`、`saramin`、`khia`、`kssba`、`dsnuri`、`gpsc`、`dnb.com` | 列表 / 详情 -> 官网 -> 邮箱 -> 交付           | 以 `Snov` 为主，部分站点配 `Firecrawl` 辅助   |
+| Japan      | `Google Maps`、官网抓取、法人数据                                                   | 官网发现 -> 官网抽取 -> 邮箱 / 电话 / 代表人  | `Firecrawl + 规则 + Snov`                     |
+| Indonesia  | `gapensi.or.id`、`indonesiayp.com`、`AHU`                                           | 列表 -> 详情 -> 法人 -> 邮箱                  | `Snov` 主链路                                 |
+| Malaysia   | `CTOS`、`BusinessList`                                                              | 公司名池 -> 官网 / 管理人 -> 邮箱 -> 交付     | `Snov` 主链路，管理人补齐用 `Firecrawl + LLM` |
+| Thailand   | `dnb.com`                                                                           | DNB -> 官网解析 -> 站点抽取 -> 邮箱           | `Snov` 主链路                                 |
+| India      | `ZaubaCorp`                                                                         | 列表 -> 详情 -> 联系方式 / 董事               | 站点内字段为主                                |
 
 ## 统一技术路线
 
@@ -65,6 +89,23 @@
 6. **增量交付**
    - 按 `day1/day2/...` 输出每日增量包，避免重复交付。
 
+## 新框架运行规则
+
+以后新架构站点统一遵守这几条：
+
+1. **单入口运行**
+   - 统一使用 `python run.py <site>`。
+   - 不要求用户先手动起共享后端。
+2. **站点内部自动管后端**
+   - 如果某个站点需要 `Gmap`、`Firecrawl`、`MyIP` 这类共享能力，就由站点自己的 CLI 在内部自动拉起和回收。
+   - 手动 `backend start/stop/status` 只保留给调试。
+3. **MyIP 不是全站默认**
+   - 不是所有站点都适合走轮询住宅 IP。
+   - 是否使用 `MyIP`，要根据站点自己的风控情况决定。
+4. **旧实现只归档，不继续长代码**
+   - 被替换的旧实现放到 `bak/` 或 `former/`。
+   - 主路径只保留新实现。
+
 ## England 当前状态
 
 England 是目前迭代最频繁、也是最接近“后续模板国”的项目。
@@ -81,6 +122,8 @@ England 是目前迭代最频繁、也是最接近“后续模板国”的项目
   - [England/run.py](E:/Develop/Masterpiece/Spider/Website/OldIron/England/run.py)
 - 主要输出目录：
   - [England/output](E:/Develop/Masterpiece/Spider/Website/OldIron/England/output)
+- 历史实现归档：
+  - [England/bak](E:/Develop/Masterpiece/Spider/Website/OldIron/England/bak)
 
 常用命令：
 
@@ -88,8 +131,41 @@ England 是目前迭代最频繁、也是最接近“后续模板国”的项目
 cd England
 python run.py dnb
 python run.py companies-house
-python product.py day1
-python product.py day2
+cd ..
+python product.py England day1
+python product.py England day2
+```
+
+## Denmark 当前状态
+
+Denmark 现在有三条站点主线，并且交付时会按国家维度统一合并。
+
+- 站点：
+  - `dnb`
+  - `virk`
+  - `proff`
+- 当前主链路：
+  - `DNB -> Google Maps -> Firecrawl -> delivery`
+  - `Virk -> 站内直取邮箱 / 代表人 -> 缺邮箱再走 Google Maps -> Firecrawl -> delivery`
+  - `Proff -> 站内直取邮箱 / 代表人 / 官网 -> 缺官网走 Google Maps -> 缺邮箱走 Firecrawl -> delivery`
+- 交付规则：
+  - `product.py dayN` 会先把丹麦所有站点结果合并，再统一去重出包
+- 运行入口：
+  - [Denmark/run.py](E:/Develop/Masterpiece/Spider/Website/OldIron/Denmark/run.py)
+- 主要输出目录：
+  - [Denmark/output](E:/Develop/Masterpiece/Spider/Website/OldIron/Denmark/output)
+- 历史实现归档：
+  - [Denmark/bak](E:/Develop/Masterpiece/Spider/Website/OldIron/Denmark/bak)
+
+常用命令：
+
+```powershell
+cd Denmark
+python run.py dnb
+python run.py virk
+python run.py proff
+cd ..
+python product.py Denmark day1
 ```
 
 ## 其他国家入口一览
@@ -153,14 +229,22 @@ python product.py day2
 
 ## 目录约定
 
-仓库按“国家隔离”组织，每个国家基本都是独立项目。
+仓库按“国家隔离”与“全局通用”结合的方式组织。
 
-推荐把每个国家都保持成下面这套结构：
+核心目录结构如下：
 
+- `VersatileBackend/`
+  - 全局通用后端（使用 Go 语言编写），统一处理高并发的跨国通用能力（如 Firecrawl, Gmap, Snov, MyIP）。
 - `<Country>/run.py`
   - 国家级统一启动入口
-- `<Country>/product.py`
-  - 每日交付脚本
+- `product.py` (根目录)
+  - 统一的每日交付脚本
+- `shared/oldiron_core/`
+  - 新的共享 Python 业务核心，当前已承接 England / Denmark 的统一交付逻辑
+- `former/`
+  - 还没有迁移到新框架的旧国家或旧模块归档区
+- `<Country>/bak/`
+  - 该国家自己已经下线的旧源码、旧输出、旧调试残留归档区
 - `<Country>/src/`
   - 国家级源码
 - `<Country>/docs/`
@@ -174,6 +258,7 @@ python product.py day2
 
 - 当前主流程的产物，原则上都应写到“各国家目录自己的 `output/`”下面。
 - 根目录 [output](E:/Develop/Masterpiece/Spider/Website/OldIron/output) 不是 England 等当前主流程的主产物目录，更多是历史残留或临时缓存。
+- `bak/` 和 `former/` 里的内容不再作为新开发主路径。
 
 ## 常见依赖与凭据
 
@@ -202,14 +287,20 @@ python product.py day2
 
 统一原则：
 
+- 每日的交付文件，统一走根目录脚本，运行命令示例：`python product.py England dayN`
+- 每日交付还是国家内多站点按 **公司名去重**。必须先合并该国家所有站点结果，再统一去重和输出。
 - 每个国家单独维护自己的 `output/`
-- 每个国家单独做去重与增量
 - 每天只交付新增，不重复把历史全量再打给业务
-- 交付目录优先放在 `output/delivery/<Country>_dayNNN/`
+- 交付目录优先放在 `<Country>/output/delivery/<Country>_dayNNN/`
 - 交付文件尽量同时保留：
   - 明细 CSV
   - 汇总 JSON
   - 运行日志
+
+临时文件规则：
+
+- 根目录和各国家 `output/` 下的冒烟测试、临时 JSON、一次性调试目录，用完就删
+- 正在续跑的目录、状态库、日志不要删
 
 ## 后续扩展方式
 
@@ -225,11 +316,11 @@ python product.py day2
    - 地图
    - 行业目录
 3. **优先复用通用能力**
-   - Google Maps 官网补齐
-   - Firecrawl 邮箱抽取
-   - Snov 域名邮箱补齐
-   - LLM 候选页筛选
-   - 日交付脚本
+   - 国家级站点爬虫仍然使用 Python
+   - 并发型通用后端统一沉到 `VersatileBackend`（Go）
+   - 共享但不高并发的业务核心，例如国家级交付、统一去重、历史基线恢复，放在 `shared/oldiron_core/`
+   - 不要再在国家目录里复制一整份交付逻辑
+   - 新站点统一做成 `python run.py <site>` 单入口，站点内部自动管理自己依赖的共享后端
 4. **保持输出口径稳定**
    - 让下游业务看到的字段尽量一致
 5. **每加一个站点，都要补文档**
@@ -246,7 +337,7 @@ python product.py day2
 - 官网发现：继续保留 `Google Maps` 和目录站作为入口
 - 邮箱补齐：逐步从 `Snov` 迁移到 `Firecrawl`
 - 页面理解：用外部 LLM 做候选页筛选，用 `Firecrawl` 做页面抓取和结构化抽取
-- 项目组织：继续按国家隔离、按站点扩展、按交付统一口径
+- 项目组织：继续按国家隔离、按站点扩展、按交付统一口径；新站点优先进入 `sites/` 这类更清晰的新结构
 
 一句话概括：
 

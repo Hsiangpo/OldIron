@@ -23,27 +23,22 @@ def _load_run_module():
 
 
 class RunDispatchTests(unittest.TestCase):
-    def test_dispatch_calls_dnb_runner(self) -> None:
+    def test_dispatch_calls_proff_runner(self) -> None:
         run = _load_run_module()
         called: list[list[str]] = []
-        fake_module = types.ModuleType("denmark_crawler.dnb.cli")
-        fake_module.run_dnb = lambda argv: called.append(list(argv)) or 0
+        fake_module = types.ModuleType("denmark_crawler.sites.proff.cli")
+        fake_module.run_proff = lambda argv: called.append(list(argv)) or 0
         with patch.object(run, "_ensure_runtime_dependencies", return_value=True):
-            with patch.dict(sys.modules, {"denmark_crawler.dnb.cli": fake_module}):
-                code = run._dispatch(["dnb", "--max-companies", "5"])
+            with patch.dict(sys.modules, {"denmark_crawler.sites.proff.cli": fake_module}):
+                code = run._dispatch(["proff", "--max-pages-per-query", "2"])
         self.assertEqual(0, code)
-        self.assertEqual([["--max-companies", "5"]], called)
+        self.assertEqual([["--max-pages-per-query", "2"]], called)
 
-    def test_dispatch_calls_dist_runner(self) -> None:
+    def test_dispatch_rejects_archived_sites(self) -> None:
         run = _load_run_module()
-        called: list[list[str]] = []
-        fake_module = types.ModuleType("denmark_crawler.distributed.cli")
-        fake_module.run_dist = lambda argv: called.append(list(argv)) or 0
         with patch.object(run, "_ensure_runtime_dependencies", return_value=True):
-            with patch.dict(sys.modules, {"denmark_crawler.distributed.cli": fake_module}):
-                code = run._dispatch(["dist", "plan-dnb", "--shards", "2"])
-        self.assertEqual(0, code)
-        self.assertEqual([["plan-dnb", "--shards", "2"]], called)
+            code = run._dispatch(["dnb"])
+        self.assertEqual(1, code)
 
 
 if __name__ == "__main__":

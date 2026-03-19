@@ -39,6 +39,12 @@ class EmailExtractResult:
     contact_form_only: bool
 
 
+@dataclass(slots=True)
+class HtmlPageResult:
+    url: str
+    html: str
+
+
 def _safe_json(response: object) -> dict[str, object]:
     try:
         payload = response.json()
@@ -154,6 +160,16 @@ class FirecrawlClient:
             raise FirecrawlError("firecrawl_extract_no_id")
         return self._poll_extract(job_id)
 
+    def scrape_html(self, url: str) -> HtmlPageResult:
+        payload = {
+            "url": url,
+            "formats": ["rawHtml"],
+            "onlyMainContent": False,
+        }
+        data = self._request_json("POST", "scrape", json_body=payload)
+        html = self._extract_html_payload(data)
+        return HtmlPageResult(url=url, html=html)
+
     def _poll_extract(self, job_id: str) -> EmailExtractResult:
         deadline = time.monotonic() + max(self._config.poll_timeout_seconds, 5.0)
         while True:
@@ -229,4 +245,14 @@ class FirecrawlClient:
         if status >= 500:
             raise FirecrawlError("firecrawl_5xx")
         raise FirecrawlError(f"firecrawl_http_{status}")
+
+    def _extract_html_payload(self, payload: dict[str, object]) -> str:
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        if not isinstance(data, dict):
+            return ""
+        for key in ("rawHtml", "html"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return ""
 

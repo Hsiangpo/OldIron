@@ -1,43 +1,151 @@
-# Repository Guidelines
+# Global Collaboration Rules
 
-## Project Structure & Module Organization
+## Communication
 
-This repository is a multi-country company data collection workspace. Each country folder is a mostly independent project with its own runtime, output, and delivery flow: `England/`, `SouthKorea/`, `Japan/`, `Indonesia/`, `Malaysia/`, `Thailand/`, and `India/`. In each country project, keep source code under `src/`, tests under `tests/` or `test/`, docs under `docs/`, runtime artifacts under `output/`, and entry scripts such as `run.py` and `product.py` at the project root.
+- Do not end responses with invitation-style phrases such as "如果你要", "如果你需要", "要不要我".
+- Give the conclusion, the action taken, and the result directly.
+- Explain things in plain language because the user is not highly technical. When technical terms are necessary, add a short plain explanation.
+- Before doing substantial implementation, align on the desired effect when the requirement is ambiguous enough to cause rework.
 
-## Build, Test, and Development Commands
+## Code Limits & CI Gates (protocol-crawler 门禁)
 
-There is no single root build step. Work inside the target country directory.
+- 严格遵守 `protocol-crawler` 技能的 CI 门禁规范：
+  - Backend functions must stay within 200 lines. (单函数不超过 200 行，超过必须拆分)
+  - Backend source files must stay within 1000 lines. (单文件不超过 1000 行，超过必须拆分为多模块)
+  - A single directory should normally stay within 10 files. Split by domain when it grows beyond that.
+- 严禁代码带版本后缀（如 `_v2`, `_old`），旧方案被替换后必须干净彻底地上演“物理删除”，禁止通过注释屏蔽来堆积屎山代码。
 
-- `cd England && python -m pip install -r requirements.txt`: install England dependencies.
-- `cd England && python run.py dnb`: run the England DNB pipeline.
-- `cd England && python run.py companies-house`: run the England Companies House pipeline.
-- `cd England && python product.py day2`: build a daily delivery package.
-- `cd Japan && python -m pytest test -v`: run Japan tests.
-- `cd Thailand && pytest tests -q`: run Thailand tests.
+## Encoding And Language
 
-## Coding Style & Naming Conventions
+- All files must use UTF-8.
+- Code comments must be written in Chinese.
+- User-facing frontend copy must be Chinese.
+- Technical docs such as `AGENTS.md`, internal design notes, and interface docs should preferably be written in English.
+- User-facing docs such as `README.md` and `PRD.md` may stay in Chinese when that is easier for the user.
 
-Use Python 3.10+ with 4-space indentation. Use `snake_case` for functions, variables, and modules, and `PascalCase` for classes. Keep functions under 200 lines and files under 1000 lines. All files must be UTF-8. Code comments should be in Chinese. Keep country-specific logic inside the matching country folder; shared patterns should be copied deliberately, not hidden in ad hoc cross-country imports.
+## Network And Secrets
+
+- For non-China outbound access, use proxy port `7897` by default. If that port is unavailable, probe the actual working outbound proxy port first.
+- Never store plaintext passwords, cookies, API keys, or other secrets in `AGENTS.md`, `README.md`, `docs/`, or any committed file.
+- Do not commit `.env`, cookies, API keys, or anything under `output/`.
+
+## Runtime Model
+
+- The current execution model is multi-machine site-level execution with centralized merge.
+- Do not reintroduce the old coordinator-based multi-machine cluster flow unless explicitly requested.
+- Do not reintroduce shard-based multi-machine execution for new work.
+- Multi-machine work should be done by assigning different sites (or different whole pipelines) to different machines, then pulling back site outputs and merging at the country level.
+- Example: Mac runs `England dnb`, local runs `England companies-house`; or Mac runs England sites while local runs Denmark sites. This is the preferred model.
+
+## Country Delivery Rules
+
+- Daily delivery files use a unified entry at the project root. Do not use `<Country>/product.py` directly for execution.
+- Run command example: `python product.py England dayN` (root script delegates to the respective country module).
+- 核心交付规范：单个国家，所有站点，通过 `product.py` 打包落盘的时候，**必须**将所有站点的输出数据进行归并，按公司名严格**去重后才落盘生成最终交付文档**。
+- 文件存放规范：生成的最终交付文档必须放在各个国家内部的 `output/delivery/<国家英文名>_dayN(从001开始)` 文件夹下。例如：`SouthKorea/output/delivery/SouthKorea_day001/`。
+- Never package delivery site by site when multiple sites belong to the same country.
+- If the same country is being run on multiple machines, the split must be by site or by whole pipeline, not by shard.
+
+### England DayN Flow
+
+1. Stop active England site processes that affect delivery on every machine.
+2. Pull back the remote England site outputs to the local machine.
+3. Merge the England site outputs back into one England country output tree.
+4. Run `python product.py England dayN` from the project root.
+5. The final day package must be deduplicated by company name across all England sites together.
+
+### Denmark DayN Flow
+
+1. Stop active Denmark site processes that affect delivery on every machine.
+2. Pull back the remote Denmark site outputs to the local machine.
+3. Merge Denmark site outputs into one Denmark country output tree.
+4. Run `python product.py Denmark dayN` from the project root.
+5. The final day package must be deduplicated by company name across all Denmark sites together.
+
+## Temporary Artifact Cleanup & File Organization
+
+- **注意文件规范，绝不能随意堆放文件**。产生的任何调试请求响应、DevTools 截图、冒烟测试结果只能专门放在各目录的 `tmp/` 下，绝不允许散落在项目根目录。
+- 必须做到**主动清理**：冒烟测试（Smoke-test）、一次性单元测试结束后，必须主动删除 `tmp_*`, `*_smoke*` 或其他生成的调试缓存物。
+- Never delete active run directories, live checkpoint databases, or logs still needed for resume. (处于续跑状态的状态库、运行日志禁止删除)。
+
+## Project Structure And Module Organization
+
+**核心架构原则 (Core Architecture Principle):** 所有国家、所有站点的具体网页爬虫（Crawler）抽取部分，必须使用 **Python** 编写；所有通用后端服务（Backend），尤其是涉及大并发、高吞吐的综合调度模块等，必须严格使用 **Go** 语言编写。
+
+This repository is a multi-country company data collection workspace. Each country folder is a mostly independent project with its own runtime, output, and delivery flow. Additionally, there is a global generic backend for high concurrency generic tasks:
+
+- `Denmark/`
+- `England/`
+- `India/`
+- `Indonesia/`
+- `Japan/`
+- `Malaysia/`
+- `SouthKorea/`
+- `Spain/`
+- `Thailand/`
+- `Turkey/`
+- `VersatileBackend/` (Go-based generic backend for high-concurrency tasks like Firecrawl, Gmap, Snov)
+
+Legacy implementations that are no longer the active development path must be archived under either:
+
+- `<Country>/bak/` for country-local historical code and output
+- `former/` for countries or modules that have not yet been migrated to the new framework
+
+New development must not continue inside archived implementations. Archived code is reference-only.
+
+In each country project, keep source code under `src/`, tests under `tests/` or `test/`, docs under `docs/`, runtime artifacts under `output/`, and entry scripts such as `run.py` and `product.py` at the project root.
+
+## Build, Test, And Development Commands
+
+There is no single root build step. Work inside the target country directory for scrapers, but run delivery from the root.
+
+- `cd England && python -m pip install -r requirements.txt`
+- `cd England && python run.py dnb`
+- `cd England && python run.py companies-house`
+- `python product.py England day2`
+- `cd Denmark && python -m pip install -r requirements.txt`
+- `cd Denmark && python run.py dnb`
+- `cd Denmark && python run.py virk`
+- `python product.py Denmark day1`
+- `cd Japan && python -m pytest test -v`
+- `cd Thailand && pytest tests -q`
+
+## Coding Style And Naming Conventions
+
+- Use Python 3.10+ with 4-space indentation.
+- Use `snake_case` for functions, variables, and modules.
+- Use `PascalCase` for classes.
+- Keep country-specific logic inside the matching country folder.
+- Old country projects may keep local isolation for stability, but newly extracted reusable cores must live in approved shared locations such as `shared/oldiron_core/` (Python shared business core) or `VersatileBackend/` (Go concurrent backend). Do not create ad hoc cross-country imports outside these two shared roots.
+- New active work for rewritten countries/sites must target the new framework only. Do not extend archived code under `bak/`.
+
+## Site Runtime Rules
+
+- New sites must expose a single entry form: `python run.py <site>`.
+- A site CLI must auto-manage the shared backends it depends on. Users should not need to manually start MyIP / Firecrawl / Gmap just to run a site normally.
+- Shared backend manual commands may remain for debugging, but they are not the primary runtime model.
+- `MyIP` is optional and site-strategy-specific. Do not force every site to use `MyIP`.
+- A site should enable `MyIP` only when that site's anti-bot situation benefits from residential IP rotation.
 
 ## Testing Guidelines
 
-Match the existing test runner in the target project: England mainly uses `unittest`, while Japan, Malaysia, and Thailand use `pytest`. Name tests `test_*.py`. Add or update tests whenever parsing, deduplication, checkpoint, delivery, or email extraction logic changes. Run the relevant country suite before submitting changes.
+- Match the existing test runner in the target project.
+- England mainly uses `unittest`.
+- Japan, Malaysia, and Thailand mainly use `pytest`.
+- Name tests `test_*.py`.
+- Add or update tests whenever parsing, deduplication, checkpoint, delivery, or email extraction logic changes.
+- Run the relevant country suite before claiming completion.
 
-## Commit & Pull Request Guidelines
+## Documentation Rules
 
-This root folder is a coordination workspace; some country folders have their own Git history. Where Git is used, current history already follows short Conventional Commit subjects such as `feat: add manager enrichment via firecrawl and llm fallback`. Keep using `feat:`, `fix:`, `refactor:`, and `docs:`. PRs should state the target country, affected pipeline, sample command used for verification, and any output or schema changes.
-
-## Security & Configuration Tips
-
-Do not commit `.env`, cookies, API keys, or anything under `output/`. Keep credentials isolated per country project. When adding a new country or source, document the entry command, required env vars, output path, and delivery format in that country’s `README.md` or `docs/`.
+- When adding a new country, site, shard flow, delivery rule, or resume rule, update the relevant `README.md` or docs in the same change.
+- Keep runtime commands, required env vars, output paths, and delivery behavior documented.
+- When the execution model changes (for example shard -> site split, archived `bak/` policy, or `MyIP` strategy), update the root `AGENTS.md` and root `README.md` in the same change.
 
 ## Remote Machines
 
-The first non-local Mac used for this workspace is `macbook-air-england`:
-
-- Host: `192.168.0.103`
+- First non-local Mac machine alias: `macbook-air-england`
 - User: `Zhuanz1`
-- Password：`520526`
-- Role: secondary execution machine for distributed runs and result collection
-
-Do not store plaintext passwords, cookies, API keys, or other secrets in `AGENTS.md`. Use SSH keys or a local credential store instead.
+- Role: secondary execution machine for site-level runs and result pullback
+- The LAN IP may change. Verify the current IP before use.
+- Do not write the password into any tracked file.

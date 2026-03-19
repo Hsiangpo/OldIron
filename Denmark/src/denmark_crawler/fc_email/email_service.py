@@ -1,17 +1,16 @@
-"""Firecrawl 邮箱发现服务。"""
+"""Firecrawl + 外部 LLM 联系信息服务。"""
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-import threading
 from urllib.parse import urlparse
-
-from denmark_crawler.snov.client import extract_domain
 
 from .client import FirecrawlClient
 from .client import FirecrawlClientConfig
 from .client import FirecrawlError
+from .client import HtmlPageResult
 from .domain_cache import FirecrawlDomainCache
 from .key_pool import FirecrawlKeyPool
 from .key_pool import KeyPoolConfig
@@ -60,6 +59,22 @@ _IGNORE_LOCAL_PARTS = {
 _KEY_FILE_WRITE_LOCK = threading.Lock()
 
 
+def extract_domain(website_url: str) -> str:
+    """从 URL 提取域名。"""
+    raw = str(website_url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    parsed = urlparse(raw)
+    host = (parsed.netloc or parsed.path).strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    return host
+
+
 def _keys_file_has_content(keys_file: Path) -> bool:
     if not keys_file.exists():
         return False
@@ -82,7 +97,7 @@ class FirecrawlEmailSettings:
     key_failure_threshold: int = 5
     llm_api_key: str = ""
     llm_base_url: str = "https://api.gpteamservices.com/v1"
-    llm_model: str = "gpt-5.1-codex-mini"
+    llm_model: str = "gpt-5.4-mini"
     llm_reasoning_effort: str = "medium"
     llm_timeout_seconds: float = 120.0
     map_limit: int = 200
@@ -91,11 +106,6 @@ class FirecrawlEmailSettings:
     extract_max_urls: int = 12
     zero_retry_seconds: float = 43200.0
     contact_form_retry_seconds: float = 259200.0
-    relaxed_prefilter_limit: int = 120
-    relaxed_llm_pick_count: int = 40
-    relaxed_extract_max_urls: int = 25
-    relaxed_include_subdomains: bool = True
-    relaxed_allow_external_links: bool = True
     per_key_limit: int = 0
     candidate_limit: int = 0
     llm_pick_limit: int = 0
@@ -122,6 +132,8 @@ FirecrawlEmailServiceConfig = FirecrawlEmailSettings
 @dataclass(slots=True)
 class EmailDiscoveryResult:
     emails: list[str]
+    company_name: str = ""
+    representative: str = ""
     evidence_url: str = ""
     evidence_quote: str = ""
     contact_form_only: bool = False
@@ -134,8 +146,6 @@ class _EmailPassPlan:
     prefilter_limit: int
     llm_pick_count: int
     extract_max_urls: int
-    include_subdomains: bool = False
-    allow_external_links: bool = False
 
 
 class FirecrawlEmailService:
@@ -211,7 +221,7 @@ class FirecrawlEmailService:
         start_url = self._normalize_start_url(homepage, domain)
         if not start_url:
             return EmailDiscoveryResult(emails=[])
-        primary = self._discover_pass(
+        result = self._discover_pass(
             company_name=company_name,
             start_url=start_url,
             plan=_EmailPassPlan(
@@ -220,27 +230,13 @@ class FirecrawlEmailService:
                 extract_max_urls=max(self._settings.extract_max_urls, 1),
             ),
         )
-        if primary.emails:
-            return primary
-        relaxed = self._discover_pass(
-            company_name=company_name,
-            start_url=start_url,
-            plan=_EmailPassPlan(
-                prefilter_limit=max(self._settings.relaxed_prefilter_limit, 1),
-                llm_pick_count=max(self._settings.relaxed_llm_pick_count, 1),
-                extract_max_urls=max(self._settings.relaxed_extract_max_urls, 1),
-                include_subdomains=bool(self._settings.relaxed_include_subdomains),
-                allow_external_links=bool(self._settings.relaxed_allow_external_links),
-            ),
-        )
-        if relaxed.emails:
-            return relaxed
-        if primary.contact_form_only or relaxed.contact_form_only:
-            relaxed.retry_after_seconds = max(float(self._settings.contact_form_retry_seconds), 1.0)
-            relaxed.contact_form_only = True
-            return relaxed
-        relaxed.retry_after_seconds = max(float(self._settings.zero_retry_seconds), 1.0)
-        return relaxed
+        if result.emails:
+            return result
+        if result.contact_form_only:
+            result.retry_after_seconds = max(float(self._settings.contact_form_retry_seconds), 1.0)
+            return result
+        result.retry_after_seconds = max(float(self._settings.zero_retry_seconds), 1.0)
+        return result
 
     def _normalize_start_url(self, homepage: str, domain: str) -> str:
         if str(homepage or "").strip().startswith("http"):
@@ -254,7 +250,6 @@ class FirecrawlEmailService:
         mapped_urls = self._firecrawl.map_site(
             start_url,
             limit=self._settings.map_limit,
-            include_subdomains=plan.include_subdomains,
         )
         candidate_urls = self._prefilter_urls(start_url, mapped_urls, limit=plan.prefilter_limit)
         ranked_urls = self._llm.pick_candidate_urls(
@@ -270,20 +265,23 @@ class FirecrawlEmailService:
             candidate_urls,
             limit=plan.extract_max_urls,
         )
-        extracted = self._extract_emails_with_fallback(
-            final_urls,
-            include_subdomains=plan.include_subdomains,
-            allow_external_links=plan.allow_external_links,
+        pages = self._scrape_html_pages(final_urls)
+        extracted = self._llm.extract_contacts_from_html(
+            company_name=company_name,
+            homepage=start_url,
+            pages=[{"url": page.url, "html": page.html} for page in pages if page.html],
         )
         emails = self._filter_same_domain_emails(start_url, extracted.emails)
         if not emails:
             emails = extracted.emails
         emails = self._clean_emails(emails)
         return EmailDiscoveryResult(
+            company_name=extracted.company_name,
+            representative=extracted.representative,
             emails=emails,
             evidence_url=extracted.evidence_url,
             evidence_quote=extracted.evidence_quote,
-            contact_form_only=extracted.contact_form_only,
+            contact_form_only=False,
             selected_urls=final_urls,
         )
 
@@ -312,60 +310,18 @@ class FirecrawlEmailService:
                 break
         return urls
 
-    def _extract_emails_with_fallback(
-        self,
-        urls: list[str],
-        *,
-        include_subdomains: bool = False,
-        allow_external_links: bool = False,
-    ) -> EmailDiscoveryResult:
-        try:
-            return self._firecrawl.extract_emails(
-                urls,
-                include_subdomains=include_subdomains,
-                allow_external_links=allow_external_links,
-            )
-        except FirecrawlError as exc:
-            if exc.code not in {"firecrawl_extract_failed", "firecrawl_extract_timeout", "firecrawl_http_404"}:
-                raise
-        merged_emails: list[str] = []
-        evidence_url = ""
-        evidence_quote = ""
-        contact_form_only = False
-        any_success = False
+    def _scrape_html_pages(self, urls: list[str]) -> list[HtmlPageResult]:
+        pages: list[HtmlPageResult] = []
         for url in urls:
             try:
-                result = self._firecrawl.extract_emails(
-                    [url],
-                    include_subdomains=include_subdomains,
-                    allow_external_links=allow_external_links,
-                )
+                page = self._firecrawl.scrape_html(url)
             except FirecrawlError as exc:
-                if exc.code in {"firecrawl_http_404", "firecrawl_extract_failed", "firecrawl_extract_timeout"}:
+                if exc.code in {"firecrawl_http_404", "firecrawl_5xx"}:
                     continue
                 raise
-            any_success = True
-            for email in result.emails:
-                value = str(email or "").strip().lower()
-                if value and value not in merged_emails:
-                    merged_emails.append(value)
-            if result.emails and result.evidence_url:
-                evidence_url = result.evidence_url
-            elif not evidence_url and result.evidence_url:
-                evidence_url = result.evidence_url
-            if result.emails and result.evidence_quote:
-                evidence_quote = result.evidence_quote
-            elif not evidence_quote and result.evidence_quote:
-                evidence_quote = result.evidence_quote
-            contact_form_only = contact_form_only or bool(result.contact_form_only)
-        if any_success:
-            return EmailDiscoveryResult(
-                emails=merged_emails,
-                evidence_url=evidence_url,
-                evidence_quote=evidence_quote,
-                contact_form_only=contact_form_only and not merged_emails,
-            )
-        return EmailDiscoveryResult(emails=[], evidence_url="", evidence_quote="", contact_form_only=False)
+            if page.html.strip():
+                pages.append(page)
+        return pages
 
     def _score_url(self, start_url: str, url: str) -> int:
         if url == start_url:
