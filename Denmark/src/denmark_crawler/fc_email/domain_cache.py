@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -14,6 +15,7 @@ from pathlib import Path
 
 
 RUNNING_RECHECK_SECONDS = 15.0
+LOGGER = logging.getLogger(__name__)
 
 
 def _utc_now() -> str:
@@ -97,6 +99,7 @@ class FirecrawlDomainCache:
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._conn.execute("PRAGMA busy_timeout = 30000;")
         self._init_schema()
+        self._repair_stale_entries()
 
     def close(self) -> None:
         with self._lock:
@@ -117,6 +120,29 @@ class FirecrawlDomainCache:
                 """
             )
             self._conn.commit()
+
+    def _repair_stale_entries(self) -> None:
+        """启动时清理：删除所有 running/pending 且超过 5 分钟的域名，让它们可被重新 claim。"""
+        cutoff = _utc_before(300.0)
+        with self._lock:
+            count = self._conn.execute(
+                """
+                DELETE FROM firecrawl_domain_cache
+                WHERE status IN ('running', 'pending') AND updated_at < ?
+                """,
+                (cutoff,),
+            ).rowcount
+            self._conn.commit()
+            if count:
+                LOGGER.info("域名缓存启动清理：删除 %d 个超时 running/pending 条目", count)
+
+    def get_all_done_domains(self) -> dict[str, list[str]]:
+        """返回所有已完成域名及其邮箱，供启动时批量预处理。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT domain, emails_json FROM firecrawl_domain_cache WHERE status = 'done'"
+            ).fetchall()
+        return {str(r["domain"]): _parse_json_list(r["emails_json"]) for r in rows}
 
     def prepare_lookup(self, domain: str, *, stale_running_seconds: float = 900.0) -> FirecrawlDomainDecision:
         clean_domain = str(domain or "").strip().lower()

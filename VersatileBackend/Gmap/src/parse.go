@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-var phonePattern = regexp.MustCompile(`(?:\+\d{1,3}|0)[0-9\s\-]{7,}`)
+var phonePattern = regexp.MustCompile(`^(?:\+\d{1,3}|0)[0-9\s\-]{7,}$`)
+var nonDigitPattern = regexp.MustCompile(`\D`)
 
 func readBodyString(reader io.Reader) (string, error) {
 	bytes, err := io.ReadAll(reader)
@@ -144,7 +145,11 @@ func extractPhone(value any) string {
 	for _, item := range flattenStrings(value) {
 		text := normalizeText(item)
 		if phonePattern.MatchString(text) {
-			return text
+			// 校验纯数字长度在 9-13 位之间
+			digits := nonDigitPattern.ReplaceAllString(text, "")
+			if len(digits) >= 9 && len(digits) <= 13 {
+				return text
+			}
 		}
 	}
 	return ""

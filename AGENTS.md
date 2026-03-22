@@ -117,6 +117,7 @@ There is no single root build step. Work inside the target country directory for
 - Use `PascalCase` for classes.
 - Keep country-specific logic inside the matching country folder.
 - Old country projects may keep local isolation for stability, but newly extracted reusable cores must live in approved shared locations such as `shared/oldiron_core/` (Python shared business core) or `VersatileBackend/` (Go concurrent backend). Do not create ad hoc cross-country imports outside these two shared roots.
+- `shared/oldiron_core/protocol_crawler/` is the shared protocol crawler module (curl_cffi-based site link discovery + HTML scraping). It replaces Firecrawl when `CRAWL_BACKEND=protocol` is set in a country's `.env`.
 - New active work for rewritten countries/sites must target the new framework only. Do not extend archived code under `bak/`.
 
 ## Site Runtime Rules

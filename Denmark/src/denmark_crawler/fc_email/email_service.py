@@ -97,7 +97,7 @@ class FirecrawlEmailSettings:
     key_failure_threshold: int = 5
     llm_api_key: str = ""
     llm_base_url: str = "https://api.gpteamservices.com/v1"
-    llm_model: str = "gpt-5.4-mini"
+    llm_model: str = "gpt-5.1-codex-mini"
     llm_reasoning_effort: str = "medium"
     llm_timeout_seconds: float = 120.0
     map_limit: int = 200
@@ -109,6 +109,7 @@ class FirecrawlEmailSettings:
     per_key_limit: int = 0
     candidate_limit: int = 0
     llm_pick_limit: int = 0
+    crawl_backend: str = "firecrawl"
 
     def __post_init__(self) -> None:
         self.keys_inline = list(self.keys_inline or [])
@@ -120,8 +121,10 @@ class FirecrawlEmailSettings:
             self.llm_pick_count = self.llm_pick_limit
 
     def validate(self) -> None:
-        if not self.keys_inline and not _keys_file_has_content(self.keys_file):
-            raise RuntimeError("Firecrawl 阶段缺少 FIRECRAWL_KEYS，请检查根目录 .env。")
+        # 协议爬虫不需要 Firecrawl key
+        if self.crawl_backend != "protocol":
+            if not self.keys_inline and not _keys_file_has_content(self.keys_file):
+                raise RuntimeError("Firecrawl 阶段缺少 FIRECRAWL_KEYS，请检查根目录 .env。")
         if not self.llm_api_key or not self.llm_model:
             raise RuntimeError("Firecrawl 阶段缺少 LLM 配置，请检查 LLM_API_KEY / LLM_MODEL。")
 
@@ -159,15 +162,20 @@ class FirecrawlEmailService:
         firecrawl_client: object | None = None,
     ) -> None:
         self._settings = settings
-        self._key_pool = key_pool or self.build_key_pool(settings)
-        self._firecrawl = firecrawl_client or FirecrawlClient(
-            key_pool=self._key_pool,
-            config=FirecrawlClientConfig(
-                base_url=settings.base_url,
-                timeout_seconds=settings.timeout_seconds,
-                max_retries=settings.max_retries,
-            ),
-        )
+        # 如果外部已注入 client（如协议爬虫），跳过 key_pool 构建
+        if firecrawl_client is not None:
+            self._key_pool = key_pool
+            self._firecrawl = firecrawl_client
+        else:
+            self._key_pool = key_pool or self.build_key_pool(settings)
+            self._firecrawl = FirecrawlClient(
+                key_pool=self._key_pool,
+                config=FirecrawlClientConfig(
+                    base_url=settings.base_url,
+                    timeout_seconds=settings.timeout_seconds,
+                    max_retries=settings.max_retries,
+                ),
+            )
         self._llm = EmailUrlLlmClient(
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
@@ -256,18 +264,21 @@ class FirecrawlEmailService:
 
     def _discover_pass(self, *, company_name: str, start_url: str, plan: _EmailPassPlan) -> EmailDiscoveryResult:
         mapped_urls = self._map_site(start_url)
-        candidate_urls = self._prefilter_urls(start_url, mapped_urls, limit=plan.prefilter_limit)
+        # 全量 URL 排序（不截断），规则推荐仅作参考
+        all_urls = self._rank_all_urls(start_url, mapped_urls)
+        recommended = all_urls[:plan.prefilter_limit]
         ranked_urls = self._llm.pick_candidate_urls(
             company_name=company_name,
             domain=extract_domain(start_url),
             homepage=start_url,
-            candidate_urls=candidate_urls,
+            candidate_urls=all_urls,
             target_count=plan.llm_pick_count,
+            recommended_urls=recommended,
         )
         final_urls = self._build_final_urls(
             start_url,
             ranked_urls,
-            candidate_urls,
+            all_urls,
             limit=plan.extract_max_urls,
         )
         pages = self._scrape_html_pages(final_urls)
@@ -290,7 +301,8 @@ class FirecrawlEmailService:
             selected_urls=final_urls,
         )
 
-    def _prefilter_urls(self, start_url: str, mapped_urls: list[str], *, limit: int) -> list[str]:
+    def _rank_all_urls(self, start_url: str, mapped_urls: list[str]) -> list[str]:
+        """全量 URL 按规则打分排序，不截断。"""
         host = urlparse(start_url).netloc.lower()
         ranked: list[tuple[int, str]] = []
         seen: set[str] = set()
@@ -303,7 +315,7 @@ class FirecrawlEmailService:
             seen.add(url)
             ranked.append((self._score_url(start_url, url), url))
         ranked.sort(key=lambda item: (-item[0], item[1]))
-        return [url for _score, url in ranked[:limit]]
+        return [url for _score, url in ranked]
 
     def _build_final_urls(self, start_url: str, ranked_urls: list[str], candidate_urls: list[str], *, limit: int) -> list[str]:
         urls: list[str] = []

@@ -139,6 +139,7 @@ class ProffDenmarkConfig:
     prefer_go_firecrawl_backend: bool
     gmap_service_url: str
     firecrawl_service_url: str
+    crawl_backend: str
 
     @classmethod
     def from_env(
@@ -194,7 +195,7 @@ class ProffDenmarkConfig:
             firecrawl_key_failure_threshold=_env_int("FIRECRAWL_KEY_FAILURE_THRESHOLD", 5),
             llm_api_key=_env_str("LLM_API_KEY"),
             llm_base_url=_env_str("LLM_BASE_URL", "https://api.gpteamservices.com/v1"),
-            llm_model=_env_str("LLM_MODEL", "gpt-5.4-mini"),
+            llm_model=_env_str("LLM_MODEL", "gpt-5.1-codex-mini"),
             llm_reasoning_effort=_env_str("LLM_REASONING_EFFORT", "medium"),
             llm_timeout_seconds=_env_float("LLM_TIMEOUT_SECONDS", 120.0),
             firecrawl_prefilter_limit=_env_int("FIRECRAWL_PREFILTER_LIMIT", 40),
@@ -202,17 +203,20 @@ class ProffDenmarkConfig:
             firecrawl_extract_max_urls=_env_int("FIRECRAWL_EXTRACT_MAX_URLS", 8),
             firecrawl_zero_retry_seconds=_env_float("FIRECRAWL_ZERO_RETRY_SECONDS", 43200.0),
             firecrawl_contact_form_retry_seconds=_env_float("FIRECRAWL_CONTACT_FORM_RETRY_SECONDS", 259200.0),
-            prefer_go_gmap_backend=_env_bool("PROFF_USE_GO_GMAP_BACKEND", True),
+            prefer_go_gmap_backend=_env_bool("PROFF_USE_GO_GMAP_BACKEND", False),
             prefer_go_firecrawl_backend=_env_bool("PROFF_USE_GO_FIRECRAWL_BACKEND", False),
             gmap_service_url=_env_str("GMAP_SERVICE_URL", "http://127.0.0.1:8082"),
             firecrawl_service_url=_env_str("FIRECRAWL_SERVICE_URL", "http://127.0.0.1:8081"),
+            crawl_backend=_env_str("CRAWL_BACKEND", "protocol"),
         )
 
     def validate(self, *, skip_firecrawl: bool = False) -> None:
         if skip_firecrawl:
             return
-        if not _has_firecrawl_keys(self.firecrawl_keys_inline, self.firecrawl_keys_file):
-            raise RuntimeError("Proff Firecrawl 阶段缺少 FIRECRAWL_KEYS，请检查 .env。")
+        # 协议爬虫不需要 Firecrawl key
+        if self.crawl_backend != "protocol":
+            if not _has_firecrawl_keys(self.firecrawl_keys_inline, self.firecrawl_keys_file):
+                raise RuntimeError("Proff Firecrawl 阶段缺少 FIRECRAWL_KEYS，请检查 .env。")
         if not self.llm_api_key or not self.llm_model:
             raise RuntimeError("Proff Firecrawl 阶段缺少 LLM 配置，请检查 LLM_API_KEY / LLM_MODEL。")
 

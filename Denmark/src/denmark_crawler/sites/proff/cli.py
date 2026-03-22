@@ -7,11 +7,12 @@ import atexit
 import json
 import logging
 import os
+import signal
+import subprocess
 import time
 from pathlib import Path
+from urllib.request import urlopen
 
-from denmark_crawler.backend.cli import ensure_services_started
-from denmark_crawler.backend.cli import stop_service_names
 from denmark_crawler.sites.proff.client import ProffClient
 from denmark_crawler.sites.proff.config import ProffDenmarkConfig
 from denmark_crawler.sites.proff.config import resolve_query_file
@@ -19,6 +20,18 @@ from denmark_crawler.sites.proff.pipeline import run_proff_pipeline
 
 
 ROOT = Path(__file__).resolve().parents[4]
+VERSATILE_ROOT = ROOT.parent / "VersatileBackend"
+BACKEND_OUTPUT = ROOT / "output" / "backend"
+
+GMAP_DEF = {
+    "cmd": ["go", "run", "./cmd/gmap-service"],
+    "addr": "http://127.0.0.1:8082",
+    "log": "gmap-service.log",
+    "pid": "gmap-service.pid",
+    "env": {"GMAP_SERVICE_ADDR": ":8082"},
+}
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _configure_logging(output_dir: Path, log_level: str) -> Path:
@@ -83,6 +96,118 @@ def _release_run_lock(lock_path: Path) -> None:
         return
 
 
+# --------------- Go GMap 后端自动管理 ---------------
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    """从 .env 文件加载环境变量。"""
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _gmap_is_running() -> bool:
+    """检查 GMap 后端是否已在运行。"""
+    pid_path = BACKEND_OUTPUT / GMAP_DEF["pid"]
+    if not pid_path.exists():
+        return False
+    try:
+        payload = json.loads(pid_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    pid = int(payload.get("pid", 0) or 0)
+    return pid > 0 and _pid_exists(pid)
+
+
+def _gmap_health_ok() -> bool:
+    """检查 GMap 后端健康状态。"""
+    try:
+        resp = urlopen(f"{GMAP_DEF['addr']}/healthz", timeout=3)  # noqa: S310
+        return resp.status == 200
+    except Exception:
+        return False
+
+
+def _start_gmap_backend() -> bool:
+    """启动 Go GMap 后端，返回是否实际启动了新进程。"""
+    if _gmap_is_running() and _gmap_health_ok():
+        LOGGER.info("Go GMap 后端已在运行，跳过启动")
+        return False
+
+    BACKEND_OUTPUT.mkdir(parents=True, exist_ok=True)
+
+    # 构建环境变量
+    env = os.environ.copy()
+    for key, value in _load_env_file(VERSATILE_ROOT / ".env").items():
+        env.setdefault(key, value)
+    proxy = env.get("PROXY_URL", "").strip() or "http://127.0.0.1:7897"
+    env.setdefault("HTTP_PROXY", proxy)
+    env.setdefault("HTTPS_PROXY", proxy)
+    for key, value in GMAP_DEF["env"].items():
+        env[key] = value
+
+    log_path = BACKEND_OUTPUT / GMAP_DEF["log"]
+    pid_path = BACKEND_OUTPUT / GMAP_DEF["pid"]
+
+    LOGGER.info("正在启动 Go GMap 后端...")
+    with log_path.open("ab") as log_fp:
+        process = subprocess.Popen(  # noqa: S603
+            GMAP_DEF["cmd"],
+            cwd=str(VERSATILE_ROOT),
+            env=env,
+            stdout=log_fp,
+            stderr=log_fp,
+        )
+    pid_path.write_text(json.dumps({"pid": process.pid}), encoding="utf-8")
+
+    # 等待健康检查
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline:
+        if _gmap_health_ok():
+            LOGGER.info("Go GMap 后端已启动：PID=%s", process.pid)
+            return True
+        time.sleep(0.5)
+
+    LOGGER.warning("Go GMap 后端启动超时，请检查 %s", log_path)
+    return True
+
+
+def _stop_gmap_backend() -> None:
+    """停止 Go GMap 后端。"""
+    pid_path = BACKEND_OUTPUT / GMAP_DEF["pid"]
+    if not pid_path.exists():
+        return
+    try:
+        payload = json.loads(pid_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    pid = int(payload.get("pid", 0) or 0)
+    if pid <= 0 or not _pid_exists(pid):
+        pid_path.unlink(missing_ok=True)
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+        # 等进程退出
+        for _ in range(20):
+            if not _pid_exists(pid):
+                break
+            time.sleep(0.25)
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    pid_path.unlink(missing_ok=True)
+    LOGGER.info("Go GMap 后端已停止")
+
+
+# --------------- CLI ---------------
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="丹麦 Proff 搜索爬虫")
     parser.add_argument("--output-dir", default="", help="输出目录")
@@ -91,20 +216,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-pages-per-query", type=int, default=400, help="每个 query 最大抓取页数")
     parser.add_argument("--max-companies", type=int, default=0, help="最大公司数")
     parser.add_argument("--search-workers", type=int, default=16, help="搜索页并发数")
-    parser.add_argument("--gmap-workers", type=int, default=16, help="Google Maps 并发数")
-    parser.add_argument("--firecrawl-workers", type=int, default=64, help="Firecrawl 并发数")
+    parser.add_argument("--gmap-workers", type=int, default=64, help="Google Maps 并发数")
+    parser.add_argument("--email-workers", dest="firecrawl_workers", type=int, default=128, help="官网爬虫/邮箱补充并发数")
     parser.add_argument("--skip-gmap", action="store_true", help="跳过 Google Maps 补官网阶段")
-    parser.add_argument("--skip-firecrawl", action="store_true", help="跳过 Firecrawl 补邮箱阶段")
+    parser.add_argument("--skip-email", dest="skip_firecrawl", action="store_true", help="跳过官网爬虫邮箱补充阶段")
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     return parser
 
 
-def _env_flag(name: str) -> bool:
-    value = str(os.getenv(name, "")).strip().lower()
-    return value in {"1", "true", "yes", "on"}
-
-
 def run_proff(argv: list[str]) -> int:
+    # 提高文件描述符上限，避免高并发下 Too many open files
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = min(65536, hard)
+    if soft < target:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+
     args = _build_parser().parse_args(argv)
     output_dir = Path(args.output_dir).resolve() if str(args.output_dir).strip() else ROOT / "output" / "proff"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -112,6 +239,14 @@ def run_proff(argv: list[str]) -> int:
     logging.getLogger(__name__).info("运行日志已落盘：%s", log_path)
     lock_path = _acquire_run_lock(output_dir)
     atexit.register(_release_run_lock, lock_path)
+
+    # Go GMap 后端已默认禁用，仅在环境变量 PROFF_USE_GO_GMAP_BACKEND=1 时启动
+    gmap_auto_started = False
+    if not args.skip_gmap and os.environ.get("PROFF_USE_GO_GMAP_BACKEND", "").strip().lower() in ("1", "true", "yes"):
+        gmap_auto_started = _start_gmap_backend()
+        if gmap_auto_started:
+            atexit.register(_stop_gmap_backend)
+
     query_file = resolve_query_file(ROOT, str(args.query_file or "").strip())
     config = ProffDenmarkConfig.from_env(
         project_root=ROOT,
@@ -125,13 +260,6 @@ def run_proff(argv: list[str]) -> int:
         firecrawl_workers=max(int(args.firecrawl_workers or 1), 1),
     )
     config.validate(skip_firecrawl=bool(args.skip_firecrawl))
-    auto_started = _auto_start_go_backends(
-        config=config,
-        skip_gmap=bool(args.skip_gmap),
-        skip_firecrawl=bool(args.skip_firecrawl),
-    )
-    if auto_started:
-        atexit.register(stop_service_names, auto_started, quiet=True)
     client = ProffClient(
         base_url=config.base_url,
         timeout_seconds=config.timeout_seconds,
@@ -147,27 +275,6 @@ def run_proff(argv: list[str]) -> int:
         )
         return 0
     finally:
-        if auto_started:
-            stop_service_names(auto_started, quiet=True)
+        if gmap_auto_started:
+            _stop_gmap_backend()
         _release_run_lock(lock_path)
-
-
-def _auto_start_go_backends(
-    *,
-    config: ProffDenmarkConfig,
-    skip_gmap: bool,
-    skip_firecrawl: bool,
-) -> list[str]:
-    services: list[str] = []
-    if _env_flag("MYIP_ENABLED"):
-        services.append("myip")
-    if not skip_gmap:
-        services.append("gmap")
-    if not skip_firecrawl and config.prefer_go_firecrawl_backend:
-        services.append("firecrawl")
-    if not services:
-        return []
-    started = ensure_services_started(services, quiet=True)
-    if started:
-        logging.getLogger(__name__).info("已自动启动 Go 后端：%s", ", ".join(started))
-    return started

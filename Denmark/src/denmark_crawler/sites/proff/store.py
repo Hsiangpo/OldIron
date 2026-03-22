@@ -194,6 +194,7 @@ class ProffStore:
                     gmap_company_name TEXT NOT NULL DEFAULT '',
                     override_mode TEXT NOT NULL DEFAULT '',
                     emails_json TEXT NOT NULL DEFAULT '[]',
+                    evidence_url TEXT NOT NULL DEFAULT '',
                     source_query TEXT NOT NULL DEFAULT '',
                     source_page INTEGER NOT NULL DEFAULT 0,
                     source_url TEXT NOT NULL DEFAULT '',
@@ -225,6 +226,7 @@ class ProffStore:
                     company_name TEXT NOT NULL,
                     representative TEXT NOT NULL,
                     email TEXT NOT NULL,
+                    evidence_url TEXT NOT NULL DEFAULT '',
                     source TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(orgnr, representative, email)
@@ -238,6 +240,16 @@ class ProffStore:
                 """
             )
             self._conn.commit()
+            # 自动迁移：为已有库添加新列
+            for col_sql in (
+                "ALTER TABLE companies ADD COLUMN evidence_url TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE final_companies ADD COLUMN evidence_url TEXT NOT NULL DEFAULT ''",
+            ):
+                try:
+                    self._conn.execute(col_sql)
+                    self._conn.commit()
+                except sqlite3.OperationalError:
+                    pass
 
     def _repair_runtime_state(self) -> None:
         now = _utc_now()
@@ -540,6 +552,7 @@ class ProffStore:
         emails: list[str],
         representative: str = "",
         company_name: str = "",
+        evidence_url: str = "",
         retry_after_seconds: float = 0.0,
     ) -> None:
         now = _utc_now()
@@ -555,8 +568,13 @@ class ProffStore:
             next_company_name = str(current.get("company_name", "")).strip()
             next_representative = str(current.get("representative", "")).strip()
             next_phone = str(current.get("phone", "")).strip()
+            # 公司名：优先用官网提取到的真实公司名（而非原始搜索名）
+            website_name = str(company_name or "").strip()
+            if website_name:
+                next_company_name = website_name
             if override_mode == "website_override":
-                next_company_name = str(company_name or "").strip() or str(current.get("gmap_company_name", "")).strip()
+                if not website_name:
+                    next_company_name = str(current.get("gmap_company_name", "")).strip() or next_company_name
                 next_representative = (
                     str(representative or "").strip()
                     or str(current.get("representative", "")).strip()
@@ -564,11 +582,12 @@ class ProffStore:
                 next_phone = str(current.get("gmap_phone", "")).strip() or next_phone
             elif not next_representative and str(representative or "").strip():
                 next_representative = str(representative).strip()
+            next_evidence_url = str(evidence_url or "").strip()
             self._conn.execute(
                 """
                 UPDATE companies
-                SET company_name = ?, representative = ?, phone = ?, emails_json = ?, firecrawl_status = ?,
-                    firecrawl_retry_at = ?, last_error = '', updated_at = ?
+                SET company_name = ?, representative = ?, phone = ?, emails_json = ?, evidence_url = ?,
+                    firecrawl_status = ?, firecrawl_retry_at = ?, last_error = '', updated_at = ?
                 WHERE orgnr = ?
                 """,
                 (
@@ -576,6 +595,7 @@ class ProffStore:
                     next_representative,
                     next_phone,
                     _dump_json_list(merged),
+                    next_evidence_url,
                     "done" if has_email else "zero",
                     "" if has_email or retry_after_seconds <= 0 else _utc_after(retry_after_seconds),
                     now,
@@ -694,20 +714,22 @@ class ProffStore:
             emails = _parse_json_list(str(record.get("emails_json", "[]")))
             company_name = str(record.get("company_name", "")).strip()
             representative = str(record.get("representative", "")).strip()
+            evidence_url = str(record.get("evidence_url", "")).strip()
             self._conn.execute("DELETE FROM final_companies WHERE orgnr = ?", (orgnr,))
             if company_name and representative and emails:
                 now = _utc_now()
                 for email in emails:
                     self._conn.execute(
                         """
-                        INSERT INTO final_companies(orgnr, company_name, representative, email, source, updated_at)
-                        VALUES(?, ?, ?, ?, ?, ?)
+                        INSERT INTO final_companies(orgnr, company_name, representative, email, evidence_url, source, updated_at)
+                        VALUES(?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             orgnr,
                             company_name,
                             representative,
                             email,
+                            evidence_url,
                             str(record.get("override_mode", "")).strip() or "proff",
                             now,
                         ),
@@ -771,6 +793,50 @@ class ProffStore:
             self._conn.commit()
         return total
 
+    def batch_resolve_cached_firecrawl(self, cached_domains: dict[str, list[str]]) -> int:
+        """启动时批量处理：域名已在缓存里的 pending/running firecrawl 任务直接标 done。"""
+        if not cached_domains:
+            return 0
+        now = _utc_now()
+        resolved = 0
+        with self._lock:
+            # 找出所有 pending/running 的 firecrawl 任务
+            rows = self._conn.execute(
+                "SELECT fq.orgnr, c.domain FROM firecrawl_queue fq "
+                "JOIN companies c ON c.orgnr = fq.orgnr "
+                "WHERE fq.status IN ('pending', 'running')"
+            ).fetchall()
+            for row in rows:
+                domain = str(row["domain"]).strip().lower()
+                if domain not in cached_domains:
+                    continue
+                orgnr = str(row["orgnr"])
+                emails = cached_domains[domain]
+                # 标任务完成
+                self._conn.execute(
+                    "UPDATE firecrawl_queue SET status='done', updated_at=? WHERE orgnr=?",
+                    (now, orgnr),
+                )
+                # 更新公司邮箱
+                current = self._fetch_company_locked(orgnr) or {}
+                merged = _parse_json_list(str(current.get("emails_json", "[]")))
+                for em in emails:
+                    if em and em not in merged:
+                        merged.append(em)
+                self._conn.execute(
+                    "UPDATE companies SET emails_json=?, firecrawl_status='done', updated_at=? WHERE orgnr=?",
+                    (_dump_json_list(merged), now, orgnr),
+                )
+                resolved += 1
+            self._conn.commit()
+        # 刷新 final 表
+        if resolved:
+            for row in self._conn.execute(
+                "SELECT orgnr FROM companies WHERE firecrawl_status='done'"
+            ).fetchall():
+                self.refresh_final_company(str(row["orgnr"]))
+        return resolved
+
     def export_jsonl_snapshots(self, output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self._db_path, timeout=30.0)
@@ -819,6 +885,7 @@ class ProffStore:
                         "source_query": base["source_query"],
                         "representative_role": str(record.get("representative_role", "")).strip(),
                         "override_mode": str(record.get("override_mode", "")).strip(),
+                        "evidence_url": str(record.get("evidence_url", "")).strip(),
                     }
                 )
         _write_jsonl_atomic(output_dir / "companies.jsonl", companies_rows)

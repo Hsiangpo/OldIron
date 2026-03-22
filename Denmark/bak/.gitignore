@@ -1,7 +1,0 @@
-.env
-__pycache__/
-*.pyc
-output/
-tmp/
-debug/
-.pytest_cache/

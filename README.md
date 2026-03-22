@@ -61,7 +61,7 @@
 
 | 国家       | 当前主站点 / 数据源                                                                 | 主要链路                                      | 当前邮箱路线                                  |
 | ---------- | ----------------------------------------------------------------------------------- | --------------------------------------------- | --------------------------------------------- |
-| Denmark    | `dnb.com`、`datacvr.virk.dk`、`proff.dk`、`Google Maps`                             | `DNB / Virk / Proff -> GMap / Firecrawl -> delivery` | `Virk / Proff` 直出邮箱优先，缺邮箱时再补强 |
+| Denmark    | `dnb.com`、`datacvr.virk.dk`、`proff.dk`、`Google Maps`                             | `DNB / Virk / Proff -> GMap / 协议爬虫 -> delivery` | `Virk / Proff` 直出邮箱优先，缺邮箱时用协议爬虫+LLM补强 |
 | England    | `dnb.com`、`Companies House`、`Google Maps`                                         | 名录 / 详情 -> 官网 -> 邮箱 -> 交付           | `Firecrawl` 默认主链路                        |
 | SouthKorea | `catch`、`incheon`、`dart`、`saramin`、`khia`、`kssba`、`dsnuri`、`gpsc`、`dnb.com` | 列表 / 详情 -> 官网 -> 邮箱 -> 交付           | 以 `Snov` 为主，部分站点配 `Firecrawl` 辅助   |
 | Japan      | `Google Maps`、官网抓取、法人数据                                                   | 官网发现 -> 官网抽取 -> 邮箱 / 电话 / 代表人  | `Firecrawl + 规则 + Snov`                     |
@@ -241,6 +241,7 @@ python product.py Denmark day1
   - 统一的每日交付脚本
 - `shared/oldiron_core/`
   - 新的共享 Python 业务核心，当前已承接 England / Denmark 的统一交付逻辑
+  - `protocol_crawler/` — 协议爬虫模块（`curl_cffi`），用于站点链接发现和 HTML 抓取，替代 Firecrawl
 - `former/`
   - 还没有迁移到新框架的旧国家或旧模块归档区
 - `<Country>/bak/`
@@ -335,8 +336,8 @@ python product.py Denmark day1
 从整个仓库的演进看，后续主路线会越来越清晰：
 
 - 官网发现：继续保留 `Google Maps` 和目录站作为入口
-- 邮箱补齐：逐步从 `Snov` 迁移到 `Firecrawl`
-- 页面理解：用外部 LLM 做候选页筛选，用 `Firecrawl` 做页面抓取和结构化抽取
+- 邮箱补齐：逐步从 `Snov` 迁移到协议爬虫（`CRAWL_BACKEND=protocol`）+ LLM
+- 页面理解：用外部 LLM 做候选页筛选，用协议爬虫或 `Firecrawl` 做页面抓取和结构化抽取
 - 项目组织：继续按国家隔离、按站点扩展、按交付统一口径；新站点优先进入 `sites/` 这类更清晰的新结构
 
 一句话概括：

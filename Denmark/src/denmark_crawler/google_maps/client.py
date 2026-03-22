@@ -26,6 +26,8 @@ GOOGLE_HOST_HINTS = (
     "googleapis.",
     "g.page",
     "goo.gl",
+    "localguideprogram",
+    "maps.app",
 )
 SOCIAL_HOSTS = (
     "facebook.com",
@@ -140,7 +142,7 @@ KOREAN_TEXT_PATTERN = re.compile(r"[가-힣]")
 MIN_CANDIDATE_SCORE = 45
 
 DEFAULT_SEARCH_PB = (
-    "!1z6aaZ5riv6aSQ5Y6F!4m8!1m3!1d29520.55694754669!2d114.125!3d22.351!3m2!1i1024!2i768!4f13.1!7i20!10b1!12m50!1m5!18b1!30b1!31m1!1b1!34e1!2m4!5m1!6e2!20e3!39b1!6m2"
+    "!1z!4m8!1m3!1d100000!2d-0.1278!3d51.5074!3m2!1i1024!2i768!4f13.1!7i20!10b1!12m50!1m5!18b1!30b1!31m1!1b1!34e1!2m4!5m1!6e2!20e3!39b1!6m2"
     "2!49b1!63m0!66b1!74i150000!85b1!91b1!114b1!149b1!206b1!212b1!213b1!223b1!227b1!232b1!233b1!239b1!244b1!246b1!250b1!253b1!258b1!263b1!10b1!12b1!13b1!14b1!16b1!17"
     "m1!3e1!20m4!5e2!6b1!8b1!14b1!46m1!1b0!96b1!99b1!19m4!2m3!1i360!2i120!4i8!20m57!2m2!1i203!2i100!3m2!2i4!5b1!6m6!1m2!1i86!2i86!1m2!1i408!2i240!7m33!1m3!1e1!2b0!3e"
     "3!1m3!1e2!2b1!3e2!1m3!1e2!2b0!3e3!1m3!1e8!2b0!3e3!1m3!1e10!2b0!3e3!1m3!1e10!2b1!3e2!1m3!1e10!2b0!3e4!1m3!1e9!2b1!3e2!2b1!9b0!15m8!1m7!1m2!1m1!1e2!2m2!1i195!2i19"
@@ -156,7 +158,23 @@ DEFAULT_SEARCH_PB = (
 MAP_HEADERS = {
     "accept": "*/*",
     "accept-language": "en-GB,en;q=0.9,en-US;q=0.8",
-    "referer": "https://www.google.com/maps?hl=en&gl=dk",
+    "referer": "https://www.google.com/maps?hl=en&gl=gb",
+    "priority": "u=1, i",
+    "sec-ch-ua": '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
+    "sec-ch-ua-arch": '"arm"',
+    "sec-ch-ua-bitness": '"64"',
+    "sec-ch-ua-full-version-list": '"Chromium";v="131.0.6778.265", "Google Chrome";v="131.0.6778.265", "Not_A Brand";v="24.0.0.0"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-model": '""',
+    "sec-ch-ua-platform": '"macOS"',
+    "sec-ch-ua-platform-version": '"15.3.0"',
+    "sec-ch-ua-wow64": "?0",
+    "sec-ch-prefers-color-scheme": "light",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    "x-browser-channel": "stable",
+    "x-browser-year": "2026",
 }
 
 
@@ -167,13 +185,13 @@ def _default_google_maps_proxy() -> str:
 @dataclass(slots=True)
 class GoogleMapsConfig:
     hl: str = "en"
-    gl: str = "dk"
+    gl: str = "gb"
     base_url: str = "https://www.google.com"
     pb_template: str = DEFAULT_SEARCH_PB
-    min_delay: float = 0.3
-    max_delay: float = 0.8
-    long_rest_interval: int = 250
-    long_rest_seconds: float = 5.0
+    min_delay: float = 1.0
+    max_delay: float = 2.0
+    long_rest_interval: int = 100
+    long_rest_seconds: float = 15.0
     timeout: float = 30.0
     proxy_url: str = field(default_factory=_default_google_maps_proxy)
 
@@ -195,6 +213,7 @@ class GoogleMapsClient:
         self.config = config or GoogleMapsConfig()
         self._request_count = 0
         self.session = self._build_session()
+        self._warm_up()
 
     def _build_session(self) -> cffi_requests.Session:
         session = cffi_requests.Session(impersonate="chrome")
@@ -204,12 +223,24 @@ class GoogleMapsClient:
             session.proxies = {"http": proxy, "https": proxy}
         return session
 
+    def _warm_up(self) -> None:
+        """先访问 Google Maps 首页拿 cookie，模拟真实浏览器行为。"""
+        try:
+            self.session.get(
+                f"{self.config.base_url}/maps?hl={self.config.hl}&gl={self.config.gl}",
+                headers={"accept": "text/html", "accept-language": "en-GB,en;q=0.9"},
+                timeout=self.config.timeout,
+            )
+        except Exception:
+            pass  # warm up 失败不影响后续
+
     def _reset_session(self) -> None:
         try:
             self.session.close()
         except Exception:
             pass
         self.session = self._build_session()
+        self._warm_up()
 
     def _sleep(self) -> None:
         delay = random.uniform(self.config.min_delay, self.config.max_delay)
@@ -252,8 +283,9 @@ class GoogleMapsClient:
                 continue
 
             if resp.status_code == 429:
-                wait = 2**attempt * 5
-                logger.warning("Google Maps 429 限流，等待 %ds (第%d次)", wait, attempt)
+                wait = 2**attempt * 10 + random.uniform(5, 15)
+                logger.warning("Google Maps 429 限流，等待 %.0fs (第%d次)", wait, attempt)
+                self._reset_session()  # 换 TLS 指纹
                 time.sleep(wait)
                 continue
             if resp.status_code >= 500:
@@ -478,6 +510,9 @@ def _looks_like_domain(value: str) -> bool:
         return False
     if "/" in text:
         return False
+    # 域名必须是纯 ASCII（过滤中文、韩文等垃圾文本含 "......" 的情况）
+    if not text.isascii():
+        return False
     return "." in text
 
 
@@ -497,7 +532,11 @@ def _extract_website(details: list[Any]) -> str:
         if not candidate:
             continue
         parsed = urlparse(candidate)
-        if not parsed.netloc or _is_blocked_host(parsed.netloc):
+        host = (parsed.netloc or "").lower()
+        if not host or _is_blocked_host(host):
+            continue
+        # 域名必须包含至少一个 . 才合法（过滤 https://localguideprogram 等垃圾）
+        if "." not in host:
             continue
         return candidate
     return ""

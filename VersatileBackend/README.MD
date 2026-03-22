@@ -24,6 +24,7 @@
 - **`Gmap/`**：统一处理 Google Maps (gmap) 相关的门店、主体查找与官网归集。
 - **`Snov/`**：统一处理 Snov 相关的邮箱匹配与找回逻辑。
 - **`MyIP/`**：统一处理我们自有住宅代理出口，把多个住宅出口收口成一个本地 HTTP 代理入口。
+- **`Protocol/`**：协议爬虫（Python 共享模块），用 `curl_cffi` 替代 Firecrawl 进行站点链接发现和 HTML 抓取。实际代码位于 `shared/oldiron_core/protocol_crawler/`。
 
 ## 设计目标与约定
 

@@ -1,0 +1,6 @@
+# 协议爬虫临时文件
+tmp/
+debug/
+__pycache__/
+*.pyc
+.env

@@ -23,6 +23,12 @@ from denmark_crawler.sites.proff.store import FirecrawlTask
 from denmark_crawler.sites.proff.store import GMapTask
 from denmark_crawler.sites.proff.store import ProffStore
 
+try:
+    from oldiron_core.protocol_crawler import SiteCrawlClient, SiteCrawlConfig
+except ImportError:
+    SiteCrawlClient = None  # type: ignore[assignment,misc]
+    SiteCrawlConfig = None  # type: ignore[assignment,misc]
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +51,7 @@ def _build_gmap_queries(task: GMapTask) -> list[str]:
 
 
 class ProffPipelineRunner:
-    """协调 Proff -> GMap -> Firecrawl。"""
+    """协调 Proff -> GMap -> 官网爬虫(邮箱补充)。"""
 
     def __init__(
         self,
@@ -98,6 +104,7 @@ class ProffPipelineRunner:
             extract_max_urls=self.config.firecrawl_extract_max_urls,
             zero_retry_seconds=self.config.firecrawl_zero_retry_seconds,
             contact_form_retry_seconds=self.config.firecrawl_contact_form_retry_seconds,
+            crawl_backend=self.config.crawl_backend,
         )
 
     def run(self) -> None:
@@ -108,6 +115,11 @@ class ProffPipelineRunner:
         )
         if recovered:
             LOGGER.info("Proff 已回收陈旧运行中任务：%s", recovered)
+        # 启动前批量处理：域名缓存已有结果的 pending 任务直接标 done
+        cached = self._firecrawl_domain_cache.get_all_done_domains()
+        batch_resolved = self.store.batch_resolve_cached_firecrawl(cached)
+        if batch_resolved:
+            LOGGER.info("Proff 启动预处理：批量跳过 %d 个已缓存域名的任务", batch_resolved)
         workers = self._build_workers()
         for worker in workers:
             worker.start()
@@ -175,7 +187,7 @@ class ProffPipelineRunner:
             if now - last_retry >= 60.0:
                 revived = self.store.requeue_expired_firecrawl_tasks()
                 if revived:
-                    LOGGER.info("Proff Firecrawl 0结果到期，已回队列：%s", revived)
+                    LOGGER.info("Proff 邮箱补充 0结果到期，已回队列：%s", revived)
                 last_retry = now
             if now - last_snapshot >= 30.0:
                 self.store.export_jsonl_snapshots(self.config.output_dir)
@@ -183,7 +195,7 @@ class ProffPipelineRunner:
             if now - last_log >= 10.0:
                 progress = self.store.get_progress()
                 LOGGER.info(
-                    "进度：search=%s/%s gmap=%s/%s firecrawl=%s/%s companies=%s final=%s",
+                    "进度：search=%s/%s gmap=%s/%s email=%s/%s companies=%s final=%s",
                     progress.search_done,
                     progress.search_total,
                     progress.gmap_running,
@@ -325,12 +337,20 @@ class ProffPipelineRunner:
             return
         decision = self._firecrawl_domain_cache.prepare_lookup(task.domain)
         if decision.status == "done":
-            self.store.mark_firecrawl_done(
-                orgnr=task.orgnr,
-                emails=decision.emails,
-                retry_after_seconds=decision.retry_after_seconds,
-            )
-            LOGGER.info("Proff Firecrawl 命中缓存：%s | 域名=%s | 邮箱=%d", task.orgnr, task.domain, len(decision.emails))
+            if decision.emails:
+                self.store.mark_firecrawl_done(
+                    orgnr=task.orgnr,
+                    emails=decision.emails,
+                    retry_after_seconds=0.0,
+                )
+                LOGGER.info("Proff 邮箱补充 命中缓存：%s | 域名=%s | 邮箱=%d", task.orgnr, task.domain, len(decision.emails))
+            else:
+                self.store.mark_firecrawl_done(
+                    orgnr=task.orgnr,
+                    emails=[],
+                    retry_after_seconds=0.0,
+                )
+                LOGGER.info("Proff 邮箱补充 命中缓存(无邮箱)：%s | 域名=%s", task.orgnr, task.domain)
             return
         if decision.status == "wait":
             self.store.defer_firecrawl_task(
@@ -339,9 +359,9 @@ class ProffPipelineRunner:
                 delay_seconds=max(decision.wait_seconds, self.config.queue_poll_interval),
                 error_text="等待同域名查询完成",
             )
-            LOGGER.info("Proff Firecrawl 等待同域名：%s | 域名=%s", task.orgnr, task.domain)
+            LOGGER.info("Proff 邮箱补充 等待同域名：%s | 域名=%s", task.orgnr, task.domain)
             return
-        LOGGER.info("Proff Firecrawl 开始：%s | 域名=%s", task.orgnr, task.domain)
+        LOGGER.info("Proff 邮箱补充 开始：%s | 域名=%s", task.orgnr, task.domain)
         try:
             result = self._discover_emails(
                 company_name=task.company_name,
@@ -364,20 +384,26 @@ class ProffPipelineRunner:
             emails=result.emails,
             representative=result.representative,
             company_name=result.company_name,
+            evidence_url=result.evidence_url,
             retry_after_seconds=result.retry_after_seconds,
         )
-        LOGGER.info("Proff Firecrawl 完成：%s | 域名=%s | 邮箱=%d", task.orgnr, task.domain, len(result.emails))
+        LOGGER.info("Proff 邮箱补充 完成：%s | 域名=%s | 邮箱=%d", task.orgnr, task.domain, len(result.emails))
 
     def _handle_firecrawl_failure(self, task: FirecrawlTask, exc: Exception) -> None:
         attempt = task.retries + 1
         delay = self._firecrawl_delay(attempt, exc)
-        self._firecrawl_domain_cache.defer(task.domain, delay_seconds=delay, error_text=str(exc))
+        # 认证/配额错误——最终失败，释放域名锁
         if isinstance(exc, FirecrawlError) and exc.code in {"firecrawl_401", "firecrawl_402"}:
+            self._firecrawl_domain_cache.mark_done(task.domain, [])
             self.store.mark_firecrawl_failed(orgnr=task.orgnr, error_text=str(exc))
             return
+        # 达到最大重试次数——最终失败，释放域名锁
         if attempt >= self.config.firecrawl_task_max_retries:
+            self._firecrawl_domain_cache.mark_done(task.domain, [])
             self.store.mark_firecrawl_failed(orgnr=task.orgnr, error_text=str(exc))
             return
+        # 还有重试机会——defer 域名
+        self._firecrawl_domain_cache.defer(task.domain, delay_seconds=delay, error_text=str(exc))
         self.store.defer_firecrawl_task(
             orgnr=task.orgnr,
             retries=attempt,
@@ -385,7 +411,7 @@ class ProffPipelineRunner:
             error_text=str(exc),
         )
         LOGGER.warning(
-            "Proff Firecrawl 重试：%s | 域名=%s | 第%d次 | 等待=%.1fs | 原因=%s",
+            "Proff 邮箱补充 重试：%s | 域名=%s | 第%d次 | 等待=%.1fs | 原因=%s",
             task.orgnr,
             task.domain,
             attempt,
@@ -423,14 +449,23 @@ class ProffPipelineRunner:
     def _get_firecrawl_service(self) -> FirecrawlEmailService:
         if not hasattr(self._firecrawl_local, "service"):
             firecrawl_client = None
-            if self._use_go_firecrawl_backend():
+            # 协议爬虫后端
+            if self.config.crawl_backend == "protocol" and SiteCrawlClient is not None:
+                LOGGER.info("使用协议爬虫后端 (CRAWL_BACKEND=protocol)")
+                firecrawl_client = SiteCrawlClient(SiteCrawlConfig(
+                    timeout_seconds=self.config.firecrawl_timeout_seconds,
+                    max_retries=self.config.firecrawl_max_retries,
+                    proxy_url=self.config.proxy_url,
+                ))
+            elif self._use_go_firecrawl_backend():
                 firecrawl_client = GoFirecrawlService(
                     self.config.firecrawl_service_url,
                     timeout_seconds=self.config.llm_timeout_seconds,
                 )
+            key_pool = None if (self.config.crawl_backend == "protocol") else self._get_firecrawl_key_pool()
             self._firecrawl_local.service = FirecrawlEmailService(
                 self._firecrawl_settings,
-                key_pool=self._get_firecrawl_key_pool(),
+                key_pool=key_pool,
                 firecrawl_client=firecrawl_client,
             )
         return self._firecrawl_local.service
@@ -466,7 +501,7 @@ class ProffPipelineRunner:
                 health = client.health()
                 self._firecrawl_backend_enabled = bool(health.ok)
             except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("Proff Firecrawl Go 后端不可用，回退 Python：%s", exc)
+                LOGGER.warning("Proff 邮箱补充 Go 后端不可用，回退 Python：%s", exc)
                 self._firecrawl_backend_enabled = False
             return self._firecrawl_backend_enabled
 
@@ -476,10 +511,10 @@ class ProffPipelineRunner:
             return client.search_company_profile(query, company_name=company_name)
         except Exception as exc:  # noqa: BLE001
             if isinstance(client, GoGMapClient):
-                LOGGER.warning("Proff GMap Go 调用失败，当前任务回退 Python：%s", exc)
+                LOGGER.warning("Proff GMap Go 调用失败，禁用 Go 后端：%s", exc)
                 self._gmap_backend_enabled = False
-                self._gmap_local.client = GoogleMapsClient(GoogleMapsConfig(hl="en", gl="dk"))
-                return self._gmap_local.client.search_company_profile(query, company_name=company_name)
+                # 不立刻重试，让任务回队列用 Python 客户端慢速重试
+                raise
             raise
 
     def _discover_emails(self, *, company_name: str, homepage: str, domain: str):
