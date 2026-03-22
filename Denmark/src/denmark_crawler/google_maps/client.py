@@ -155,27 +155,56 @@ DEFAULT_SEARCH_PB = (
     "e2!50m3!2e2!3m1!3b1!61b1!67m5!7b1!10b1!14b1!15m1!1b0!69i761"
 )
 
-MAP_HEADERS = {
-    "accept": "*/*",
-    "accept-language": "en-GB,en;q=0.9,en-US;q=0.8",
-    "referer": "https://www.google.com/maps?hl=en&gl=gb",
-    "priority": "u=1, i",
-    "sec-ch-ua": '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
-    "sec-ch-ua-arch": '"arm"',
-    "sec-ch-ua-bitness": '"64"',
-    "sec-ch-ua-full-version-list": '"Chromium";v="131.0.6778.265", "Google Chrome";v="131.0.6778.265", "Not_A Brand";v="24.0.0.0"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-model": '""',
-    "sec-ch-ua-platform": '"macOS"',
-    "sec-ch-ua-platform-version": '"15.3.0"',
-    "sec-ch-ua-wow64": "?0",
-    "sec-ch-prefers-color-scheme": "light",
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-origin",
-    "x-browser-channel": "stable",
-    "x-browser-year": "2026",
-}
+import platform as _platform
+import sys as _sys
+
+
+def _build_map_headers() -> dict[str, str]:
+    """根据运行时平台动态生成 Client Hints，避免跨平台指纹不一致导致 429。"""
+    # 检测运行平台
+    _os = _platform.system()
+    if _os == "Darwin":
+        ua_platform = '"macOS"'
+        ua_arch = '"arm"' if _platform.machine() == "arm64" else '"x86"'
+        pv = _platform.mac_ver()[0] or "15.3.0"
+        ua_platform_version = f'"{pv}"'
+    elif _os == "Windows":
+        ua_platform = '"Windows"'
+        ua_arch = '"x86"'
+        ua_platform_version = '"15.0.0"'
+    else:
+        ua_platform = '"Linux"'
+        ua_arch = '"x86"'
+        ua_platform_version = '"6.5.0"'
+
+    # Chrome 版本带轻微随机，让不同线程/进程指纹略有差异
+    major = random.choice([131, 132, 133, 134])
+    patch = random.randint(6700, 6900)
+    sub = random.randint(100, 300)
+    ver_short = str(major)
+    ver_full = f"{major}.0.{patch}.{sub}"
+
+    return {
+        "accept": "*/*",
+        "accept-language": "en-GB,en;q=0.9,en-US;q=0.8",
+        "referer": "https://www.google.com/maps?hl=en&gl=gb",
+        "priority": "u=1, i",
+        "sec-ch-ua": f'"Chromium";v="{ver_short}", "Google Chrome";v="{ver_short}", "Not_A Brand";v="24"',
+        "sec-ch-ua-arch": ua_arch,
+        "sec-ch-ua-bitness": '"64"',
+        "sec-ch-ua-full-version-list": f'"Chromium";v="{ver_full}", "Google Chrome";v="{ver_full}", "Not_A Brand";v="24.0.0.0"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-model": '""',
+        "sec-ch-ua-platform": ua_platform,
+        "sec-ch-ua-platform-version": ua_platform_version,
+        "sec-ch-ua-wow64": "?0",
+        "sec-ch-prefers-color-scheme": "light",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "x-browser-channel": "stable",
+        "x-browser-year": "2026",
+    }
 
 
 def _default_google_maps_proxy() -> str:
@@ -271,7 +300,7 @@ class GoogleMapsClient:
         for attempt in range(1, max_retries + 1):
             self._sleep()
             try:
-                resp = self.session.get(url, headers=MAP_HEADERS, timeout=self.config.timeout)
+                resp = self.session.get(url, headers=_build_map_headers(), timeout=self.config.timeout)
             except Exception as exc:
                 err_text = str(exc)
                 logger.warning("Google Maps 请求异常 (第%d次): %s — %s", attempt, query, err_text)
