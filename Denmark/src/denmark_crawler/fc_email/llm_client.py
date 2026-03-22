@@ -107,6 +107,21 @@ class EmailUrlLlmClient:
                 picked.append(value)
         return picked[: max(int(target_count), 1)]
 
+    # 单页 HTML 最大字符数（超大页面截断，保留首尾各一半）
+    _MAX_PAGE_CHARS = 500_000
+
+    def _truncate_pages(self, pages: list[dict[str, str]]) -> list[dict[str, str]]:
+        """截断超大 HTML 页面，避免 LLM 输入超长。"""
+        result = []
+        for page in pages:
+            html = page.get("html", "")
+            if len(html) > self._MAX_PAGE_CHARS:
+                half = self._MAX_PAGE_CHARS // 2
+                LOGGER.info("HTML 页面过长已截断：url=%s 原长=%d", page.get("url", "?"), len(html))
+                html = html[:half] + "\n...（内容过长已截断）...\n" + html[-half:]
+            result.append({**page, "html": html})
+        return result
+
     def extract_contacts_from_html(
         self,
         *,
@@ -114,6 +129,8 @@ class EmailUrlLlmClient:
         homepage: str,
         pages: list[dict[str, str]],
     ) -> HtmlContactExtraction:
+        # 截断超大页面，防止超出 LLM 输入限制
+        safe_pages = self._truncate_pages(pages)
         prompt = (
             "你是企业官网联系人抽取器。\n"
             "目标：从给定网页 HTML 中抽取公司名、公司最高负责人（Director 级别以上）、所有公开邮箱。\n\n"
@@ -144,7 +161,7 @@ class EmailUrlLlmClient:
             '返回 JSON：{"company_name":"","representative":"","emails":[],"evidence_url":"","evidence_quote":""}\n\n'
             f"输入公司名: {company_name}\n"
             f"首页: {homepage}\n"
-            f"页面(JSON): {json.dumps(pages, ensure_ascii=False)}"
+            f"页面(JSON): {json.dumps(safe_pages, ensure_ascii=False)}"
         )
         data = self._call_json(prompt)
         emails = self._normalize_emails(data.get("emails"))
@@ -207,7 +224,14 @@ class EmailUrlLlmClient:
                 values.append(text)
         return values
 
+    # LLM API 输入最大字符数（留余量，API 上限 10MB）
+    _MAX_PROMPT_CHARS = 9_500_000
+
     def _call_json_with_model(self, model: str, prompt: str) -> dict[str, Any]:
+        # 最终安全截断，防止超出 API 限制
+        if len(prompt) > self._MAX_PROMPT_CHARS:
+            LOGGER.warning("Prompt 超长截断：%d -> %d 字符", len(prompt), self._MAX_PROMPT_CHARS)
+            prompt = prompt[:self._MAX_PROMPT_CHARS]
         base_kwargs: dict[str, Any] = {"model": model, "input": prompt}
         if self._reasoning_effort:
             base_kwargs["reasoning"] = {"effort": self._reasoning_effort}
