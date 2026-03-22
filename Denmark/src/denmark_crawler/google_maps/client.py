@@ -245,7 +245,10 @@ class GoogleMapsClient:
         self._warm_up()
 
     def _build_session(self) -> cffi_requests.Session:
-        session = cffi_requests.Session(impersonate="chrome")
+        # Windows 上 impersonate="chrome" 的 UA 是 macOS 但 TLS 是 Windows → 不匹配被 429
+        # chrome110 的 UA 是 Windows NT 10.0，和 Windows TLS 指纹一致
+        imp = "chrome110" if _platform.system() == "Windows" else "chrome"
+        session = cffi_requests.Session(impersonate=imp)
         session.trust_env = False
         proxy = str(self.config.proxy_url or "").strip()
         if proxy:
