@@ -209,12 +209,22 @@ class CompanyNameStore:
             self._conn.commit()
 
     def _repair_runtime_state(self) -> None:
+        """启动时修复运行状态：
+        1. running → pending（上次中断的任务）
+        2. 重置所有 pending 任务的 next_run_at（避免 defer 的任务卡在未来）
+        """
         now = _utc_now()
         with self._lock:
             for table in ("gmap_queue", "firecrawl_queue"):
+                # running → pending
                 self._conn.execute(
                     f"UPDATE {table} SET status = 'pending', updated_at = ? WHERE status = 'running'",
                     (now,),
+                )
+                # 重置 next_run_at，让 defer 的任务重启后立即可执行
+                self._conn.execute(
+                    f"UPDATE {table} SET next_run_at = ?, updated_at = ? WHERE status = 'pending' AND next_run_at > ?",
+                    (now, now, now),
                 )
             self._conn.commit()
 
