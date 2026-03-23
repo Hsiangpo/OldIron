@@ -35,7 +35,7 @@
 - Do not reintroduce the old coordinator-based multi-machine cluster flow unless explicitly requested.
 - Do not reintroduce shard-based multi-machine execution for new work.
 - Multi-machine work should be done by assigning different sites (or different whole pipelines) to different machines, then pulling back site outputs and merging at the country level.
-- Example: Mac runs `England dnb`, local runs `England companies-house`; or Mac runs England sites while local runs Denmark sites. This is the preferred model.
+- Example: Mac runs `Denmark proff` + `Denmark virk`, Windows runs `England companyname`. This is the preferred model.
 
 ## Country Delivery Rules
 
