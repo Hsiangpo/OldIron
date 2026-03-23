@@ -1,58 +1,96 @@
 # Denmark
 
-丹麦主路径现在只保留新框架的 `proff` 主线。
+丹麦采集项目，当前有两条活跃站点主线。
 
-历史实现已经归档到：
+## 当前站点
 
-- [bak](E:/Develop/Masterpiece/Spider/Website/OldIron/Denmark/bak)
+| 站点   | 入口命令                | 采集来源        | 说明                         |
+|--------|------------------------|----------------|------------------------------|
+| `proff` | `python run.py proff`  | proff.dk       | 丹麦最大的企业黄页            |
+| `virk`  | `python run.py virk`   | datacvr.virk.dk | 丹麦官方工商注册库（CVR）      |
+
+历史站点（`dnb` 等）已归档到 `bak/`。
 
 ## 当前主链路
 
 ```text
-Proff -> GMap -> Firecrawl + LLM -> product.py
+Proff / Virk → GMap（补官网）→ 协议爬虫 + LLM（补邮箱/代表人）→ product.py（去重交付）
 ```
 
-规则：
+详细流程：
 
-- `Proff` 先直取公司名、代表人、电话、地址、邮箱
-- 如果 `公司名 + 代表人 + 邮箱` 齐全，就直接入最终结果
-- 否则进入 `GMap`
-- `GMap` 查询词固定为：`公司名 + 地址 + Denmark`
-- `GMap` 拿到官网后，进入 `Firecrawl + LLM`
-- `Firecrawl` 先拿站点地图，再由外部 LLM 选 8 页，再抓这 8 页整页 HTML，再由外部 LLM 抽代表人和邮箱
-- 最终交付只输出：`company_name`, `representative`, `email`
+1. **Proff / Virk** — 直接从站点获取公司名、地址、电话、代表人、邮箱等基础字段
+2. **GMap** — 用 `公司名 + 地址 + Denmark` 查询，补充官网域名
+3. **协议爬虫 + LLM** — 对有官网但缺邮箱/代表人的公司：
+   - 协议爬虫（curl_cffi）抓取站点地图
+   - LLM 选出最可能含联系信息的页面
+   - 协议爬虫抓取这些页面，HTML 转 Markdown 后发给 LLM 提取邮箱和代表人
+4. **product.py** — 合并所有站点结果，按公司名去重后输出交付文件
 
 ## 安装
 
-```powershell
+```bash
 cd Denmark
-python -m pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
 ## 运行
 
-```powershell
-cd Denmark
+```bash
+# 跑 Proff
 python run.py proff
-python run.py proff --query ApS --max-pages-per-query 5 --search-workers 16 --gmap-workers 16 --firecrawl-workers 64
+
+# 跑 Virk
+python run.py virk
+
+# 可选参数示例
+python run.py proff --email-workers 8 --gmap-workers 64
 ```
-
-说明：
-
-- `python run.py proff` 是唯一主入口
-- `proff` 会在内部自动拉起它需要的共享后端
-- `MyIP` 不是默认启用；只有显式开了 `MYIP_ENABLED=1` 才会走住宅轮询出口
-- `GMap` 默认优先走共享 Go 后端
-- `Firecrawl` 默认走 Python 新链路；如果显式开了 `PROFF_USE_GO_FIRECRAWL_BACKEND=1`，则会自动拉起新的 Go Firecrawl 传输后端
 
 ## 交付
 
-```powershell
+```bash
 cd ..
-python product.py Denmark day1
+Denmark/.venv/bin/python product.py Denmark day1
 ```
 
-输出目录：
+输出目录：`Denmark/output/delivery/Denmark_dayNNN/`
 
-- `Denmark/output/proff/`
-- `Denmark/output/delivery/Denmark_dayNNN/`
+## 关键配置 (.env)
+
+```env
+LLM_API_KEY=你的LLM密钥
+LLM_BASE_URL=https://api.gpteamservices.com/v1
+LLM_MODEL=gpt-5.1-codex-mini
+CRAWL_BACKEND=protocol
+```
+
+## 并发参数
+
+| 参数              | 默认值 | 说明                    |
+|-------------------|--------|------------------------|
+| `--search-workers` | 16(Proff)/4(Virk) | 搜索页并发 |
+| `--gmap-workers`   | 64     | Google Maps 并发        |
+| `--email-workers`  | 8      | 协议爬虫+LLM 邮箱并发   |
+
+## 目录结构
+
+```
+Denmark/
+├── run.py              # 统一启动入口
+├── requirements.txt
+├── .env                # 本地配置（不进 git）
+├── src/
+│   └── denmark_crawler/
+│       ├── fc_email/       # 协议爬虫+LLM 邮箱提取（共享模块）
+│       └── sites/
+│           ├── proff/      # Proff 站点
+│           └── virk/       # Virk 站点
+├── output/
+│   ├── proff/              # Proff 运行产物
+│   ├── virk/               # Virk 运行产物
+│   └── delivery/           # 交付文件
+└── bak/                    # 归档的历史实现
+```

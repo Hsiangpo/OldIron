@@ -143,10 +143,21 @@ There is no single root build step. Work inside the target country directory for
 - Keep runtime commands, required env vars, output paths, and delivery behavior documented.
 - When the execution model changes (for example shard -> site split, archived `bak/` policy, or `MyIP` strategy), update the root `AGENTS.md` and root `README.md` in the same change.
 
-## Remote Machines
+## Machines
 
-- First non-local Mac machine alias: `macbook-air-england`
+### Machine 1 — Windows (secondary)
+
+- IP: `192.168.0.102` (LAN, may change — verify before use)
+- User: `Administrator`
+- Project path: `E:\Develop\Masterpiece\Spider\Website\OldIron`
+- Role: runs England CompanyName pipeline
+- Do not write the password into any tracked file.
+- **Important**: England `fc_email/` is a symlink on Mac/Linux. On Windows, after code sync, must manually copy `Denmark\src\denmark_crawler\fc_email` to `England\src\england_crawler\fc_email` directory.
+
+### Machine 2 — macOS (local, primary)
+
 - User: `Zhuanz1`
-- Role: secondary execution machine for site-level runs and result pullback
-- The LAN IP may change. Verify the current IP before use.
+- Project path: `/Users/Zhuanz1/Develop/Masterpiece/Spider/Website/OldIron`
+- Role: primary development machine; runs Denmark Proff + Virk pipelines
+- Also aliased as `macbook-air-england` on LAN (IP may change — verify before use).
 - Do not write the password into any tracked file.
