@@ -237,6 +237,11 @@ class ProffStore:
                 ON gmap_queue(status, next_run_at, updated_at, orgnr);
                 CREATE INDEX IF NOT EXISTS idx_proff_firecrawl_claim
                 ON firecrawl_queue(status, next_run_at, updated_at, orgnr);
+                CREATE TABLE IF NOT EXISTS planning_progress (
+                    industry TEXT PRIMARY KEY,
+                    task_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._conn.commit()
@@ -259,6 +264,41 @@ class ProffStore:
                     f"UPDATE {table} SET status = 'pending', updated_at = ? WHERE status = 'running'",
                     (now,),
                 )
+            self._conn.commit()
+
+    def get_planned_industries(self) -> set[str]:
+        """获取已完成规划的行业集合。"""
+        with self._lock:
+            rows = self._conn.execute("SELECT industry FROM planning_progress").fetchall()
+            return {str(row["industry"]) for row in rows}
+
+    def mark_industry_planned(self, industry: str, task_keys: list[str]) -> None:
+        """标记一个行业规划完成，同时写入搜索任务。"""
+        now = _utc_now()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO planning_progress(industry, task_count, updated_at)
+                VALUES(?, ?, ?)
+                ON CONFLICT(industry) DO UPDATE SET task_count = excluded.task_count, updated_at = excluded.updated_at
+                """,
+                (industry, len(task_keys), now),
+            )
+            for task_key in task_keys:
+                self._conn.execute(
+                    """
+                    INSERT INTO search_tasks(query, page, total_pages, status, retries, next_run_at, last_error, updated_at)
+                    VALUES(?, 1, 0, 'pending', 0, ?, '', ?)
+                    ON CONFLICT(query, page) DO NOTHING
+                    """,
+                    (task_key, now, now),
+                )
+            self._conn.commit()
+
+    def clear_planning_progress(self) -> None:
+        """清空规划进度（全新规划时使用）。"""
+        with self._lock:
+            self._conn.execute("DELETE FROM planning_progress")
             self._conn.commit()
 
     def ensure_search_seed(self, queries: list[str]) -> None:

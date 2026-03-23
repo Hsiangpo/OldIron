@@ -162,7 +162,7 @@ class CompanyNamePipelineRunner:
             )
         if not self.skip_firecrawl:
             workers.extend(
-                threading.Thread(target=self._firecrawl_worker, name=f"fc-{i+1}", daemon=True)
+                threading.Thread(target=self._email_worker, name=f"email-{i+1}", daemon=True)
                 for i in range(self.config.firecrawl_workers)
             )
         return workers
@@ -242,9 +242,9 @@ class CompanyNamePipelineRunner:
             self._gmap_local.client = client
         return client
 
-    # ── Firecrawl Worker ──
+    # ── Protocol+LLM 邮箱发现 Worker ──
 
-    def _firecrawl_worker(self) -> None:
+    def _email_worker(self) -> None:
         while not self.stop_event.is_set():
             task = self.store.claim_firecrawl_task()
             if not task:

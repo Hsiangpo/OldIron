@@ -9,14 +9,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
+SHARED_PARENT = ROOT.parent  # OldIron/ — 包含 shared/oldiron_core
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(SHARED_PARENT) not in sys.path:
+    sys.path.insert(0, str(SHARED_PARENT))
 
 USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
 
 站点：
   proff  — proff.dk 新框架主站点
+  virk   — datacvr.virk.dk 丹麦 CVR 公司注册库
 """
 
 BASE_REQUIRED_MODULES = (
@@ -39,6 +43,8 @@ def _load_project_env() -> bool:
 def _required_modules_for_command(site: str) -> tuple[tuple[str, str], ...]:
     normalized = str(site or "").strip().lower()
     if normalized == "proff":
+        return BASE_REQUIRED_MODULES
+    if normalized == "virk":
         return BASE_REQUIRED_MODULES
     return BASE_REQUIRED_MODULES
 
@@ -75,6 +81,11 @@ def _dispatch(argv: list[str]) -> int:
         from denmark_crawler.sites.proff.cli import run_proff
 
         return run_proff(rest)
+
+    if site == "virk":
+        from denmark_crawler.sites.virk.cli import run_virk
+
+        return run_virk(rest)
 
     print(f"不支持的网站: {argv[0]}")
     print(USAGE_TEXT)

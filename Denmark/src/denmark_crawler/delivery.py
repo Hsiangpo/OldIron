@@ -56,46 +56,24 @@ def _load_and_merge_records(data_root: Path) -> list[dict[str, str]]:
     import sqlite3
     from urllib.parse import unquote, urlparse
 
-    # 第一轮：按 orgnr 聚合
+    # 第一轮：按标识符聚合（orgnr 或 cvr）
     grouped: dict[str, dict[str, str | list[str]]] = {}
     if not data_root.exists():
         return []
     for site_dir in sorted(data_root.iterdir()):
         if not site_dir.is_dir():
             continue
+        # 尝试 Proff 的 store.db
         db_path = site_dir / "store.db"
-        if not db_path.exists():
-            # 兼容旧 JSONL 模式
+        if db_path.exists():
+            _load_from_proff_db(db_path, grouped)
+        # 尝试 Virk 的 virk_store.db
+        virk_db = site_dir / "virk_store.db"
+        if virk_db.exists():
+            _load_from_virk_db(virk_db, grouped)
+        # 兼容旧 JSONL 模式
+        if not db_path.exists() and not virk_db.exists():
             _load_from_jsonl(site_dir, grouped)
-            continue
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-            SELECT fc.orgnr, fc.company_name, fc.representative, fc.email,
-                   fc.evidence_url,
-                   COALESCE(NULLIF(c.phone,''), c.gmap_phone, '') AS phone,
-                   c.homepage
-            FROM final_companies fc
-            LEFT JOIN companies c ON c.orgnr = fc.orgnr
-        """).fetchall()
-        conn.close()
-        for row in rows:
-            key = str(row["orgnr"] or row["company_name"] or "").strip()
-            if not key:
-                continue
-            email = str(row["email"] or "").strip().lower()
-            homepage = unquote(str(row["homepage"] or "").strip())
-            if key not in grouped:
-                grouped[key] = {
-                    "company_name": str(row["company_name"] or "").strip(),
-                    "representative": str(row["representative"] or "").strip(),
-                    "website": homepage,
-                    "phone": str(row["phone"] or "").strip(),
-                    "evidence_url": str(row["evidence_url"] or "").strip(),
-                    "_emails": [],
-                }
-            if email and email not in grouped[key]["_emails"]:
-                grouped[key]["_emails"].append(email)
 
     # 第二轮：按 company_name.lower() 合并（消除大小写重复）
     merged: dict[str, dict[str, str | list[str]]] = {}
@@ -153,6 +131,76 @@ def _load_and_merge_records(data_root: Path) -> list[dict[str, str]]:
         if entry["emails"]:
             records.append(entry)
     return records
+
+
+def _load_from_proff_db(db_path: Path, grouped: dict) -> None:
+    """从 Proff 的 store.db 加载 final_companies。"""
+    import sqlite3
+    from urllib.parse import unquote
+
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT fc.orgnr, fc.company_name, fc.representative, fc.email,
+               fc.evidence_url,
+               COALESCE(NULLIF(c.phone,''), c.gmap_phone, '') AS phone,
+               c.homepage
+        FROM final_companies fc
+        LEFT JOIN companies c ON c.orgnr = fc.orgnr
+    """).fetchall()
+    conn.close()
+    for row in rows:
+        key = str(row["orgnr"] or row["company_name"] or "").strip()
+        if not key:
+            continue
+        email = str(row["email"] or "").strip().lower()
+        homepage = unquote(str(row["homepage"] or "").strip())
+        if key not in grouped:
+            grouped[key] = {
+                "company_name": str(row["company_name"] or "").strip(),
+                "representative": str(row["representative"] or "").strip(),
+                "website": homepage,
+                "phone": str(row["phone"] or "").strip(),
+                "evidence_url": str(row["evidence_url"] or "").strip(),
+                "_emails": [],
+            }
+        if email and email not in grouped[key]["_emails"]:
+            grouped[key]["_emails"].append(email)
+
+
+def _load_from_virk_db(db_path: Path, grouped: dict) -> None:
+    """从 Virk 的 virk_store.db 加载 final_companies。"""
+    import sqlite3
+    from urllib.parse import unquote
+
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT fc.cvr, fc.company_name, fc.representative, fc.email,
+               fc.evidence_url,
+               COALESCE(NULLIF(c.phone,''), c.gmap_phone, '') AS phone,
+               c.homepage
+        FROM final_companies fc
+        LEFT JOIN companies c ON c.cvr = fc.cvr
+    """).fetchall()
+    conn.close()
+    for row in rows:
+        key = str(row["cvr"] or row["company_name"] or "").strip()
+        if not key:
+            continue
+        email = str(row["email"] or "").strip().lower()
+        homepage = unquote(str(row["homepage"] or "").strip())
+        if key not in grouped:
+            grouped[key] = {
+                "company_name": str(row["company_name"] or "").strip(),
+                "representative": str(row["representative"] or "").strip(),
+                "website": homepage,
+                "phone": str(row["phone"] or "").strip(),
+                "evidence_url": str(row["evidence_url"] or "").strip(),
+                "_emails": [],
+            }
+        if email and email not in grouped[key]["_emails"]:
+            grouped[key]["_emails"].append(email)
 
 
 def _load_from_jsonl(site_dir: Path, grouped: dict) -> None:

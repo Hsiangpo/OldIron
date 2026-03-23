@@ -1,4 +1,4 @@
-"""Proff CLI。"""
+"""Virk CLI。"""
 
 from __future__ import annotations
 
@@ -13,10 +13,9 @@ import time
 from pathlib import Path
 from urllib.request import urlopen
 
-from denmark_crawler.sites.proff.client import ProffClient
-from denmark_crawler.sites.proff.config import ProffDenmarkConfig
-from denmark_crawler.sites.proff.config import resolve_query_file
-from denmark_crawler.sites.proff.pipeline import run_proff_pipeline
+from denmark_crawler.sites.virk.client import CfCookieManager, VirkClient
+from denmark_crawler.sites.virk.config import VirkConfig
+from denmark_crawler.sites.virk.pipeline import run_virk_pipeline
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -69,7 +68,7 @@ def _acquire_run_lock(output_dir: Path) -> Path:
                 current = {}
             lock_pid = int(current.get("pid", 0) or 0)
             if lock_pid and _pid_exists(lock_pid):
-                raise RuntimeError(f"已有运行中的丹麦 Proff 进程: PID={lock_pid}")
+                raise RuntimeError(f"已有运行中的丹麦 Virk 进程: PID={lock_pid}")
             try:
                 lock_path.unlink()
             except OSError:
@@ -78,7 +77,7 @@ def _acquire_run_lock(output_dir: Path) -> Path:
         with os.fdopen(fd, "w", encoding="utf-8") as fp:
             json.dump(payload, fp, ensure_ascii=False)
         return lock_path
-    raise RuntimeError("无法获取丹麦 Proff 运行锁，请稍后重试。")
+    raise RuntimeError("无法获取丹麦 Virk 运行锁")
 
 
 def _release_run_lock(lock_path: Path) -> None:
@@ -96,10 +95,9 @@ def _release_run_lock(lock_path: Path) -> None:
         return
 
 
-# --------------- Go GMap 后端自动管理 ---------------
+# ---- Go GMap 后端管理（复用 Proff 逻辑） ----
 
 def _load_env_file(path: Path) -> dict[str, str]:
-    """从 .env 文件加载环境变量。"""
     if not path.exists():
         return {}
     values: dict[str, str] = {}
@@ -113,7 +111,6 @@ def _load_env_file(path: Path) -> dict[str, str]:
 
 
 def _gmap_is_running() -> bool:
-    """检查 GMap 后端是否已在运行。"""
     pid_path = BACKEND_OUTPUT / GMAP_DEF["pid"]
     if not pid_path.exists():
         return False
@@ -126,7 +123,6 @@ def _gmap_is_running() -> bool:
 
 
 def _gmap_health_ok() -> bool:
-    """检查 GMap 后端健康状态。"""
     try:
         resp = urlopen(f"{GMAP_DEF['addr']}/healthz", timeout=3)  # noqa: S310
         return resp.status == 200
@@ -135,14 +131,10 @@ def _gmap_health_ok() -> bool:
 
 
 def _start_gmap_backend() -> bool:
-    """启动 Go GMap 后端，返回是否实际启动了新进程。"""
     if _gmap_is_running() and _gmap_health_ok():
         LOGGER.info("Go GMap 后端已在运行，跳过启动")
         return False
-
     BACKEND_OUTPUT.mkdir(parents=True, exist_ok=True)
-
-    # 构建环境变量
     env = os.environ.copy()
     for key, value in _load_env_file(VERSATILE_ROOT / ".env").items():
         env.setdefault(key, value)
@@ -151,35 +143,26 @@ def _start_gmap_backend() -> bool:
     env.setdefault("HTTPS_PROXY", proxy)
     for key, value in GMAP_DEF["env"].items():
         env[key] = value
-
     log_path = BACKEND_OUTPUT / GMAP_DEF["log"]
     pid_path = BACKEND_OUTPUT / GMAP_DEF["pid"]
-
     LOGGER.info("正在启动 Go GMap 后端...")
     with log_path.open("ab") as log_fp:
         process = subprocess.Popen(  # noqa: S603
-            GMAP_DEF["cmd"],
-            cwd=str(VERSATILE_ROOT),
-            env=env,
-            stdout=log_fp,
-            stderr=log_fp,
+            GMAP_DEF["cmd"], cwd=str(VERSATILE_ROOT),
+            env=env, stdout=log_fp, stderr=log_fp,
         )
     pid_path.write_text(json.dumps({"pid": process.pid}), encoding="utf-8")
-
-    # 等待健康检查
     deadline = time.monotonic() + 20.0
     while time.monotonic() < deadline:
         if _gmap_health_ok():
             LOGGER.info("Go GMap 后端已启动：PID=%s", process.pid)
             return True
         time.sleep(0.5)
-
     LOGGER.warning("Go GMap 后端启动超时，请检查 %s", log_path)
     return True
 
 
 def _stop_gmap_backend() -> None:
-    """停止 Go GMap 后端。"""
     pid_path = BACKEND_OUTPUT / GMAP_DEF["pid"]
     if not pid_path.exists():
         return
@@ -193,7 +176,6 @@ def _stop_gmap_backend() -> None:
         return
     try:
         os.kill(pid, signal.SIGTERM)
-        # 等进程退出
         for _ in range(20):
             if not _pid_exists(pid):
                 break
@@ -206,26 +188,24 @@ def _stop_gmap_backend() -> None:
     LOGGER.info("Go GMap 后端已停止")
 
 
-# --------------- CLI ---------------
+# ---- CLI ----
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="丹麦 Proff 搜索爬虫")
+    parser = argparse.ArgumentParser(description="丹麦 Virk CVR 爬虫")
     parser.add_argument("--output-dir", default="", help="输出目录")
-    parser.add_argument("--query-file", default="", help="自定义 query 文件，每行一个关键词")
-    parser.add_argument("--query", action="append", default=[], help="直接追加 query，可重复传参")
-    parser.add_argument("--max-pages-per-query", type=int, default=400, help="每个 query 最大抓取页数")
-    parser.add_argument("--max-companies", type=int, default=0, help="最大公司数")
-    parser.add_argument("--search-workers", type=int, default=16, help="搜索页并发数")
+    parser.add_argument("--search-workers", type=int, default=4, help="搜索并发数")
+    parser.add_argument("--detail-workers", type=int, default=4, help="详情并发数")
     parser.add_argument("--gmap-workers", type=int, default=64, help="Google Maps 并发数")
-    parser.add_argument("--email-workers", dest="firecrawl_workers", type=int, default=32, help="官网爬虫/邮箱补充并发数")
-    parser.add_argument("--skip-gmap", action="store_true", help="跳过 Google Maps 补官网阶段")
-    parser.add_argument("--skip-email", dest="skip_firecrawl", action="store_true", help="跳过官网爬虫邮箱补充阶段")
+    parser.add_argument("--email-workers", dest="firecrawl_workers", type=int, default=128, help="邮箱补充并发数")
+    parser.add_argument("--skip-gmap", action="store_true", help="跳过 GMap 阶段")
+    parser.add_argument("--skip-email", dest="skip_firecrawl", action="store_true", help="跳过邮箱补充阶段")
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     return parser
 
 
-def run_proff(argv: list[str]) -> int:
-    # 提高文件描述符上限，避免高并发下 Too many open files
+def run_virk(argv: list[str]) -> int:
+    """Virk CLI 主入口。"""
+    # 提高文件描述符上限
     import resource
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     target = min(65536, hard)
@@ -233,43 +213,47 @@ def run_proff(argv: list[str]) -> int:
         resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
 
     args = _build_parser().parse_args(argv)
-    output_dir = Path(args.output_dir).resolve() if str(args.output_dir).strip() else ROOT / "output" / "proff"
+    output_dir = Path(args.output_dir).resolve() if str(args.output_dir).strip() else ROOT / "output" / "virk"
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = _configure_logging(output_dir, args.log_level)
-    logging.getLogger(__name__).info("运行日志已落盘：%s", log_path)
+    LOGGER.info("运行日志已落盘：%s", log_path)
     lock_path = _acquire_run_lock(output_dir)
     atexit.register(_release_run_lock, lock_path)
 
-    # Go GMap 后端已默认禁用，仅在环境变量 PROFF_USE_GO_GMAP_BACKEND=1 时启动
+    # Go GMap 后端（默认自动启动，除非 --skip-gmap）
     gmap_auto_started = False
-    if not args.skip_gmap and os.environ.get("PROFF_USE_GO_GMAP_BACKEND", "").strip().lower() in ("1", "true", "yes"):
+    if not args.skip_gmap:
         gmap_auto_started = _start_gmap_backend()
         if gmap_auto_started:
             atexit.register(_stop_gmap_backend)
 
-    query_file = resolve_query_file(ROOT, str(args.query_file or "").strip())
-    config = ProffDenmarkConfig.from_env(
+    config = VirkConfig.from_env(
         project_root=ROOT,
         output_dir=output_dir,
-        query_file=query_file,
-        inline_queries=[str(item).strip() for item in list(args.query or []) if str(item).strip()],
-        max_pages_per_query=max(int(args.max_pages_per_query or 1), 1),
-        max_companies=max(int(args.max_companies or 0), 0),
         search_workers=max(int(args.search_workers or 1), 1),
+        detail_workers=max(int(args.detail_workers or 1), 1),
         gmap_workers=max(int(args.gmap_workers or 1), 1),
         firecrawl_workers=max(int(args.firecrawl_workers or 1), 1),
     )
-    config.validate(skip_firecrawl=bool(args.skip_firecrawl))
-    client = ProffClient(
-        base_url=config.base_url,
+
+    # 初始化独立浏览器 CF cookie 管理器
+    LOGGER.info("正在初始化独立浏览器获取 Cloudflare cookie...")
+    cf_manager = CfCookieManager(
+        target_url=f"{config.base_url}/",
+        headless=config.cf_browser_headless,
+        refresh_interval=config.cf_refresh_interval,
+        proxy_url=config.proxy_url,
+    )
+
+    client = VirkClient(
+        cf_manager=cf_manager,
         timeout_seconds=config.timeout_seconds,
         proxy_url=config.proxy_url,
-        min_interval_seconds=config.min_interval_seconds,
     )
+
     try:
-        run_proff_pipeline(
-            config,
-            client,
+        run_virk_pipeline(
+            config, client,
             skip_gmap=bool(args.skip_gmap),
             skip_firecrawl=bool(args.skip_firecrawl),
         )

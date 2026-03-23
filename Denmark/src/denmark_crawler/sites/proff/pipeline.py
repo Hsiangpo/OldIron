@@ -137,6 +137,19 @@ class ProffPipelineRunner:
         existing_count = self.store.search_task_count()
         use_reseed = existing_count > 0 and not self.store.has_segmented_search_tasks()
         if existing_count > 0 and not use_reseed:
+            # 已有分段任务，检查规划是否跑完
+            planned = self.store.get_planned_industries()
+            if planned:
+                LOGGER.info("Proff 已有分段任务=%d，已规划行业=%d，检查是否还有未规划行业", existing_count, len(planned))
+                # 继续规划剩余行业（断点续跑）
+                self.client.discover_max_coverage_task_keys(
+                    max_results_per_segment=self.config.max_results_per_segment,
+                    skip_industries=planned,
+                    on_industry_done=self.store.mark_industry_planned,
+                    planning_workers=16,
+                )
+                final_count = self.store.search_task_count()
+                LOGGER.info("Proff 规划续跑完成：总搜索任务=%d", final_count)
             return
         if self.config.queries:
             LOGGER.info("Proff 搜索规划模式：定向 query 分段")
@@ -146,17 +159,25 @@ class ProffPipelineRunner:
             )
             if not task_keys:
                 task_keys = list(self.config.queries)
+            if use_reseed:
+                replaced = self.store.reseed_search_tasks(task_keys)
+                LOGGER.info("Proff 已切换到 API 深分段搜索任务：segments=%s", replaced)
+                return
+            self.store.ensure_search_seed(task_keys)
+            LOGGER.info("Proff API 深分段任务已装载：segments=%s", len(task_keys))
         else:
-            LOGGER.info("Proff 搜索规划模式：极限覆盖 industry+geo 分段")
-            task_keys = self.client.discover_max_coverage_task_keys(
+            LOGGER.info("Proff 搜索规划模式：极限覆盖 industry+geo 分段（增量断点）")
+            planned = self.store.get_planned_industries()
+            if planned:
+                LOGGER.info("Proff 断点续跑：已规划行业=%d，继续剩余行业", len(planned))
+            self.client.discover_max_coverage_task_keys(
                 max_results_per_segment=self.config.max_results_per_segment,
+                skip_industries=planned,
+                on_industry_done=self.store.mark_industry_planned,
+                planning_workers=16,
             )
-        if use_reseed:
-            replaced = self.store.reseed_search_tasks(task_keys)
-            LOGGER.info("Proff 已切换到 API 深分段搜索任务：segments=%s", replaced)
-            return
-        self.store.ensure_search_seed(task_keys)
-        LOGGER.info("Proff API 深分段任务已装载：segments=%s", len(task_keys))
+            final_count = self.store.search_task_count()
+            LOGGER.info("Proff 极限覆盖规划完成：总搜索任务=%d", final_count)
 
     def _build_workers(self) -> list[threading.Thread]:
         workers = [
@@ -170,7 +191,7 @@ class ProffPipelineRunner:
             )
         if not self.skip_firecrawl:
             workers.extend(
-                threading.Thread(target=self._firecrawl_worker, name=f"proff-firecrawl-{index+1}", daemon=True)
+                threading.Thread(target=self._email_worker, name=f"proff-email-{index+1}", daemon=True)
                 for index in range(self.config.firecrawl_workers)
             )
         return workers
@@ -323,7 +344,7 @@ class ProffPipelineRunner:
         )
         LOGGER.info("Proff GMap 完成：%s | 官网=%s", task.orgnr, result.website or "-")
 
-    def _firecrawl_worker(self) -> None:
+    def _email_worker(self) -> None:
         while not self.stop_event.is_set():
             task = self.store.claim_firecrawl_task()
             if task is None:

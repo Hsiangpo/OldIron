@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 from html import unescape
 from typing import Any
@@ -345,55 +346,112 @@ class ProffClient:
                 values.append(value)
         return values
 
-    def discover_max_coverage_task_keys(self, *, max_results_per_segment: int) -> list[str]:
-        """按行业目录做最大覆盖分段。"""
-        task_keys: list[str] = []
-        industries = self.fetch_industry_catalog()
-        for index, industry in enumerate(industries, 1):
-            if index == 1 or index % 25 == 0:
-                LOGGER.info("Proff 极限分段规划：industry=%d/%d", index, len(industries))
+    def _make_planning_session(self) -> requests.Session:
+        """为并发规划创建独立 HTTP session（无全局锁）。"""
+        session = requests.Session()
+        session.headers.update(dict(self._session.headers))
+        if self._session.proxies:
+            session.proxies.update(dict(self._session.proxies))
+        return session
+
+    def _fetch_payload_with_session(
+        self, session: requests.Session, *, industry: str, filter_text: str,
+    ) -> dict[str, Any]:
+        """用指定 session 发请求（规划专用，不走全局锁）。"""
+        params: list[tuple[str, object]] = [("page", 1)]
+        if clean_text(industry):
+            params.append(("industry", clean_text(industry)))
+        if clean_text(filter_text):
+            params.append(("filter", clean_text(filter_text)))
+        params.append(("highlight", "registerListing.alternativeNames.name"))
+        response = session.get(self.api_url, params=params, timeout=self.timeout_seconds)
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
+    def _plan_single_industry(
+        self, session: requests.Session, industry: str, max_results_per_segment: int,
+    ) -> list[str]:
+        """规划单个行业的搜索任务分段。"""
+        industry_keys: list[str] = []
+        try:
+            payload = self._fetch_payload_with_session(session, industry=industry, filter_text="")
+        except Exception:
+            return []
+        hits = int(payload.get("hits", 0) or 0)
+        if hits <= 0:
+            return []
+        if hits <= max_results_per_segment:
+            return [build_task_key("", "", industry=industry)]
+        municipalities = extract_filter_values(payload, "municipality")
+        if not municipalities:
+            return [build_task_key("", "", industry=industry)]
+        for municipality_name, municipality_hits in municipalities:
+            municipality_filter = f"municipality:{municipality_name}"
+            if municipality_hits <= max_results_per_segment:
+                industry_keys.append(build_task_key("", municipality_filter, industry=industry))
+                continue
             try:
-                payload, _source_url = self.fetch_search_payload(
-                    search_term="",
-                    filter_text="",
-                    industry=industry,
-                    page=1,
+                muni_payload = self._fetch_payload_with_session(
+                    session, industry=industry, filter_text=municipality_filter,
                 )
             except Exception:
+                industry_keys.append(build_task_key("", municipality_filter, industry=industry))
                 continue
-            hits = int(payload.get("hits", 0) or 0)
-            if hits <= 0:
+            postplaces = extract_filter_values(muni_payload, "postplace")
+            if not postplaces:
+                industry_keys.append(build_task_key("", municipality_filter, industry=industry))
                 continue
-            if hits <= max_results_per_segment:
-                task_keys.append(build_task_key("", "", industry=industry))
-                continue
-            municipalities = extract_filter_values(payload, "municipality")
-            if not municipalities:
-                task_keys.append(build_task_key("", "", industry=industry))
-                continue
-            for municipality_name, municipality_hits in municipalities:
-                municipality_filter = f"municipality:{municipality_name}"
-                if municipality_hits <= max_results_per_segment:
-                    task_keys.append(build_task_key("", municipality_filter, industry=industry))
-                    continue
-                try:
-                    municipality_payload, _source_url = self.fetch_search_payload(
-                        search_term="",
-                        filter_text=municipality_filter,
-                        industry=industry,
-                        page=1,
-                    )
-                except Exception:
-                    task_keys.append(build_task_key("", municipality_filter, industry=industry))
-                    continue
-                postplaces = extract_filter_values(municipality_payload, "postplace")
-                if not postplaces:
-                    task_keys.append(build_task_key("", municipality_filter, industry=industry))
-                    continue
-                for postplace_name, _postplace_hits in postplaces:
-                    task_keys.append(build_task_key("", f"postplace:{postplace_name}", industry=industry))
+            for postplace_name, _postplace_hits in postplaces:
+                industry_keys.append(build_task_key("", f"postplace:{postplace_name}", industry=industry))
+        return industry_keys
+
+    def discover_max_coverage_task_keys(
+        self,
+        *,
+        max_results_per_segment: int,
+        skip_industries: set[str] | None = None,
+        on_industry_done: object | None = None,
+        planning_workers: int = 1,
+    ) -> list[str]:
+        """按行业目录做最大覆盖分段。支持断点续跑和并发规划。"""
+        _skip = skip_industries or set()
+        industries = self.fetch_industry_catalog()
+        todo = [ind for ind in industries if ind not in _skip]
+        if _skip:
+            LOGGER.info("Proff 规划：总行业=%d，跳过已规划=%d，待规划=%d", len(industries), len(_skip), len(todo))
+        if not todo:
+            LOGGER.info("Proff 规划：所有行业已完成，无需规划")
+            return []
+        all_keys: list[str] = []
+        keys_lock = threading.Lock()
+        done_count = [0]  # 用列表做可变计数器
+        workers = max(1, min(int(planning_workers), 32))
+
+        def _process(industry: str) -> None:
+            session = self._make_planning_session()
+            try:
+                industry_keys = self._plan_single_industry(session, industry, max_results_per_segment)
+            finally:
+                session.close()
+            with keys_lock:
+                all_keys.extend(industry_keys)
+                done_count[0] += 1
+                if done_count[0] == 1 or done_count[0] % 25 == 0 or done_count[0] == len(todo):
+                    LOGGER.info("Proff 极限分段规划：%d/%d（并发=%d）", done_count[0], len(todo), workers)
+            # 回调保存断点（store 自带线程锁）
+            if callable(on_industry_done):
+                on_industry_done(industry, industry_keys)
+
+        if workers == 1:
+            for industry in todo:
+                _process(industry)
+        else:
+            LOGGER.info("Proff 并发规划启动：workers=%d，待规划行业=%d", workers, len(todo))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(_process, todo))
         unique: list[str] = []
-        for task_key in task_keys:
+        for task_key in all_keys:
             if task_key not in unique:
                 unique.append(task_key)
         return unique
