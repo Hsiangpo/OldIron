@@ -143,6 +143,15 @@ There is no single root build step. Work inside the target country directory for
 - Keep runtime commands, required env vars, output paths, and delivery behavior documented.
 - When the execution model changes (for example shard -> site split, archived `bak/` policy, or `MyIP` strategy), update the root `AGENTS.md` and root `README.md` in the same change.
 
+## Code Sync Rules
+
+- Every code change must be committed and pushed to GitHub immediately after verification.
+- After pushing, **all machines** must be updated to the latest code before restarting any process.
+  - Machine 2 (Mac): `git pull`
+  - Machine 1 (Windows): `git pull` on the E: drive project, then manually copy `Denmark\src\denmark_crawler\fc_email` to `England\src\england_crawler\fc_email` (because symlinks don't work on Windows).
+- Never run a process on stale code. If in doubt, `git pull` first.
+- The `.env` files are not tracked by git. When `.env` changes, manually sync to all machines.
+
 ## Machines
 
 ### Machine 1 — Windows (secondary)
