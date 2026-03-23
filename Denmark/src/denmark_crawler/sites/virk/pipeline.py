@@ -101,19 +101,31 @@ class VirkPipelineRunner:
 
     def run(self) -> None:
         self.config.validate()
-        self._prepare_search_segments()
+        # 先回收陈旧任务，让已有队列立刻可用
         recovered = self.store.requeue_stale_running_tasks(
             older_than_seconds=self.config.stale_running_requeue_seconds
         )
         if recovered:
             LOGGER.info("Virk 已回收陈旧运行中任务：%s", recovered)
 
+        # 先启动所有 worker（处理已有的 detail/gmap/firecrawl 队列）
         workers = self._build_workers()
         for w in workers:
             w.start()
             # email worker 错峰启动，避免同时请求 LLM API
             if w.name.startswith("virk-email-"):
                 time.sleep(0.3)
+
+        # 在后台线程做搜索规划（可能被 429 卡很久，不阻塞已有任务）
+        def _bg_plan() -> None:
+            try:
+                self._prepare_search_segments()
+            except Exception as exc:
+                LOGGER.error("Virk 搜索规划异常：%s", exc)
+
+        plan_thread = threading.Thread(target=_bg_plan, name="virk-planner", daemon=True)
+        plan_thread.start()
+
         try:
             self._monitor()
         finally:
