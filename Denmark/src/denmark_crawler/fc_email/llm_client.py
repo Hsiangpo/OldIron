@@ -292,10 +292,16 @@ class EmailUrlLlmClient:
         return {}
 
     def _call_api_with_retry(self, kwargs: dict[str, Any], max_retries: int = 5) -> str:
-        """带指数退避的 API 调用，处理网络错误、超时、429 限流和 5xx 错误。"""
+        """带指数退避的 API 调用，处理网络错误、超时、429 限流和 5xx 错误。
+
+        429 限流：无限排队等待（30-60 秒），不消耗重试次数。
+        其他可重试错误：最多 max_retries 次。
+        """
         import time as _time
+        import random as _random
         last_exc: Exception | None = None
-        for attempt in range(max_retries):
+        attempt = 0
+        while True:
             try:
                 resp = self._client.responses.create(**kwargs)
                 return str(getattr(resp, "output_text", "") or "")
@@ -304,21 +310,30 @@ class EmailUrlLlmClient:
                 raise
             except Exception as exc:  # noqa: BLE001
                 err_str = str(exc)
-                # 判断是否值得重试：网络错误、超时、429、5xx
+                # 429 限流：无限排队等待，不计入重试次数
+                is_429 = any(kw in err_str for kw in ("429", "rate_limit", "Rate limit"))
+                if is_429:
+                    wait = 30 + _random.random() * 30  # 30-60 秒随机等待
+                    LOGGER.warning("LLM API 429 限流排队，等待 %.0fs", wait)
+                    _time.sleep(wait)
+                    continue
+                # 其他可重试错误：网络、超时、5xx
                 retryable = any(kw in err_str for kw in (
-                    "Connection", "Timeout", "timeout", "429", "500", "502", "503",
-                    "rate_limit", "Rate limit", "overloaded", "capacity",
+                    "Connection", "Timeout", "timeout", "500", "502", "503",
+                    "overloaded", "capacity",
                 ))
                 if not retryable:
                     raise
+                attempt += 1
                 last_exc = exc
+                if attempt >= max_retries:
+                    raise last_exc
                 wait = min(2 ** (attempt + 1), 32)  # 2s, 4s, 8s, 16s, 32s
                 LOGGER.warning(
                     "LLM API 重试 %d/%d，等待 %ds，错误: %s",
-                    attempt + 1, max_retries, wait, exc,
+                    attempt, max_retries, wait, exc,
                 )
                 _time.sleep(wait)
-        raise last_exc
 
     def _build_list_input(self, prompt: str) -> list[dict[str, object]]:
         return [
