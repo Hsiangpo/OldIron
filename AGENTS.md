@@ -154,6 +154,15 @@ There is no single root build step. Work inside the target country directory for
 
 ## Machines
 
+When a new machine joins the project, it **must** be registered here with at least:
+- Machine number (e.g. Machine 3)
+- OS
+- User name
+- LAN IP (note it may change)
+- Project path
+- Role (which country/site it runs)
+- Do not write the password into any tracked file.
+
 ### Machine 1 — Windows (secondary)
 
 - IP: `192.168.0.102` (LAN, may change — verify before use)
