@@ -42,7 +42,7 @@ class CompanyNameConfig:
     gmap_proxy: str = ""
 
     # Protocol+LLM 邮箱发现（内部字段名保留 firecrawl_ 前缀以兼容数据库）
-    firecrawl_workers: int = 32
+    firecrawl_workers: int = 8
     firecrawl_keys_inline: list[str] = field(default_factory=list)
     firecrawl_keys_file: str = ""
     firecrawl_pool_db: str = ""
@@ -87,7 +87,7 @@ class CompanyNameConfig:
         output_dir: Path,
         excel_files: list[Path] | None = None,
         gmap_workers: int = 64,
-        firecrawl_workers: int = 32,
+        firecrawl_workers: int = 8,
     ) -> CompanyNameConfig:
         fc_keys_raw = _env_str("FIRECRAWL_API_KEYS")
         fc_keys = [k.strip() for k in fc_keys_raw.split(",") if k.strip()] if fc_keys_raw else []
