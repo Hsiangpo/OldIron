@@ -150,7 +150,7 @@ class VirkPipelineRunner:
         counters = {"segments": 0, "estimated": 0}
 
         def _plan_kommune(k: dict) -> None:
-            """规划单个 Kommune 的搜索分段。"""
+            """规划单个 Kommune 的搜索分段（含 429 重试）。"""
             kode = str(k.get("kommunekode", ""))
             navn = str(k.get("navn", ""))
             base_key = f"k{kode}"
@@ -159,8 +159,22 @@ class VirkPipelineRunner:
                     counters["segments"] += 1
                 return
 
+            def _search_with_retry(**kwargs: object) -> tuple:
+                """带 429 退避重试的搜索请求。"""
+                for attempt in range(6):
+                    try:
+                        return self.client.search_companies(**kwargs)
+                    except Exception as exc:
+                        if "429" in str(exc) and attempt < 5:
+                            wait = 2 ** (attempt + 1)  # 2, 4, 8, 16, 32 秒
+                            LOGGER.warning("Virk 规划 429 重试 %d/5：%s，等待 %ds", attempt + 1, navn, wait)
+                            time.sleep(wait)
+                            continue
+                        raise
+                return ([], 0)
+
             # 探测该 Kommune 总量
-            _, total = self.client.search_companies(kommune=[kode], page_size=10, page_index=0)
+            _, total = _search_with_retry(kommune=[kode], page_size=10, page_index=0)
 
             if total == 0:
                 self.store.save_segment(base_key, kode, navn, "", "", 0, 0)
@@ -190,7 +204,7 @@ class VirkPipelineRunner:
                             counters["segments"] += 1
                         continue
 
-                    _, sub_total = self.client.search_companies(
+                    _, sub_total = _search_with_retry(
                         kommune=[kode], virksomhedsform=[vf_kode],
                         page_size=10, page_index=0,
                     )
@@ -216,8 +230,8 @@ class VirkPipelineRunner:
                     LOGGER.warning("Virk %s 按公司类型覆盖 %d/%d，部分公司可能遗漏",
                                    navn, covered, total)
 
-        # 4 线程并发规划
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="virk-plan") as pool:
+        # 2 线程并发规划（降低并发避免 429）
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="virk-plan") as pool:
             futures = [pool.submit(_plan_kommune, k) for k in kommuner]
             for future in as_completed(futures):
                 exc = future.exception()
