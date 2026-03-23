@@ -111,6 +111,9 @@ class VirkPipelineRunner:
         workers = self._build_workers()
         for w in workers:
             w.start()
+            # email worker 错峰启动，避免同时请求 LLM API
+            if w.name.startswith("virk-email-"):
+                time.sleep(0.3)
         try:
             self._monitor()
         finally:

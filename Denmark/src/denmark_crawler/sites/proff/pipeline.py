@@ -123,6 +123,9 @@ class ProffPipelineRunner:
         workers = self._build_workers()
         for worker in workers:
             worker.start()
+            # email worker 错峰启动，避免同时请求 LLM API
+            if worker.name.startswith("proff-email-"):
+                time.sleep(0.3)
         try:
             self._monitor_until_done()
         finally:
