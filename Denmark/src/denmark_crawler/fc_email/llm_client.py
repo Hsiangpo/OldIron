@@ -107,19 +107,50 @@ class EmailUrlLlmClient:
                 picked.append(value)
         return picked[: max(int(target_count), 1)]
 
-    # 单页 HTML 最大字符数（超大页面截断，保留首尾各一半）
-    _MAX_PAGE_CHARS = 500_000
+    # 单页 Markdown 最大字符数（gpt-5.1-codex-mini 输入上限 272k token ≈ 816k 字符，
+    # 按最多 8 页计算：8×80k=640k + prompt 模板 ≈ 700k，留安全余量）
+    _MAX_PAGE_CHARS = 80_000
 
-    def _truncate_pages(self, pages: list[dict[str, str]]) -> list[dict[str, str]]:
-        """截断超大 HTML 页面，避免 LLM 输入超长。"""
+    def _convert_pages_to_markdown(self, pages: list[dict[str, str]]) -> list[dict[str, str]]:
+        """将 HTML 页面转为 Markdown 并截断超长内容，大幅减少 token 消耗。"""
+        from bs4 import BeautifulSoup
+        from markdownify import markdownify as md
+
+        # 需要彻底删除的标签（连同内容一起删除）
+        _REMOVE_TAGS = ['script', 'style', 'img', 'svg', 'video', 'audio',
+                        'canvas', 'iframe', 'noscript']
+
         result = []
         for page in pages:
             html = page.get("html", "")
-            if len(html) > self._MAX_PAGE_CHARS:
+            url = page.get("url", "?")
+            if not html.strip():
+                result.append({"url": url, "content": ""})
+                continue
+            try:
+                # 先用 BeautifulSoup 删除无用标签（连同内容）
+                soup = BeautifulSoup(html, "html.parser")
+                for tag in soup.find_all(_REMOVE_TAGS):
+                    tag.decompose()
+                # 再用 markdownify 转换清洗后的 HTML
+                content = md(str(soup))
+            except Exception:  # noqa: BLE001
+                # 解析失败则保留原始 HTML
+                content = html
+            # 合并连续空行（Markdown 转换后常有大量空行）
+            content = re.sub(r'\n{3,}', '\n\n', content).strip()
+            original_html_len = len(html)
+            md_len = len(content)
+            if md_len < original_html_len:
+                LOGGER.debug("HTML→Markdown 压缩：url=%s html=%d md=%d 压缩率=%.0f%%",
+                             url, original_html_len, md_len,
+                             (1 - md_len / max(original_html_len, 1)) * 100)
+            # 截断超长 Markdown
+            if len(content) > self._MAX_PAGE_CHARS:
                 half = self._MAX_PAGE_CHARS // 2
-                LOGGER.info("HTML 页面过长已截断：url=%s 原长=%d", page.get("url", "?"), len(html))
-                html = html[:half] + "\n...（内容过长已截断）...\n" + html[-half:]
-            result.append({**page, "html": html})
+                LOGGER.info("Markdown 页面过长已截断：url=%s 原长=%d", url, len(content))
+                content = content[:half] + "\n\n...（内容过长已截断）...\n\n" + content[-half:]
+            result.append({"url": url, "content": content})
         return result
 
     def extract_contacts_from_html(
@@ -129,11 +160,11 @@ class EmailUrlLlmClient:
         homepage: str,
         pages: list[dict[str, str]],
     ) -> HtmlContactExtraction:
-        # 截断超大页面，防止超出 LLM 输入限制
-        safe_pages = self._truncate_pages(pages)
+        # HTML → Markdown 转换 + 截断，大幅减少 token 消耗
+        safe_pages = self._convert_pages_to_markdown(pages)
         prompt = (
             "你是企业官网联系人抽取器。\n"
-            "目标：从给定网页 HTML 中抽取公司名、公司最高负责人（Director 级别以上）、所有公开邮箱。\n\n"
+            "目标：从给定网页内容（Markdown 格式）中抽取公司名、公司最高负责人（Director 级别以上）、所有公开邮箱。\n\n"
             "=== 代表人规则（极其严格）===\n"
             "1. 只接受以下级别的人作为代表人（从高到低）：\n"
             "   CEO / Managing Director / Director / Chairman / "
@@ -142,13 +173,13 @@ class EmailUrlLlmClient:
             "2. 【不接受】以下级别的人：Manager / Coordinator / "
             "Consultant / Advisor / Employee / Assistant / Secretary / "
             "Accountant / Receptionist / Clerk / Officer（无 Chief 前缀的）。这些职位太低，不是公司代表人。\n"
-            "3. 【严禁推断】代表人姓名必须在网页 HTML 正文中原文出现过。\n"
+            "3. 【严禁推断】代表人姓名必须在网页正文中原文出现过。\n"
             "   绝对禁止从输入的公司名中拆分或猜测人名。\n"
             "   例：公司名叫 'Smith & Johnson Limited'，\n"
-            "   你不能直接返回 'Smith' 或 'Johnson'，除非 HTML 正文里也写了这个名字和对应的 Director 级别职位。\n"
+            "   你不能直接返回 'Smith' 或 'Johnson'，除非正文里也写了这个名字和对应的 Director 级别职位。\n"
             "4. 代表人必须是真实人名（名+姓），不能是职位名、公司名或占位符。\n"
-            "5. evidence_quote 必须包含代表人姓名的原文片段（从 HTML 中复制）。\n"
-            "   如果你无法提供包含该人名的 evidence_quote，说明你没有在 HTML 中找到，必须留空 representative。\n"
+            "5. evidence_quote 必须包含代表人姓名的原文片段（从页面内容中复制）。\n"
+            "   如果你无法提供包含该人名的 evidence_quote，说明你没有在页面中找到，必须留空 representative。\n"
             "6. 如果页面上有多个人但无法确定谁是最高负责人，宁可留空也不要猜。\n\n"
             "=== 邮箱规则 ===\n"
             "7. 优先保留个人邮箱（如 firstname@domain），"
@@ -224,8 +255,8 @@ class EmailUrlLlmClient:
                 values.append(text)
         return values
 
-    # LLM API 输入最大字符数（留余量，API 上限 10MB）
-    _MAX_PROMPT_CHARS = 9_500_000
+    # LLM API 输入最大字符数（272k token ≈ 816k 字符，留余量取 750k）
+    _MAX_PROMPT_CHARS = 750_000
 
     def _call_json_with_model(self, model: str, prompt: str) -> dict[str, Any]:
         # 最终安全截断，防止超出 API 限制
