@@ -65,7 +65,7 @@ class VirkConfig:
     firecrawl_workers: int = 32  # Protocol+LLM 邮箱发现并发
 
     # CF cookie
-    cf_browser_headless: bool = False
+    cf_browser_headless: bool = False  # CF 检测 headless，必须有界面
     cf_refresh_interval: int = 1500  # 25分钟刷新一次
 
     # 搜索分页

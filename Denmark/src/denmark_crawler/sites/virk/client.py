@@ -45,6 +45,7 @@ class CfCookieManager:
         self._refresh_interval = max(refresh_interval, 300)
         self._proxy_url = proxy_url
         self._lock = threading.Lock()
+        self._refresh_lock = threading.Lock()  # 防止多线程同时启动浏览器
         self._cookies: dict[str, str] = {}
         self._user_agent: str = ""
         self._last_refresh: float = 0.0
@@ -67,23 +68,30 @@ class CfCookieManager:
         return (time.monotonic() - self._last_refresh) > self._refresh_interval or not self._cookies
 
     def refresh(self) -> dict[str, str]:
-        """启动独立浏览器获取 CF cookie。优先 DrissionPage。"""
-        LOGGER.info("Virk CF cookie 刷新开始...")
-        try:
-            cookies, ua = self._get_cf_cookies_via_drissionpage()
-        except Exception as e1:
-            LOGGER.warning("DrissionPage 获取 CF cookie 失败: %s，尝试 Playwright...", e1)
+        """启动独立浏览器获取 CF cookie。优先 DrissionPage。
+        使用 _refresh_lock 保证同一时刻只有一个线程启动浏览器。
+        """
+        with self._refresh_lock:
+            # 拿到锁后二次检查：可能已被其他线程刷新过
+            if not self._should_refresh():
+                with self._lock:
+                    return dict(self._cookies)
+            LOGGER.info("Virk CF cookie 刷新开始...")
             try:
-                cookies, ua = self._get_cf_cookies_via_playwright()
-            except Exception as e2:
-                raise RuntimeError(f"所有 CF cookie 获取方式均失败: DP={e1}, PW={e2}") from e2
+                cookies, ua = self._get_cf_cookies_via_drissionpage()
+            except Exception as e1:
+                LOGGER.warning("DrissionPage 获取 CF cookie 失败: %s，尝试 Playwright...", e1)
+                try:
+                    cookies, ua = self._get_cf_cookies_via_playwright()
+                except Exception as e2:
+                    raise RuntimeError(f"所有 CF cookie 获取方式均失败: DP={e1}, PW={e2}") from e2
 
-        with self._lock:
-            self._cookies = cookies
-            self._user_agent = ua
-            self._last_refresh = time.monotonic()
-        LOGGER.info("Virk CF cookie 刷新完成，keys=%s", list(cookies.keys()))
-        return cookies
+            with self._lock:
+                self._cookies = cookies
+                self._user_agent = ua
+                self._last_refresh = time.monotonic()
+            LOGGER.info("Virk CF cookie 刷新完成，keys=%s", list(cookies.keys()))
+            return cookies
 
     def _get_cf_cookies_via_drissionpage(self) -> tuple[dict[str, str], str]:
         """主要方案：DrissionPage（非 headless，能过 CF 检测）。"""
