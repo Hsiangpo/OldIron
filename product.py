@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent
 COUNTRY_BUILDERS: dict[str, str] = {
     "England": "england_crawler.delivery",
     "Denmark": "denmark_crawler.delivery",
+    "Finland": "finland_crawler.delivery",
 }
 
 
