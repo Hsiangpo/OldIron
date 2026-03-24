@@ -305,8 +305,16 @@ class TmtStore:
         phone = _normalize_phone(posting.phone)
         email = str(posting.email or "").strip().lower()
         domain = _extract_domain(posting.homepage)
-        # pipeline 1: 邮箱+代表人+公司名齐全直接落盘
-        deliverable = bool(email and posting.representative and posting.company_name)
+        # pipeline 1: 邮箱+代表人+公司名齐全且代表人不含公司后缀才直接落盘
+        _corp_re = re.compile(
+            r"\b(ApS|A/S|I/S|K/S|P/S|IVS|GmbH|AG|Ltd\.?|LLC|Inc\.?|PLC|LP|LLP|AB|SA|BV|NV|Oy|AS)\b",
+            re.IGNORECASE,
+        )
+        rep_str = str(posting.representative or "").strip()
+        deliverable = bool(
+            email and rep_str and posting.company_name
+            and not _corp_re.search(rep_str)
+        )
         with self._lock:
             self._conn.execute(
                 """UPDATE jobs SET
@@ -576,7 +584,8 @@ class TmtStore:
                 "UPDATE firecrawl_queue SET status = 'done', last_error = '', updated_at = ? WHERE job_id = ?",
                 (now, job_id),
             )
-            if has_email:
+            # 有邮箱 + 代表人齐全才落盘 final（三项齐全门禁）
+            if has_email and next_rep:
                 for em in merged:
                     self._insert_final(
                         job_id, next_name, next_rep, em,

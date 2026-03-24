@@ -261,7 +261,14 @@ class JoblyStore:
         with self._lock:
             row = self._conn.execute("SELECT company_name FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
             company_name = row["company_name"] if row else ""
-            deliverable = bool(email and representative and company_name)
+            _corp_re = re.compile(
+                r"\b(ApS|A/S|I/S|K/S|P/S|IVS|GmbH|AG|Ltd\.?|LLC|Inc\.?|PLC|LP|LLP|AB|SA|BV|NV|Oy|AS)\b",
+                re.IGNORECASE,
+            )
+            deliverable = bool(
+                email and representative and company_name
+                and not _corp_re.search(representative)
+            )
             self._conn.execute(
                 """UPDATE jobs SET email = COALESCE(NULLIF(?, ''), email),
                     phone = COALESCE(NULLIF(?, ''), phone),
@@ -459,7 +466,8 @@ class JoblyStore:
                  str(evidence_url or "").strip(), "done" if has_email else "zero", now, job_id),
             )
             self._conn.execute("UPDATE firecrawl_queue SET status = 'done', updated_at = ? WHERE job_id = ?", (now, job_id))
-            if has_email:
+            # 有邮箱 + 代表人齐全才落盘 final（三项齐全门禁）
+            if has_email and next_rep:
                 for em in merged:
                     self._insert_final(job_id, next_name, next_rep, em,
                                        str(current["phone"] or ""), str(current["homepage"] or ""),

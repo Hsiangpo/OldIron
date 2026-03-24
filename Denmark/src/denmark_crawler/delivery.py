@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import csv
-import html as html_mod
-import re
 import json
 import shutil
 import sys
@@ -17,6 +15,7 @@ if str(SHARED_ROOT) not in sys.path:
     sys.path.insert(0, str(SHARED_ROOT))
 
 from oldiron_core.delivery.engine import parse_day_label
+from oldiron_core.delivery.sanitize import sanitize_record
 
 
 def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) -> dict[str, object]:
@@ -129,88 +128,13 @@ def _load_and_merge_records(data_root: Path) -> list[dict[str, str]]:
             em for em in emails_list
             if "@" not in em or len(em.split("@")[1].split(".")[0]) >= 3
         ]
-        # --- 数据清洗 ---
-        entry = _sanitize_record(entry, emails_list)
+        # --- 数据清洗 + 三项齐全门禁 ---
+        entry = sanitize_record(entry, emails_list)
         if entry is None:
             continue
         records.append(entry)
     return records
 
-
-# ---------- 公司法人后缀正则，用于检测代表人字段误填公司名 ----------
-_CORP_SUFFIX_RE = re.compile(
-    r"\b("
-    r"ApS|A/S|I/S|K/S|P/S|IVS|AMBA|FMBA|SMB[Aa]"
-    r"|GmbH|AG|OHG|KG|UG|e\.?V\.?"
-    r"|Ltd\.?|LLC|Inc\.?|PLC|LP|LLP"
-    r"|AB|HB|KB"
-    r"|SA|SL|SAS|SARL|BV|NV|Oy|AS"
-    r"|Sp\.?\s*z\.?\s*o\.?\s*o\.?"
-    r")\b",
-    re.IGNORECASE,
-)
-
-# ---------- 零宽字符 / 不可见字符正则 ----------
-_INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad\u2060]")
-
-
-def _sanitize_record(
-    entry: dict[str, str | list[str]],
-    emails_list: list[str],
-) -> dict[str, str] | None:
-    """清洗单条记录。返回 None 表示丢弃。"""
-
-    # --- 1. HTML 实体解码（代表人、公司名）---
-    for field in ("company_name", "representative"):
-        val = str(entry.get(field, "")).strip()
-        if "&" in val:
-            val = html_mod.unescape(val)
-        entry[field] = val
-
-    # --- 2. 公司名基本检查 ---
-    company_name = str(entry.get("company_name", "")).strip()
-    if len(company_name) < 2:
-        return None  # 过短的脏数据（如 "1"）
-    if len(company_name) > 150:
-        company_name = company_name[:150].rsplit(" ", 1)[0]
-        entry["company_name"] = company_name
-
-    # --- 3. 代表人质量检查 ---
-    rep = str(entry.get("representative", "")).strip()
-    # 3a. 含公司后缀 → 视为无效代表人
-    if rep and _CORP_SUFFIX_RE.search(rep):
-        rep = ""
-        entry["representative"] = ""
-
-    # --- 4. 邮箱清洗 ---
-    cleaned_emails = []
-    for em in emails_list:
-        em = _INVISIBLE_RE.sub("", em).strip()  # 去零宽字符
-        if "/" in em.split("@")[0] if "@" in em else False:
-            continue  # 丢弃 user 部分含斜杠的
-        if not em or "@" not in em:
-            continue
-        cleaned_emails.append(em)
-    entry["emails"] = "; ".join(cleaned_emails)
-
-    # --- 5. 电话清洗 ---
-    phone = str(entry.get("phone", "")).strip()
-    if phone:
-        phone = phone.replace("☎", "").replace("?", "").strip()
-        phone = _INVISIBLE_RE.sub("", phone).strip()
-        # 保留数字、空格、+、-、()
-        phone = re.sub(r"[^\d\s+\-()]", "", phone).strip()
-        entry["phone"] = phone
-
-    # --- 6. 三项齐全门禁：公司名 + 代表人 + 邮箱 ---
-    if not entry.get("company_name", "").strip():
-        return None
-    if not entry.get("representative", "").strip():
-        return None
-    if not entry.get("emails", "").strip():
-        return None
-
-    return entry
 
 
 def _load_from_proff_db(db_path: Path, grouped: dict) -> None:

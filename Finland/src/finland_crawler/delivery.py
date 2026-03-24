@@ -21,6 +21,7 @@ if str(SHARED_ROOT) not in sys.path:
     sys.path.insert(0, str(SHARED_ROOT))
 
 from oldiron_core.delivery.engine import parse_day_label
+from oldiron_core.delivery.sanitize import sanitize_record
 
 
 # 三个站点各自的 output 子目录名和 DB 文件名
@@ -119,9 +120,11 @@ def _load_and_merge_records(data_root: Path) -> list[dict[str, str]]:
             em for em in emails_list
             if "@" not in em or len(em.split("@")[1].split(".")[0]) >= 3
         ]
-        entry["emails"] = "; ".join(emails_list)
-        if entry["emails"]:
-            records.append(entry)
+        # --- 数据清洗 + 三项齐全门禁 ---
+        entry = sanitize_record(entry, emails_list)
+        if entry is None:
+            continue
+        records.append(entry)
     return records
 
 

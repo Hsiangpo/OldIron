@@ -436,7 +436,15 @@ class VirkStore:
         now = _utc_now()
         phone = _normalize_phone(company.phone)
         email = str(company.email or "").strip().lower()
-        deliverable = bool(email and company.representative and company.company_name)
+        _corp_re = re.compile(
+            r"\b(ApS|A/S|I/S|K/S|P/S|IVS|GmbH|AG|Ltd\.?|LLC|Inc\.?|PLC|LP|LLP|AB|SA|BV|NV|Oy|AS)\b",
+            re.IGNORECASE,
+        )
+        rep_str = str(company.representative or "").strip()
+        deliverable = bool(
+            email and rep_str and company.company_name
+            and not _corp_re.search(rep_str)
+        )
         with self._lock:
             self._conn.execute(
                 """UPDATE companies SET
@@ -728,8 +736,12 @@ class VirkStore:
                 "UPDATE firecrawl_queue SET status = 'done', last_error = '', updated_at = ? WHERE cvr = ?",
                 (now, cvr),
             )
-            # 有邮箱就落盘 final（用覆盖后的公司名和代表人）
-            if has_email:
+            # 有邮箱 + 代表人齐全才落盘 final（三项齐全门禁）
+            _corp_re = re.compile(
+                r"\b(ApS|A/S|I/S|K/S|P/S|IVS|GmbH|AG|Ltd\.?|LLC|Inc\.?|PLC|LP|LLP|AB|SA|BV|NV|Oy|AS)\b",
+                re.IGNORECASE,
+            )
+            if has_email and next_representative and not _corp_re.search(next_representative):
                 for em in merged:
                     self._insert_final(cvr, next_company_name, next_representative, em,
                                        next_evidence_url, "virk-firecrawl")

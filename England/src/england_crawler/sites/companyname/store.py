@@ -397,16 +397,21 @@ class CompanyNameStore:
                 "UPDATE firecrawl_queue SET status='done', updated_at=? WHERE orgnr=?",
                 (now, orgnr),
             )
-            # 写入 final_companies
-            for em in merged:
-                try:
-                    self._conn.execute(
-                        """INSERT OR REPLACE INTO final_companies(orgnr, company_name, representative, email, evidence_url, source, updated_at)
-                           VALUES(?, ?, ?, ?, ?, 'companyname', ?)""",
-                        (orgnr, final_name, rep, em, ev, now),
-                    )
-                except sqlite3.IntegrityError:
-                    pass
+            # 写入 final_companies（三项齐全门禁）
+            _corp_suffix_re = re.compile(
+                r"\b(ApS|A/S|I/S|K/S|P/S|IVS|GmbH|AG|Ltd\.?|LLC|Inc\.?|PLC|LP|LLP|AB|SA|BV|NV|Oy|AS)\b",
+                re.IGNORECASE,
+            )
+            if final_name and rep and merged and not _corp_suffix_re.search(rep):
+                for em in merged:
+                    try:
+                        self._conn.execute(
+                            """INSERT OR REPLACE INTO final_companies(orgnr, company_name, representative, email, evidence_url, source, updated_at)
+                               VALUES(?, ?, ?, ?, ?, 'companyname', ?)""",
+                            (orgnr, final_name, rep, em, ev, now),
+                        )
+                    except sqlite3.IntegrityError:
+                        pass
             self._conn.commit()
 
     def defer_firecrawl_task(self, orgnr: str, delay_seconds: float, error: str = "") -> None:
@@ -487,19 +492,23 @@ class CompanyNameStore:
                     "UPDATE firecrawl_queue SET status='done', updated_at=? WHERE orgnr=?",
                     (now, orgnr),
                 )
-                # 写入 final_companies
+                # 写入 final_companies（三项齐全门禁）
                 cname = self._conn.execute(
                     "SELECT company_name, representative, evidence_url FROM companies WHERE orgnr=?", (orgnr,)
                 ).fetchone()
-                for em in merged:
-                    try:
-                        self._conn.execute(
-                            """INSERT OR REPLACE INTO final_companies(orgnr, company_name, representative, email, evidence_url, source, updated_at)
-                               VALUES(?, ?, ?, ?, ?, 'companyname', ?)""",
-                            (orgnr, cname["company_name"], cname["representative"] or "", em, cname["evidence_url"] or "", now),
-                        )
-                    except sqlite3.IntegrityError:
-                        pass
+                cn_val = str(cname["company_name"] or "").strip() if cname else ""
+                rep_val = str(cname["representative"] or "").strip() if cname else ""
+                ev_val = str(cname["evidence_url"] or "").strip() if cname else ""
+                if cn_val and rep_val and merged:
+                    for em in merged:
+                        try:
+                            self._conn.execute(
+                                """INSERT OR REPLACE INTO final_companies(orgnr, company_name, representative, email, evidence_url, source, updated_at)
+                                   VALUES(?, ?, ?, ?, ?, 'companyname', ?)""",
+                                (orgnr, cn_val, rep_val, em, ev_val, now),
+                            )
+                        except sqlite3.IntegrityError:
+                            pass
                 resolved += 1
             self._conn.commit()
         return resolved
