@@ -133,13 +133,24 @@ class TmtPipelineRunner:
 
     # ---- 搜索 ----
 
+    # TMT API 硬性分页上限：pageNumber 不可超过 100，否则返回 400
+    API_MAX_PAGE_NUMBER = 100
+
     def _run_search(self) -> None:
-        """翻页搜索所有职位。TMT API 简单翻页即可。"""
+        """翻页搜索所有职位。TMT API 限制 pageNumber <= 100。"""
         pages_done, total_known = self.store.get_search_progress()
         page = pages_done
         LOGGER.info("TMT 搜索开始：从第 %d 页续跑", page)
 
         while not self.stop_event.is_set():
+            # TMT API 硬性上限：pageNumber 不可超过 100
+            if page >= self.API_MAX_PAGE_NUMBER:
+                LOGGER.info(
+                    "TMT 搜索达到 API 分页硬上限 %d（已采集 %d 页），搜索阶段结束",
+                    self.API_MAX_PAGE_NUMBER, page,
+                )
+                break
+
             try:
                 jobs, total = self.client.search_jobs(
                     page_number=page,
@@ -165,7 +176,7 @@ class TmtPipelineRunner:
             LOGGER.info("TMT 搜索：page=%d rows=%d total=%d", page - 1, len(jobs), total)
 
             if page >= self.config.search_max_pages:
-                LOGGER.info("TMT 搜索达到最大页数 %d", self.config.search_max_pages)
+                LOGGER.info("TMT 搜索达到配置最大页数 %d", self.config.search_max_pages)
                 break
 
     # ---- Workers ----
