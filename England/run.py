@@ -11,6 +11,10 @@ ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+# 注入 OldIron 根目录，以便 import shared/oldiron_core
+SHARED_PARENT = ROOT.parent
+if str(SHARED_PARENT) not in sys.path:
+    sys.path.insert(0, str(SHARED_PARENT))
 
 USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
