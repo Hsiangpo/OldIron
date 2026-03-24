@@ -756,7 +756,11 @@ class ProffStore:
             representative = str(record.get("representative", "")).strip()
             evidence_url = str(record.get("evidence_url", "")).strip()
             self._conn.execute("DELETE FROM final_companies WHERE orgnr = ?", (orgnr,))
-            if company_name and representative and emails:
+            _corp_re = re.compile(
+                r"\b(ApS|A/S|I/S|K/S|P/S|IVS|GmbH|AG|Ltd\.?|LLC|Inc\.?|PLC|LP|LLP|AB|SA|BV|NV|Oy|AS)\b",
+                re.IGNORECASE,
+            )
+            if company_name and representative and emails and not _corp_re.search(representative):
                 now = _utc_now()
                 for email in emails:
                     self._conn.execute(
@@ -839,6 +843,7 @@ class ProffStore:
             return 0
         now = _utc_now()
         resolved = 0
+        resolved_orgnrs: list[str] = []
         with self._lock:
             # 找出所有 pending/running 的 firecrawl 任务
             rows = self._conn.execute(
@@ -868,13 +873,11 @@ class ProffStore:
                     (_dump_json_list(merged), now, orgnr),
                 )
                 resolved += 1
+                resolved_orgnrs.append(orgnr)
             self._conn.commit()
-        # 刷新 final 表
-        if resolved:
-            for row in self._conn.execute(
-                "SELECT orgnr FROM companies WHERE firecrawl_status='done'"
-            ).fetchall():
-                self.refresh_final_company(str(row["orgnr"]))
+        # 只刷新本次 resolve 的公司（不要全量刷新）
+        for orgnr in resolved_orgnrs:
+            self.refresh_final_company(orgnr)
         return resolved
 
     def export_jsonl_snapshots(self, output_dir: Path) -> None:
