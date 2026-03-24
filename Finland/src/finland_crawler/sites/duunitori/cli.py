@@ -198,11 +198,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def run_duunitori(argv: list[str]) -> int:
     """Duunitori CLI 主入口。"""
-    import resource
-    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    target = min(65536, hard)
-    if soft < target:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    # 提高文件描述符上限（仅 Unix/macOS）
+    if os.name != "nt":
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = min(65536, hard)
+        if soft < target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
 
     args = _build_parser().parse_args(argv)
     output_dir = Path(args.output_dir).resolve() if str(args.output_dir).strip() else ROOT / "output" / "duunitori"
