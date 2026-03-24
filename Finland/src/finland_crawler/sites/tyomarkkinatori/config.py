@@ -46,7 +46,7 @@ class TmtConfig:
     timeout_seconds: float = 30.0
 
     # 并发
-    search_workers: int = 2
+    search_workers: int = 4
     detail_workers: int = 8
     gmap_workers: int = 64
     firecrawl_workers: int = 8
@@ -100,7 +100,7 @@ class TmtConfig:
         *,
         project_root: Path,
         output_dir: Path,
-        search_workers: int = 2,
+        search_workers: int = 4,
         detail_workers: int = 8,
         gmap_workers: int = 64,
         firecrawl_workers: int = 8,

@@ -42,7 +42,7 @@ class DuunitoriConfig:
     proxy_url: str = ""
     timeout_seconds: float = 30.0
 
-    search_workers: int = 1       # 列表页串行翻页
+    search_workers: int = 4
     detail_workers: int = 8
     gmap_workers: int = 64
     firecrawl_workers: int = 8
