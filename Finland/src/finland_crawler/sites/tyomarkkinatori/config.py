@@ -51,8 +51,8 @@ class TmtConfig:
     gmap_workers: int = 64
     firecrawl_workers: int = 8
 
-    # 搜索分页（API 最大 pageSize=100）
-    search_page_size: int = 100
+    # 搜索分页（API 最大 pageSize=90）
+    search_page_size: int = 90
     search_max_pages: int = 200   # 100 × 200 = 最多 20000 条
 
     # 重试
@@ -118,7 +118,7 @@ class TmtConfig:
             detail_workers=_env_int("TMT_DETAIL_WORKERS", detail_workers),
             gmap_workers=_env_int("TMT_GMAP_WORKERS", gmap_workers),
             firecrawl_workers=_env_int("TMT_FIRECRAWL_WORKERS", firecrawl_workers),
-            search_page_size=_env_int("TMT_PAGE_SIZE", 100),
+            search_page_size=_env_int("TMT_PAGE_SIZE", 90),
             search_max_pages=_env_int("TMT_MAX_PAGES", 200),
             gmap_base_url=_env_str("GMAP_SERVICE_ADDR", "http://127.0.0.1:8082"),
             firecrawl_keys_file=_env_str("FIRECRAWL_KEYS_FILE", ""),

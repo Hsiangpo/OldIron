@@ -43,11 +43,7 @@ class TmtClient:
         url = f"{self.BASE_URL}{path}"
         headers = kwargs.pop("headers", {})
         headers.setdefault("Accept", "application/json, text/plain, */*")
-        headers.setdefault("User-Agent", (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ))
+        # 不手动设置 User-Agent，让 curl_cffi impersonate 自动处理
         proxies = {"https": self._proxy, "http": self._proxy} if self._proxy else None
         resp = session.request(
             method, url,
@@ -56,6 +52,10 @@ class TmtClient:
             timeout=self._timeout,
             **kwargs,
         )
+        if resp.status_code >= 400:
+            # 解码 tmt-validation-errors header（base64 JSON）
+            validation = resp.headers.get("tmt-validation-errors", "")
+            LOGGER.error("TMT API %s %s → %d, validation=%s", method, path, resp.status_code, validation)
         resp.raise_for_status()
         return resp.json()
 
