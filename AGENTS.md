@@ -26,7 +26,6 @@
 ## Network And Secrets
 
 - For non-China outbound access, use proxy port `7897` by default. If that port is unavailable, probe the actual working outbound proxy port first.
-- Never store plaintext passwords, cookies, API keys, or other secrets in `AGENTS.md`, `README.md`, `docs/`, or any committed file.
 - Do not commit `.env`, cookies, API keys, or anything under `output/`.
 
 ## Runtime Model
@@ -35,7 +34,7 @@
 - Do not reintroduce the old coordinator-based multi-machine cluster flow unless explicitly requested.
 - Do not reintroduce shard-based multi-machine execution for new work.
 - Multi-machine work should be done by assigning different sites (or different whole pipelines) to different machines, then pulling back site outputs and merging at the country level.
-- Example: Mac runs `Denmark proff` + `Denmark virk`, Windows runs `England companyname`. This is the preferred model.
+- Example: Mac runs `Denmark proff` + `Denmark virk`, Windows runs `England companyname` + `Finland tmt/duunitori/jobly`. This is the preferred model.
 
 ## Country Delivery Rules
 
@@ -61,6 +60,14 @@
 3. Merge Denmark site outputs into one Denmark country output tree.
 4. Run `python product.py Denmark dayN` from the project root.
 5. The final day package must be deduplicated by company name across all Denmark sites together.
+
+### Finland DayN Flow
+
+1. Stop active Finland site processes on the machine running them.
+2. If Finland runs on a remote machine, pull back the Finland site outputs to the local machine.
+3. Merge Finland site outputs into one Finland country output tree.
+4. Run `python product.py Finland dayN` from the project root.
+5. The final day package must be deduplicated by company name across all Finland sites (TMT + Duunitori + Jobly) together.
 
 ## Temporary Artifact Cleanup & File Organization
 
@@ -107,6 +114,11 @@ There is no single root build step. Work inside the target country directory for
 - `cd Denmark && python run.py dnb`
 - `cd Denmark && python run.py virk`
 - `python product.py Denmark day1`
+- `cd Finland && python -m pip install -r requirements.txt`
+- `cd Finland && python run.py tmt`
+- `cd Finland && python run.py duunitori`
+- `cd Finland && python run.py jobly`
+- `python product.py Finland day1`
 - `cd Japan && python -m pytest test -v`
 - `cd Thailand && pytest tests -q`
 
@@ -148,7 +160,10 @@ There is no single root build step. Work inside the target country directory for
 - Every code change must be committed and pushed to GitHub immediately after verification.
 - After pushing, **all machines** must be updated to the latest code before restarting any process.
   - Machine 2 (Mac): `git pull`
-  - Machine 1 (Windows): `git pull` on the E: drive project, then manually copy `Denmark\src\denmark_crawler\fc_email` to `England\src\england_crawler\fc_email` (because symlinks don't work on Windows).
+  - Machine 1 (Windows): `git pull` on the E: drive project, then manually copy symlinked directories (because symlinks don't work on Windows):
+    - `Denmark\src\denmark_crawler\fc_email` → `England\src\england_crawler\fc_email`
+    - `Denmark\src\denmark_crawler\fc_email` → `Finland\src\finland_crawler\fc_email`
+    - `Denmark\src\denmark_crawler\google_maps` → `Finland\src\finland_crawler\google_maps`
 - Never run a process on stale code. If in doubt, `git pull` first.
 - The `.env` files are not tracked by git. When `.env` changes, manually sync to all machines.
 
@@ -161,16 +176,19 @@ When a new machine joins the project, it **must** be registered here with at lea
 - LAN IP (note it may change)
 - Project path
 - Role (which country/site it runs)
-- Do not write the password into any tracked file.
+- Password (for SSH automation)
 
 ### Machine 1 — Windows (secondary)
 
 - IP: `192.168.0.102` (LAN, may change — verify before use)
 - User: `Administrator`
+- Password: `deadman`
 - Project path: `E:\Develop\Masterpiece\Spider\Website\OldIron`
-- Role: runs England CompanyName pipeline
-- Do not write the password into any tracked file.
-- **Important**: England `fc_email/` is a symlink on Mac/Linux. On Windows, after code sync, must manually copy `Denmark\src\denmark_crawler\fc_email` to `England\src\england_crawler\fc_email` directory.
+- Role: runs England CompanyName + Finland (TMT, Duunitori, Jobly) pipelines
+- **Important**: `fc_email/` and `google_maps/` are symlinks on Mac/Linux. On Windows, after code sync, must manually copy:
+  - `Denmark\src\denmark_crawler\fc_email` → `England\src\england_crawler\fc_email`
+  - `Denmark\src\denmark_crawler\fc_email` → `Finland\src\finland_crawler\fc_email`
+  - `Denmark\src\denmark_crawler\google_maps` → `Finland\src\finland_crawler\google_maps`
 
 ### Machine 2 — macOS (local, primary)
 
@@ -178,4 +196,3 @@ When a new machine joins the project, it **must** be registered here with at lea
 - Project path: `/Users/Zhuanz1/Develop/Masterpiece/Spider/Website/OldIron`
 - Role: primary development machine; runs Denmark Proff + Virk pipelines
 - Also aliased as `macbook-air-england` on LAN (IP may change — verify before use).
-- Do not write the password into any tracked file.
