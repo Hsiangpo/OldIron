@@ -76,7 +76,10 @@ class DuunitoriClient:
 
         jobs: list[dict[str, str]] = []
         # Duunitori 列表项在 <a> 标签中，class 包含 "job-box"
-        for link in soup.select("a.job-box__hover"):
+        for box in soup.select("div.job-box"):
+            link = box.select_one("a.job-box__hover")
+            if not link:
+                continue
             href = str(link.get("href", "")).strip()
             if not href or "/tyopaikat/tyo/" not in href:
                 continue
@@ -84,12 +87,22 @@ class DuunitoriClient:
                 href = f"{self.BASE_URL}{href}"
             # 提取 slug 作为 job_id
             slug = href.rstrip("/").rsplit("/", 1)[-1]
-            title_el = link.select_one("h3, .job-box__title")
+            # 标题：在同级 .job-box__content 内的 h3
+            title_el = box.select_one("h3.job-box__title, h3")
             title = title_el.get_text(strip=True) if title_el else ""
-            company_el = link.select_one(".job-box__logo-text, .job-box__company")
-            company = company_el.get_text(strip=True) if company_el else ""
-            location_el = link.select_one(".job-box__job-location")
+            # 公司名：优先 data-company 属性，备选 logo image alt
+            company = str(link.get("data-company", "")).strip()
+            if not company:
+                logo_img = box.select_one("img.job-box__logo")
+                if logo_img:
+                    alt = str(logo_img.get("alt", "")).strip()
+                    if alt.endswith(" logo"):
+                        company = alt[:-5].strip()
+            # 城市
+            location_el = box.select_one(".job-box__job-location")
             city = location_el.get_text(strip=True) if location_el else ""
+            # 清理城市文本（去掉末尾的 "–"）
+            city = city.rstrip("– ").strip()
 
             jobs.append({
                 "job_id": slug,
