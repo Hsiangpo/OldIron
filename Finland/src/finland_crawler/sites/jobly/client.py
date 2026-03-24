@@ -60,7 +60,15 @@ class JoblyClient:
     # ---- 列表页 ----
 
     def fetch_list_page(self, page: int = 0) -> tuple[list[dict[str, str]], bool]:
-        """爬取列表页。返回 (职位列表, 是否有下一页)。"""
+        """爬取列表页。返回 (职位列表, 是否有下一页)。
+
+        Jobly HTML 结构（2026-03）：
+          .views-row > article#node-{ID}
+            .job__content
+              h2.node__title > a[href*="/tyopaikka/"]  ← 职位标题
+              .description > a[href*="/yritys/"]       ← 公司名
+              .location                                ← 城市
+        """
         from bs4 import BeautifulSoup
 
         url = f"{self.LIST_URL}?page={page}" if page > 0 else self.LIST_URL
@@ -68,28 +76,44 @@ class JoblyClient:
         soup = BeautifulSoup(html, "lxml")
 
         jobs: list[dict[str, str]] = []
-        # Jobly 列表项在 views-row 下
-        for row in soup.select(".views-row, .view-content .node"):
-            link = row.select_one("a[href*='/tyopaikat/tyo/']") or row.select_one("a[href*='/tyopaikat/']")
+        for row in soup.select(".views-row"):
+            # 职位详情链接（/tyopaikka/ 单数，区别于列表页 /tyopaikat/ 复数）
+            link = row.select_one("a[href*='/tyopaikka/']")
             if not link:
                 continue
             href = str(link.get("href", "")).strip()
-            if not href:
+            if not href or "/tyopaikat/" in href:
+                # 跳过侧边栏分类链接（它们包含 /tyopaikat/ 复数）
                 continue
             if not href.startswith("http"):
                 href = f"{self.BASE_URL}{href}"
-            # 提取唯一标识
-            slug = href.rstrip("/").rsplit("/", 1)[-1]
-            title = link.get_text(strip=True) or ""
-            # 公司名
-            company_el = row.select_one(".job-company, .field--name-field-company-name")
+
+            # job_id：优先从 article#node-{ID} 提取数字 ID
+            article = row.select_one("article[id^='node-']")
+            if article:
+                node_id = str(article.get("id", ""))
+                job_id = node_id.replace("node-", "").strip()
+            else:
+                # 兜底：从 URL 末尾提取
+                slug = href.rstrip("/").rsplit("/", 1)[-1]
+                # URL 格式 slug-like-title-2625315，取末尾数字
+                parts = slug.rsplit("-", 1)
+                job_id = parts[-1] if len(parts) > 1 and parts[-1].isdigit() else slug
+
+            # 标题
+            title_el = row.select_one("h2.node__title a") or link
+            title = title_el.get_text(strip=True) or ""
+
+            # 公司名：.description 下的 /yritys/ 链接
+            company_el = row.select_one(".description a[href*='/yritys/']")
             company = company_el.get_text(strip=True) if company_el else ""
-            # 地点
-            location_el = row.select_one(".job-location, .field--name-field-job-location")
+
+            # 城市：.location 容器
+            location_el = row.select_one(".location")
             city = location_el.get_text(strip=True) if location_el else ""
 
             jobs.append({
-                "job_id": slug,
+                "job_id": job_id,
                 "url": href,
                 "title": title,
                 "company_name": company,
