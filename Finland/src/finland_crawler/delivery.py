@@ -187,9 +187,12 @@ def _domains_related(d1: str, d2: str) -> bool:
 
 
 def _load_baseline_keys(delivery_root: Path, baseline_day: int) -> set[str]:
-    """加载前一天交付的公司去重键集合。"""
+    """加载前一天交付的公司去重键集合（优先使用 keys.txt）。"""
     if baseline_day <= 0:
         return set()
+    keys_path = Path(delivery_root) / f"Finland_day{baseline_day:03d}" / "keys.txt"
+    if keys_path.exists():
+        return set(keys_path.read_text(encoding="utf-8").strip().splitlines())
     csv_path = Path(delivery_root) / f"Finland_day{baseline_day:03d}" / "companies.csv"
     if not csv_path.exists():
         return set()
