@@ -78,7 +78,10 @@ class TmtClient:
                 "pageSize": page_size,
                 "pageNumber": page_number,
             },
-            "filters": {},
+            "filters": {
+                "publishedAfter": None,
+                "closesBefore": None,
+            },
         }
         data = self._request(
             "POST",
@@ -86,8 +89,9 @@ class TmtClient:
             json=payload,
             headers={"Content-Type": "application/json"},
         )
-        jobs = data.get("jobPostings", [])
-        total = int(data.get("totalCount", 0))
+        # API 返回 content / totalElements
+        jobs = data.get("content", []) or data.get("jobPostings", [])
+        total = int(data.get("totalElements", 0) or data.get("totalCount", 0))
         return jobs, total
 
     # ---- 详情 API ----
@@ -112,7 +116,9 @@ class TmtClient:
         elif isinstance(title_vals, str):
             title = title_vals
 
-        biz_name_vals = raw.get("businessName", {})
+        # 搜索结果公司名嵌套在 employer 下
+        employer = raw.get("employer", {}) or {}
+        biz_name_vals = employer.get("businessName", {}) or raw.get("businessName", {})
         if isinstance(biz_name_vals, dict):
             biz_name_vals = biz_name_vals.get("values", biz_name_vals)
         biz_name = ""
@@ -120,13 +126,19 @@ class TmtClient:
             biz_name = biz_name_vals.get("fi") or next(iter(biz_name_vals.values()), "")
         elif isinstance(biz_name_vals, str):
             biz_name = biz_name_vals
+        # employer.name 作为备用
+        if not biz_name:
+            biz_name = str(employer.get("name", ""))
+
+        # businessId 可能在 employer 内
+        biz_id = str(raw.get("businessId", "") or employer.get("businessId", ""))
 
         return TmtJobPosting(
             job_id=str(raw.get("id", "")),
             title=str(title),
             company_name=str(biz_name),
-            business_id=str(raw.get("businessId", "")),
-            city=str(raw.get("postOffice", "")),
+            business_id=biz_id,
+            city=str((raw.get("location") or {}).get("municipality", "") or raw.get("postOffice", "")),
             source_page=page,
         )
 
