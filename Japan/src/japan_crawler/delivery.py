@@ -104,8 +104,38 @@ def _load_site_records(site_name: str, site_dir: Path) -> list[dict[str, str]]:
     """根据站点名加载数据。"""
     if site_name == "bizmaps":
         return _load_bizmaps_data(site_dir)
+    if site_name == "xlsximport":
+        return _load_xlsximport_data(site_dir)
     # 后续新站点在此扩展
     return []
+
+
+def _load_xlsximport_data(site_dir: Path) -> list[dict[str, str]]:
+    """从 xlsximport SQLite 加载数据。"""
+    db_path = site_dir / "xlsximport_store.db"
+    if not db_path.exists():
+        return []
+
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT website, email, company_name, representative
+        FROM companies
+        WHERE company_name != '' AND company_name IS NOT NULL
+        ORDER BY id
+    """).fetchall()
+    conn.close()
+
+    records: list[dict[str, str]] = []
+    for row in rows:
+        d = dict(row)
+        records.append({
+            "company_name": str(d.get("company_name", "") or "").strip(),
+            "representative": str(d.get("representative", "") or "").strip(),
+            "website": str(d.get("website", "") or "").strip(),
+            "emails": str(d.get("email", "") or "").strip(),
+        })
+    return records
 
 
 def _load_bizmaps_data(site_dir: Path) -> list[dict[str, str]]:

@@ -19,7 +19,8 @@ USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
 
 站点：
-  bizmaps  — biz-maps.com 日本企业信息列表
+  bizmaps     — biz-maps.com 日本企业信息列表
+  xlsximport  — xlsx 导入官网+邮箱，Protocol+LLM 补全公司名和代表人
 """
 
 BASE_REQUIRED_MODULES = (
@@ -70,6 +71,11 @@ def _dispatch(argv: list[str]) -> int:
         from japan_crawler.sites.bizmaps.cli import run_bizmaps
 
         return run_bizmaps(rest)
+
+    if site == "xlsximport":
+        from japan_crawler.sites.xlsximport.cli import run_xlsximport
+
+        return run_xlsximport(rest)
 
     print(f"不支持的网站: {argv[0]}")
     print(USAGE_TEXT)
