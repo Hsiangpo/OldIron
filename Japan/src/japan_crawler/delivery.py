@@ -98,12 +98,20 @@ def _load_bizmaps_data(site_dir: Path) -> list[dict[str, str]]:
 
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("""
-        SELECT company_name, representative, website, address, industry, detail_url
-        FROM companies
-        WHERE company_name != ''
-        ORDER BY id
-    """).fetchall()
+    # 尝试查新字段（可能还不存在）
+    try:
+        rows = conn.execute("""
+            SELECT company_name, representative, website, address, industry,
+                   phone, founded_year, capital, detail_url, emails
+            FROM companies
+            WHERE company_name != ''
+            ORDER BY id
+        """).fetchall()
+    except Exception:
+        rows = conn.execute("""
+            SELECT company_name, representative, website, address, industry, detail_url
+            FROM companies WHERE company_name != '' ORDER BY id
+        """).fetchall()
     conn.close()
 
     records: list[dict[str, str]] = []
@@ -114,8 +122,11 @@ def _load_bizmaps_data(site_dir: Path) -> list[dict[str, str]]:
             "website": str(row["website"] or "").strip(),
             "address": str(row["address"] or "").strip(),
             "industry": str(row["industry"] or "").strip(),
+            "phone": str(dict(row).get("phone", "") or "").strip(),
+            "founded_year": str(dict(row).get("founded_year", "") or "").strip(),
+            "capital": str(dict(row).get("capital", "") or "").strip(),
             "detail_url": str(row["detail_url"] or "").strip(),
-            "emails": "",  # Pipeline 3 补充
+            "emails": str(dict(row).get("emails", "") or "").strip(),
         })
     return records
 
@@ -124,7 +135,8 @@ def _filter_emails(emails_str: str) -> str:
     """过滤掉个人邮箱后缀。"""
     if not emails_str:
         return ""
-    parts = [e.strip().lower() for e in emails_str.split(";") if e.strip()]
+    # 支持逗号和分号分隔
+    parts = [e.strip().lower() for e in emails_str.replace(";", ",").split(",") if e.strip()]
     filtered = []
     for email in parts:
         if "@" not in email:
@@ -138,7 +150,10 @@ def _filter_emails(emails_str: str) -> str:
 
 def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
     """写站点级 CSV。"""
-    fieldnames = ["company_name", "representative", "website", "emails", "address", "industry", "detail_url"]
+    fieldnames = [
+        "company_name", "representative", "website", "emails",
+        "phone", "address", "industry", "founded_year", "capital", "detail_url",
+    ]
     with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
