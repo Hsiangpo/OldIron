@@ -1,0 +1,159 @@
+"""bizmaps Pipeline 1 — 列表页全量采集。
+
+流程：
+  1. 调 /arearequest 获取全日本 47 都道府県目录
+  2. 遍历每个都道府県，逐页抓取 /s/prefs/{code}?page=N
+  3. 解析 HTML 提取公司名、代表者、地址等
+  4. 存入 SQLite，支持断点续跑
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from .client import BizmapsClient, PER_PAGE
+from .parser import parse_company_list, parse_total_pages, parse_total_results
+from .store import BizmapsStore
+
+logger = logging.getLogger("bizmaps.pipeline")
+
+
+def run_pipeline_list(
+    *,
+    output_dir: Path,
+    request_delay: float = 1.5,
+    proxy: str | None = None,
+    max_prefs: int = 0,
+) -> dict[str, int]:
+    """执行 Pipeline 1：列表页全量采集。
+
+    Args:
+        output_dir: 输出目录（output/bizmaps/）
+        request_delay: 请求间隔秒数
+        proxy: HTTP 代理地址
+        max_prefs: 最大采集都道府県数（0=全部47个，调试用）
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    store = BizmapsStore(output_dir / "bizmaps_store.db")
+    client = BizmapsClient(request_delay=request_delay, proxy=proxy)
+
+    # 第一步：获取地区目录
+    existing = store.get_all_prefs()
+    if not existing:
+        logger.info("正在获取全日本 47 都道府県目录...")
+        prefs = client.fetch_areas()
+        if not prefs:
+            logger.error("无法获取地区目录 — 检查代理设置（需 --proxy http://127.0.0.1:7897）")
+            return {"prefs": 0, "companies": 0, "errors": 1}
+        stored = store.upsert_prefs(prefs)
+        total = sum(p["total"] for p in prefs)
+        logger.info("写入 %d 个都道府県，全国企業数约 %d 家", stored, total)
+    else:
+        logger.info("已有 %d 个都道府県在库中", len(existing))
+
+    # 第二步：逐都道府県逐页采集
+    pending = store.get_pending_prefs()
+    if max_prefs > 0:
+        pending = pending[:max_prefs]
+
+    total_new = 0
+    total_done = 0
+
+    for pref in pending:
+        pref_code = pref["pref_code"]
+        pref_name = pref["name"]
+        last_page = pref.get("last_page", 0)
+        start_page = last_page + 1 if last_page > 0 else 1
+
+        logger.info("━━ [%s] %s (预计 %d 家) ━━", pref_code, pref_name, pref["total"])
+
+        # 获取首页确定总页数
+        if start_page == 1:
+            new_count = _process_first_page(client, store, pref_code, pref_name)
+            if new_count < 0:
+                continue  # 首页获取失败，跳过该都道府県
+            total_new += new_count
+            start_page = 2
+
+        cp = store.get_checkpoint(pref_code)
+        total_pages = cp["total_pages"] if cp else 1
+
+        # 翻页采集
+        page_ok = _crawl_remaining_pages(
+            client, store, pref_code, pref_name,
+            start_page, total_pages,
+        )
+        total_new += page_ok["new"]
+
+        if page_ok["completed"]:
+            store.update_checkpoint(pref_code, total_pages, total_pages, "done")
+            total_done += 1
+            logger.info("  ✓ %s 完成 (%d 页)", pref_name, total_pages)
+
+    total_companies = store.get_company_count()
+    stats = client.stats
+    logger.info(
+        "Pipeline 1 小结: %d 个都道府県完成, 新增 %d 家, 库内总计 %d 家, 请求 %d 次, 错误 %d 次",
+        total_done, total_new, total_companies, stats["requests"], stats["errors"],
+    )
+    return {
+        "prefs_done": total_done,
+        "new_companies": total_new,
+        "total_companies": total_companies,
+        **stats,
+    }
+
+
+def _process_first_page(client: BizmapsClient, store: BizmapsStore, pref_code: str, pref_name: str) -> int:
+    """处理首页，返回新增数量。返回 -1 表示获取失败。"""
+    html_text = client.fetch_list_page(pref_code, 1)
+    if html_text is None:
+        logger.warning("跳过 %s（无法获取首页）", pref_name)
+        return -1
+
+    companies = parse_company_list(html_text)
+    total_results = parse_total_results(html_text)
+    total_pages = parse_total_pages(html_text, PER_PAGE)
+
+    new = 0
+    if companies:
+        new = store.upsert_companies(pref_code, companies)
+        logger.info("  页 1/%d: 解析 %d 家, 新增 %d 家 (总计 %d 件)", total_pages, len(companies), new, total_results)
+    else:
+        logger.warning("  页 1: 未解析到公司（HTML 长度 %d）", len(html_text))
+
+    store.update_checkpoint(pref_code, 1, total_pages, "running")
+    return new
+
+
+def _crawl_remaining_pages(
+    client: BizmapsClient,
+    store: BizmapsStore,
+    pref_code: str,
+    pref_name: str,
+    start_page: int,
+    total_pages: int,
+) -> dict[str, object]:
+    """翻页采集剩余页面。"""
+    new_total = 0
+    for page in range(start_page, total_pages + 1):
+        html_text = client.fetch_list_page(pref_code, page)
+        if html_text is None:
+            logger.warning("  页 %d 获取失败，停止 %s", page, pref_name)
+            store.update_checkpoint(pref_code, page - 1, total_pages, "error")
+            return {"new": new_total, "completed": False}
+
+        companies = parse_company_list(html_text)
+        if companies:
+            new = store.upsert_companies(pref_code, companies)
+            new_total += new
+            # 每 20 页或最后一页打印进度
+            if page % 20 == 0 or page == total_pages:
+                logger.info("  页 %d/%d: 解析 %d 家, 新增 %d 家", page, total_pages, len(companies), new)
+        else:
+            logger.warning("  页 %d: 未解析到公司", page)
+
+        store.update_checkpoint(pref_code, page, total_pages, "running")
+
+    return {"new": new_total, "completed": True}
