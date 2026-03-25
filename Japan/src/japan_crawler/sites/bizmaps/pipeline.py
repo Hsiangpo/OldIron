@@ -77,6 +77,24 @@ def run_pipeline_list(
             total_new += result["count"]
             next_ph = result["next_ph"]
             start_page = 2
+        else:
+            # 续跑：从 checkpoint 恢复上次保存的 ph
+            cp = store.get_checkpoint(pref_code)
+            if cp:
+                next_ph = cp.get("last_ph", "")
+                if next_ph:
+                    logger.info("  续跑 page=%d，从 checkpoint 恢复 ph", start_page)
+                else:
+                    # ph 丢失（旧库或首次升级），重置为 page=1 重新开始
+                    # UNIQUE(company_name, address) 约束保证已入库数据不会重复
+                    logger.warning("  ph 缺失，重置 %s 从 page=1 重新开始（已有数据受 UNIQUE 约束保护）", pref_name)
+                    start_page = 1
+                    result = _process_first_page(client, store, pref_code, pref_name)
+                    if result["count"] < 0:
+                        continue
+                    total_new += result["count"]
+                    next_ph = result["next_ph"]
+                    start_page = 2
 
         cp = store.get_checkpoint(pref_code)
         total_pages = cp["total_pages"] if cp else 1
@@ -129,7 +147,7 @@ def _process_first_page(client: BizmapsClient, store: BizmapsStore, pref_code: s
     else:
         logger.warning("  页 1: 未解析到公司（HTML 长度 %d）", len(html_text))
 
-    store.update_checkpoint(pref_code, 1, total_pages, "running")
+    store.update_checkpoint(pref_code, 1, total_pages, "running", last_ph=next_ph)
     return {"count": new, "next_ph": next_ph}
 
 
@@ -149,7 +167,7 @@ def _crawl_remaining_pages(
         html_text = client.fetch_list_page(pref_code, page, ph=current_ph)
         if html_text is None:
             logger.warning("  页 %d 获取失败，停止 %s", page, pref_name)
-            store.update_checkpoint(pref_code, page - 1, total_pages, "error")
+            store.update_checkpoint(pref_code, page - 1, total_pages, "error", last_ph=current_ph)
             return {"new": new_total, "completed": False}
 
         companies = parse_company_list(html_text)
@@ -164,10 +182,14 @@ def _crawl_remaining_pages(
 
         # 提取下一页的 ph 签名（链式传递）
         next_params = parse_next_page_params(html_text, page)
-        current_ph = next_params["ph"] if next_params else ""
-        if not current_ph and page < total_pages:
-            logger.warning("  页 %d: 无法提取下一页 ph，翻页链可能断裂", page)
+        next_ph = next_params["ph"] if next_params else ""
+        if not next_ph and page < total_pages:
+            # ph 提取失败 — 可能是网络异常或页面结构变化
+            # 不做兜底（ph 与 page 绑定，不可跨页使用），记录 WARNING
+            logger.warning("  页 %d: ph 提取失败（翻页链断裂），后续页面将无法获取正确数据", page)
+        current_ph = next_ph
 
-        store.update_checkpoint(pref_code, page, total_pages, "running")
+        # 持久化断点（含 ph）
+        store.update_checkpoint(pref_code, page, total_pages, "running", last_ph=current_ph)
 
     return {"new": new_total, "completed": True}

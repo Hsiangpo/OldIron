@@ -59,9 +59,18 @@ class BizmapsStore:
                 pref_code   TEXT PRIMARY KEY,
                 last_page   INTEGER DEFAULT 0,
                 total_pages INTEGER DEFAULT 0,
-                status      TEXT DEFAULT 'pending'
+                status      TEXT DEFAULT 'pending',
+                last_ph     TEXT DEFAULT ''
             );
         """)
+        # 兼容旧库：如果 checkpoints 表缺少 last_ph 列则补加
+        try:
+            conn.execute("SELECT last_ph FROM checkpoints LIMIT 1")
+        except sqlite3.OperationalError:
+            try:
+                conn.execute("ALTER TABLE checkpoints ADD COLUMN last_ph TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 另一个线程已添加该列
         conn.commit()
 
     # ── 都道府県管理 ──
@@ -154,20 +163,26 @@ class BizmapsStore:
 
     # ── 断点管理 ──
 
-    def update_checkpoint(self, pref_code: str, last_page: int, total_pages: int, status: str = "running") -> None:
+    def update_checkpoint(
+        self, pref_code: str, last_page: int, total_pages: int,
+        status: str = "running", last_ph: str = "",
+    ) -> None:
+        """更新采集断点，last_ph 保存当前页对应的下一页 ph token。"""
         conn = self._conn()
         conn.execute(
-            """INSERT INTO checkpoints (pref_code, last_page, total_pages, status) VALUES (?, ?, ?, ?)
+            """INSERT INTO checkpoints (pref_code, last_page, total_pages, status, last_ph)
+               VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(pref_code) DO UPDATE SET last_page=excluded.last_page,
-               total_pages=excluded.total_pages, status=excluded.status""",
-            (pref_code, last_page, total_pages, status),
+               total_pages=excluded.total_pages, status=excluded.status,
+               last_ph=excluded.last_ph""",
+            (pref_code, last_page, total_pages, status, last_ph),
         )
         conn.commit()
 
     def get_checkpoint(self, pref_code: str) -> dict[str, Any] | None:
         conn = self._conn()
         row = conn.execute(
-            "SELECT last_page, total_pages, status FROM checkpoints WHERE pref_code = ?",
+            "SELECT last_page, total_pages, status, COALESCE(last_ph, '') AS last_ph FROM checkpoints WHERE pref_code = ?",
             (pref_code,),
         ).fetchone()
         return dict(row) if row else None
