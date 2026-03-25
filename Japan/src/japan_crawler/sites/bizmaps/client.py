@@ -88,12 +88,20 @@ class BizmapsClient:
                 })
         return areas
 
-    def fetch_list_page(self, pref_code: str, page: int = 1) -> str | None:
-        """获取指定都道府县指定页的列表页 HTML。"""
+    def fetch_list_page(self, pref_code: str, page: int = 1, ph: str = "") -> str | None:
+        """获取指定都道府县指定页的列表页 HTML。
+
+        Args:
+            pref_code: 都道府県コード (01~47)
+            page: 页码
+            ph: 翻页签名 token（从上一页 HTML 中提取）
+        """
         url = f"{BASE_URL}/s/prefs/{pref_code}"
         params: dict[str, str] = {}
         if page > 1:
             params["page"] = str(page)
+            if ph:
+                params["ph"] = ph
 
         resp = self._get_with_retry(url, params=params)
         if resp is None:

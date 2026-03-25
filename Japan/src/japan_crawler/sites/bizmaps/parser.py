@@ -142,6 +142,37 @@ def parse_total_pages(page_html: str, per_page: int = 20) -> int:
     return max_page
 
 
+def parse_next_page_params(page_html: str, current_page: int) -> dict[str, str] | None:
+    """从分页导航提取下一页的 ph 和 page 参数。
+
+    biz-maps.com 翻页需要 ph 参数（bcrypt 签名），格式如：
+      ?ph=%242y%2405%24xxx...&page=2
+
+    没有 ph 参数的 ?page=N 请求会被服务器视为无效，返回第 1 页内容。
+
+    Returns:
+        {"ph": "...", "page": "N"} 或 None（没有下一页）
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    tree = html.fromstring(page_html)
+    next_page = current_page + 1
+
+    # 遍历分页链接，找 page=next_page 的链接
+    for link in tree.cssselect('a[href*="page="]'):
+        href = link.get("href", "")
+        if not href:
+            continue
+        parsed = urlparse(href)
+        qs = parse_qs(parsed.query)
+        page_val = qs.get("page", [""])[0]
+        ph_val = qs.get("ph", [""])[0]
+        if page_val == str(next_page) and ph_val:
+            return {"ph": ph_val, "page": str(next_page)}
+
+    return None
+
+
 def _clean_text(text: str) -> str:
     """清理文本：去除多余空白和换行。"""
     if not text:

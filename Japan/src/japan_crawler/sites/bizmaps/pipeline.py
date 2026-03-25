@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 
 from .client import BizmapsClient, PER_PAGE
-from .parser import parse_company_list, parse_total_pages, parse_total_results
+from .parser import parse_company_list, parse_next_page_params, parse_total_pages, parse_total_results
 from .store import BizmapsStore
 
 logger = logging.getLogger("bizmaps.pipeline")
@@ -69,11 +69,13 @@ def run_pipeline_list(
         logger.info("━━ [%s] %s (预计 %d 家) ━━", pref_code, pref_name, pref["total"])
 
         # 获取首页确定总页数
+        next_ph = ""  # 下一页的 ph 签名 token
         if start_page == 1:
-            new_count = _process_first_page(client, store, pref_code, pref_name)
-            if new_count < 0:
+            result = _process_first_page(client, store, pref_code, pref_name)
+            if result["count"] < 0:
                 continue  # 首页获取失败，跳过该都道府県
-            total_new += new_count
+            total_new += result["count"]
+            next_ph = result["next_ph"]
             start_page = 2
 
         cp = store.get_checkpoint(pref_code)
@@ -82,7 +84,7 @@ def run_pipeline_list(
         # 翻页采集
         page_ok = _crawl_remaining_pages(
             client, store, pref_code, pref_name,
-            start_page, total_pages,
+            start_page, total_pages, next_ph,
         )
         total_new += page_ok["new"]
 
@@ -105,16 +107,20 @@ def run_pipeline_list(
     }
 
 
-def _process_first_page(client: BizmapsClient, store: BizmapsStore, pref_code: str, pref_name: str) -> int:
-    """处理首页，返回新增数量。返回 -1 表示获取失败。"""
+def _process_first_page(client: BizmapsClient, store: BizmapsStore, pref_code: str, pref_name: str) -> dict:
+    """处理首页，返回 {count: 新增数, next_ph: 下一页签名}。count=-1 表示获取失败。"""
     html_text = client.fetch_list_page(pref_code, 1)
     if html_text is None:
         logger.warning("跳过 %s（无法获取首页）", pref_name)
-        return -1
+        return {"count": -1, "next_ph": ""}
 
     companies = parse_company_list(html_text)
     total_results = parse_total_results(html_text)
     total_pages = parse_total_pages(html_text, PER_PAGE)
+
+    # 提取下一页的 ph 签名
+    next_params = parse_next_page_params(html_text, 1)
+    next_ph = next_params["ph"] if next_params else ""
 
     new = 0
     if companies:
@@ -124,7 +130,7 @@ def _process_first_page(client: BizmapsClient, store: BizmapsStore, pref_code: s
         logger.warning("  页 1: 未解析到公司（HTML 长度 %d）", len(html_text))
 
     store.update_checkpoint(pref_code, 1, total_pages, "running")
-    return new
+    return {"count": new, "next_ph": next_ph}
 
 
 def _crawl_remaining_pages(
@@ -134,11 +140,13 @@ def _crawl_remaining_pages(
     pref_name: str,
     start_page: int,
     total_pages: int,
+    initial_ph: str = "",
 ) -> dict[str, object]:
-    """翻页采集剩余页面。"""
+    """翻页采集剩余页面。每一页从 HTML 中提取下一页的 ph 签名。"""
     new_total = 0
+    current_ph = initial_ph  # 当前页要用的 ph
     for page in range(start_page, total_pages + 1):
-        html_text = client.fetch_list_page(pref_code, page)
+        html_text = client.fetch_list_page(pref_code, page, ph=current_ph)
         if html_text is None:
             logger.warning("  页 %d 获取失败，停止 %s", page, pref_name)
             store.update_checkpoint(pref_code, page - 1, total_pages, "error")
@@ -153,6 +161,12 @@ def _crawl_remaining_pages(
                 logger.info("  页 %d/%d: 解析 %d 家, 新增 %d 家", page, total_pages, len(companies), new)
         else:
             logger.warning("  页 %d: 未解析到公司", page)
+
+        # 提取下一页的 ph 签名（链式传递）
+        next_params = parse_next_page_params(html_text, page)
+        current_ph = next_params["ph"] if next_params else ""
+        if not current_ph and page < total_pages:
+            logger.warning("  页 %d: 无法提取下一页 ph，翻页链可能断裂", page)
 
         store.update_checkpoint(pref_code, page, total_pages, "running")
 
