@@ -3,7 +3,8 @@
 与 Denmark/England 的区别：
   - 各站点/路线独立落盘，**不合并、不去重**
   - 产出结构：Japan/output/delivery/Japan_dayN/bizmaps.csv, site2.csv, ...
-  - 邮箱过滤：排除 @gmail.com, @icloud.com, @outlook.com 等个人邮箱
+  - 邮箱过滤：只保留指定白名单域名的邮箱
+  - **落盘门槛**：公司名 + 代表人 + 邮箱 三者同时有值才落盘
 """
 
 from __future__ import annotations
@@ -22,10 +23,14 @@ if str(SHARED_ROOT) not in sys.path:
 
 from oldiron_core.delivery.engine import parse_day_label
 
-# 需过滤的个人邮箱后缀
-BLOCKED_EMAIL_DOMAINS = {
-    "gmail.com", "icloud.com", "outlook.com",
-    "hotmail.com", "live.com", "msn.com",
+# 白名单：只保留这些域名的邮箱
+ALLOWED_EMAIL_DOMAINS = {
+    "gmail.com",
+    "icloud.com",
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "msn.com",
 }
 
 # 站点名 → 数据加载函数的映射
@@ -55,24 +60,37 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
             records = _load_site_records(site_name, site_dir)
             if not records:
                 continue
+            raw_count = len(records)
 
-            # 过滤邮箱
+            # 白名单过滤邮箱域名
             for rec in records:
                 if "emails" in rec:
                     rec["emails"] = _filter_emails(rec["emails"])
 
+            # 落盘门槛：必须同时有公司名 + 代表人 + 邮箱
+            qualified = [
+                r for r in records
+                if r.get("company_name", "").strip()
+                and r.get("representative", "").strip()
+                and r.get("representative", "").strip() != "-"
+                and r.get("emails", "").strip()
+            ]
+
             # 写站点独立 CSV
             csv_path = delivery_dir / f"{site_name}.csv"
-            _write_site_csv(csv_path, records)
-            site_stats[site_name] = len(records)
-            total_companies += len(records)
-            print(f"  {site_name}: {len(records)} 家公司")
+            _write_site_csv(csv_path, qualified)
+            site_stats[site_name] = len(qualified)
+            total_companies += len(qualified)
+            print(f"  {site_name}: DB 总计 {raw_count} → 合格落盘 {len(qualified)} 家公司")
 
     summary = {
         "country": "Japan",
         "day": day,
         "baseline_day": max(day - 1, 0),
         "total_companies": total_companies,
+        # product.py 根入口需要的字段
+        "delta_companies": total_companies,
+        "total_current_companies": total_companies,
         "sites": site_stats,
     }
     (delivery_dir / "summary.json").write_text(
@@ -98,41 +116,41 @@ def _load_bizmaps_data(site_dir: Path) -> list[dict[str, str]]:
 
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
-    # 尝试查新字段（可能还不存在）
-    try:
-        rows = conn.execute("""
-            SELECT company_name, representative, website, address, industry,
-                   phone, founded_year, capital, detail_url, emails
-            FROM companies
-            WHERE company_name != ''
-            ORDER BY id
-        """).fetchall()
-    except Exception:
-        rows = conn.execute("""
-            SELECT company_name, representative, website, address, industry, detail_url
-            FROM companies WHERE company_name != '' ORDER BY id
-        """).fetchall()
+
+    # 探测实际存在的列名，避免查不存在的列导致 fallback 丢字段
+    col_info = conn.execute("PRAGMA table_info(companies)").fetchall()
+    existing_cols = {c["name"] for c in col_info}
+
+    # 基础列 + 可选列
+    base_cols = ["company_name", "representative", "website", "address",
+                 "industry", "detail_url"]
+    optional_cols = ["phone", "founded_year", "capital", "emails"]
+    select_cols = base_cols + [c for c in optional_cols if c in existing_cols]
+
+    sql = f"SELECT {', '.join(select_cols)} FROM companies WHERE company_name != '' ORDER BY id"
+    rows = conn.execute(sql).fetchall()
     conn.close()
 
     records: list[dict[str, str]] = []
     for row in rows:
+        d = dict(row)
         records.append({
-            "company_name": str(row["company_name"] or "").strip(),
-            "representative": str(row["representative"] or "").strip(),
-            "website": str(row["website"] or "").strip(),
-            "address": str(row["address"] or "").strip(),
-            "industry": str(row["industry"] or "").strip(),
-            "phone": str(dict(row).get("phone", "") or "").strip(),
-            "founded_year": str(dict(row).get("founded_year", "") or "").strip(),
-            "capital": str(dict(row).get("capital", "") or "").strip(),
-            "detail_url": str(row["detail_url"] or "").strip(),
-            "emails": str(dict(row).get("emails", "") or "").strip(),
+            "company_name": str(d.get("company_name", "") or "").strip(),
+            "representative": str(d.get("representative", "") or "").strip(),
+            "website": str(d.get("website", "") or "").strip(),
+            "address": str(d.get("address", "") or "").strip(),
+            "industry": str(d.get("industry", "") or "").strip(),
+            "phone": str(d.get("phone", "") or "").strip(),
+            "founded_year": str(d.get("founded_year", "") or "").strip(),
+            "capital": str(d.get("capital", "") or "").strip(),
+            "detail_url": str(d.get("detail_url", "") or "").strip(),
+            "emails": str(d.get("emails", "") or "").strip(),
         })
     return records
 
 
 def _filter_emails(emails_str: str) -> str:
-    """过滤掉个人邮箱后缀。"""
+    """白名单过滤：只保留指定域名的邮箱。"""
     if not emails_str:
         return ""
     # 支持逗号和分号分隔
@@ -142,9 +160,8 @@ def _filter_emails(emails_str: str) -> str:
         if "@" not in email:
             continue
         domain = email.split("@")[1]
-        if domain in BLOCKED_EMAIL_DOMAINS:
-            continue
-        filtered.append(email)
+        if domain in ALLOWED_EMAIL_DOMAINS:
+            filtered.append(email)
     return "; ".join(filtered)
 
 
@@ -158,3 +175,4 @@ def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
+

@@ -22,10 +22,17 @@ logger = logging.getLogger("bizmaps.pipeline3")
 
 # 个人邮箱域名过滤（交付时过滤，这里也提前踢掉明显的）
 PERSONAL_EMAIL_DOMAINS = {
-    "gmail.com", "yahoo.co.jp", "yahoo.com", "hotmail.com",
-    "outlook.com", "icloud.com", "live.com", "msn.com",
-    "me.com", "aol.com", "nifty.com", "docomo.ne.jp",
-    "softbank.ne.jp", "ezweb.ne.jp", "au.com",
+    # 全球通用免费邮箱
+    "gmail.com", "yahoo.com", "yahoo.co.jp", "hotmail.com",
+    "outlook.com", "outlook.jp", "icloud.com", "live.com",
+    "live.jp", "msn.com", "me.com", "aol.com",
+    # 日本运营商个人邮箱
+    "docomo.ne.jp", "softbank.ne.jp", "ezweb.ne.jp",
+    "au.com", "i.softbank.jp", "ymobile.ne.jp",
+    # 日本 ISP 个人邮箱
+    "nifty.com", "ocn.ne.jp", "plala.or.jp", "biglobe.ne.jp",
+    "so-net.ne.jp", "dion.ne.jp", "infoweb.ne.jp",
+    "gol.com", "jcom.home.ne.jp", "ybb.ne.jp",
 }
 
 DEFAULT_CONCURRENCY = 32
@@ -85,7 +92,7 @@ def run_pipeline_email(
                 company_name=name,
                 homepage=website,
             )
-            emails = _filter_emails(result.emails)
+            emails = [e.strip().lower() for e in result.emails if e.strip()]
             rep = result.representative or ""
             return name, addr, emails, rep
         except Exception as exc:
@@ -186,15 +193,27 @@ def _save_email_result(store: BizmapsStore, company_name: str, address: str, ema
 
 
 def _filter_emails(emails: list[str]) -> list[str]:
-    """过滤掉个人邮箱域名。"""
+    """过滤掉个人邮箱域名（支持子域名后缀匹配）。"""
     result = []
     for email in emails:
         email = email.strip().lower()
         if not email or "@" not in email:
             continue
         domain = email.split("@", 1)[1]
-        if domain in PERSONAL_EMAIL_DOMAINS:
+        # 精确匹配或后缀匹配（如 lilac.plala.or.jp → 命中 plala.or.jp）
+        if _is_personal_domain(domain):
             continue
         if email not in result:
             result.append(email)
     return result
+
+
+def _is_personal_domain(domain: str) -> bool:
+    """判断是否为个人邮箱域名（精确匹配 + 子域名后缀匹配）。"""
+    if domain in PERSONAL_EMAIL_DOMAINS:
+        return True
+    for blocked in PERSONAL_EMAIL_DOMAINS:
+        if domain.endswith("." + blocked):
+            return True
+    return False
+
