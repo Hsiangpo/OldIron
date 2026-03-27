@@ -142,6 +142,31 @@ def parse_total_pages(page_html: str, per_page: int = 20) -> int:
     return max_page
 
 
+def parse_current_page(page_html: str) -> int | None:
+    """从分页导航解析当前页码。
+
+    biz-maps 的当前页通常渲染为:
+      <li class="page-item current active">7991</li>
+
+    返回:
+        当前页码；无法识别时返回 None
+    """
+    tree = html.fromstring(page_html)
+    selectors = (
+        "li.page-item.current.active",
+        "li.page-item.current",
+        "li.current.active",
+        "li.current",
+        "li.active",
+    )
+    for selector in selectors:
+        for node in tree.cssselect(selector):
+            text = _clean_text(node.text_content())
+            if text.isdigit():
+                return int(text)
+    return None
+
+
 def parse_next_page_params(page_html: str, current_page: int) -> dict[str, str] | None:
     """从分页导航提取下一页的 ph 和 page 参数。
 

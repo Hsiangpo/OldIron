@@ -13,7 +13,13 @@ import logging
 from pathlib import Path
 
 from .client import BizmapsClient, PER_PAGE
-from .parser import parse_company_list, parse_next_page_params, parse_total_pages, parse_total_results
+from .parser import (
+    parse_company_list,
+    parse_current_page,
+    parse_next_page_params,
+    parse_total_pages,
+    parse_total_results,
+)
 from .store import BizmapsStore
 
 logger = logging.getLogger("bizmaps.pipeline")
@@ -170,6 +176,17 @@ def _crawl_remaining_pages(
             store.update_checkpoint(pref_code, page - 1, total_pages, "error", last_ph=current_ph)
             return {"new": new_total, "completed": False}
 
+        actual_page = parse_current_page(html_text)
+        if actual_page is not None and actual_page != page:
+            logger.warning(
+                "  页 %d 实际返回的是页 %d（通常表示 ph 缺失或失效），停止 %s 以避免误采第一页数据",
+                page,
+                actual_page,
+                pref_name,
+            )
+            store.update_checkpoint(pref_code, page - 1, total_pages, "error", last_ph="")
+            return {"new": new_total, "completed": False}
+
         companies = parse_company_list(html_text)
         if companies:
             new = store.upsert_companies(pref_code, companies)
@@ -184,9 +201,9 @@ def _crawl_remaining_pages(
         next_params = parse_next_page_params(html_text, page)
         next_ph = next_params["ph"] if next_params else ""
         if not next_ph and page < total_pages:
-            # ph 提取失败 — 可能是网络异常或页面结构变化
-            # 不做兜底（ph 与 page 绑定，不可跨页使用），记录 WARNING
-            logger.warning("  页 %d: ph 提取失败（翻页链断裂），后续页面将无法获取正确数据", page)
+            logger.warning("  页 %d: ph 提取失败（翻页链断裂），停止 %s，等待下轮从安全位置恢复", page, pref_name)
+            store.update_checkpoint(pref_code, page, total_pages, "error", last_ph="")
+            return {"new": new_total, "completed": False}
         current_ph = next_ph
 
         # 持久化断点（含 ph）
