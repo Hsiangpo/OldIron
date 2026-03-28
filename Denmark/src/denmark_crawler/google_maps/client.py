@@ -121,11 +121,23 @@ KOREAN_ADDRESS_TOKENS = (
     "타워",
 )
 CORP_TOKENS = (
+    # 韩语
     "주식회사",
     "(주)",
     "㈜",
     "(유)",
     "유한회사",
+    # 日语
+    "株式会社",
+    "有限会社",
+    "合同会社",
+    "合資会社",
+    "合名会社",
+    "一般社団法人",
+    "一般財団法人",
+    "特定非営利活動法人",
+    "NPO法人",
+    # 英語
     "co.",
     "co,",
     "co ",
@@ -592,7 +604,8 @@ def _normalize_name_for_match(text: str) -> str:
     value = _normalize_text(text).lower()
     for token in CORP_TOKENS:
         value = value.replace(token, "")
-    value = re.sub(r"[^0-9a-z가-힣]+", "", value)
+    # 保留：数字、英文小写、韩文、CJK 汉字、平假名、片假名
+    value = re.sub(r"[^0-9a-z가-힣\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+", "", value)
     return value
 
 
@@ -600,7 +613,7 @@ def _company_tokens(text: str) -> list[str]:
     lowered = _normalize_text(text).lower()
     for token in CORP_TOKENS:
         lowered = lowered.replace(token, " ")
-    pieces = [part for part in re.split(r"[^0-9a-z가-힣]+", lowered) if part]
+    pieces = [part for part in re.split(r"[^0-9a-z가-힣\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+", lowered) if part]
     unique: list[str] = []
     for part in pieces:
         if len(part) < 2:

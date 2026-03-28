@@ -106,7 +106,8 @@ def _load_site_records(site_name: str, site_dir: Path) -> list[dict[str, str]]:
         return _load_bizmaps_data(site_dir)
     if site_name == "xlsximport":
         return _load_xlsximport_data(site_dir)
-    # 后续新站点在此扩展
+    if site_name == "hellowork":
+        return _load_hellowork_data(site_dir)
     return []
 
 
@@ -134,6 +135,42 @@ def _load_xlsximport_data(site_dir: Path) -> list[dict[str, str]]:
             "representative": str(d.get("representative", "") or "").strip(),
             "website": str(d.get("website", "") or "").strip(),
             "emails": str(d.get("email", "") or "").strip(),
+        })
+    return records
+
+
+def _load_hellowork_data(site_dir: Path) -> list[dict[str, str]]:
+    """从 hellowork SQLite 加载企业数据。"""
+    db_path = site_dir / "hellowork_store.db"
+    if not db_path.exists():
+        return []
+
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT company_name, representative, website, address,
+               industry, phone, employees, capital, founded_year,
+               corp_number, detail_url, emails
+        FROM companies
+        WHERE company_name != '' AND company_name IS NOT NULL
+        ORDER BY id
+    """).fetchall()
+    conn.close()
+
+    records: list[dict[str, str]] = []
+    for row in rows:
+        d = dict(row)
+        records.append({
+            "company_name": str(d.get("company_name", "") or "").strip(),
+            "representative": str(d.get("representative", "") or "").strip(),
+            "website": str(d.get("website", "") or "").strip(),
+            "address": str(d.get("address", "") or "").strip(),
+            "industry": str(d.get("industry", "") or "").strip(),
+            "phone": str(d.get("phone", "") or "").strip(),
+            "founded_year": str(d.get("founded_year", "") or "").strip(),
+            "capital": str(d.get("capital", "") or "").strip(),
+            "detail_url": str(d.get("detail_url", "") or "").strip(),
+            "emails": str(d.get("emails", "") or "").strip(),
         })
     return records
 

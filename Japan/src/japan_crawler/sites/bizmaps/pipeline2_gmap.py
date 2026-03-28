@@ -2,6 +2,8 @@
 
 对 Pipeline 1 中没有 website 的公司，用 "公司名 所在地" 查 Google Maps，
 补全官网 URL。使用多线程并发。
+
+增加 gmap_status 列追踪已查过的公司，避免重复查询。
 """
 
 from __future__ import annotations
@@ -40,16 +42,15 @@ def run_pipeline_gmap(
 ) -> dict[str, int]:
     """Pipeline 2: Google Maps 官网补全。
 
-    从 SQLite 中读取没有 website 的公司，用 GMap 查询补全。
+    从 SQLite 中读取没有 website 且未被 GMap 查过的公司，用 GMap 查询补全。
     """
     store = BizmapsStore(output_dir / "bizmaps_store.db")
 
-    # 筛选需要补全的公司 — 没有 website 且有公司名的记录
-    all_companies = store.export_all_companies()
-    pending = [
-        c for c in all_companies
-        if not c.get("website") and c.get("company_name")
-    ]
+    # 确保 gmap_status 列存在
+    _ensure_gmap_status(store)
+
+    # 筛选需要补全的公司 — 没有 website 且 gmap_status='pending'
+    pending = _load_gmap_pending(store)
     if max_items > 0:
         pending = pending[:max_items]
     if not pending:
@@ -104,9 +105,12 @@ def run_pipeline_gmap(
                     with lock:
                         processed += 1
                         if website:
-                            # 直接更新 SQLite
+                            # 更新 SQLite：写入 website + 标记 gmap_status=done
                             _update_website(store, name, addr, website)
                             found += 1
+                        else:
+                            # 没找到也标记为 done，避免重复查
+                            _mark_gmap_done(store, name, addr)
                         if processed <= 5 or processed % 50 == 0:
                             logger.info(
                                 "[GMap %d/%d] %.1f%% %s → %s",
@@ -126,12 +130,46 @@ def run_pipeline_gmap(
     return {"processed": processed, "found": found, "total": total}
 
 
+def _ensure_gmap_status(store: BizmapsStore) -> None:
+    """确保 companies 表有 gmap_status 列。"""
+    conn = store._conn()
+    try:
+        conn.execute("ALTER TABLE companies ADD COLUMN gmap_status TEXT DEFAULT 'pending'")
+        conn.commit()
+    except Exception:
+        pass  # 列已存在
+
+
+def _load_gmap_pending(store: BizmapsStore) -> list[dict]:
+    """加载需要 GMap 查询的公司列表 — website 为空且 gmap_status=pending。"""
+    conn = store._conn()
+    rows = conn.execute("""
+        SELECT company_name, address
+        FROM companies
+        WHERE (website = '' OR website IS NULL)
+          AND (gmap_status = 'pending' OR gmap_status IS NULL)
+          AND company_name != ''
+        ORDER BY id
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _update_website(store: BizmapsStore, company_name: str, address: str, website: str) -> None:
-    """更新单个公司的 website 字段。"""
+    """更新单个公司的 website 字段并标记 gmap_status=done。"""
     conn = store._conn()
     conn.execute(
-        "UPDATE companies SET website = ? WHERE company_name = ? AND address = ? AND (website = '' OR website IS NULL)",
+        "UPDATE companies SET website = ?, gmap_status = 'done' WHERE company_name = ? AND address = ? AND (website = '' OR website IS NULL)",
         (website, company_name, address),
+    )
+    conn.commit()
+
+
+def _mark_gmap_done(store: BizmapsStore, company_name: str, address: str) -> None:
+    """标记该公司的 GMap 查询完成（即使没找到官网）。"""
+    conn = store._conn()
+    conn.execute(
+        "UPDATE companies SET gmap_status = 'done' WHERE company_name = ? AND address = ?",
+        (company_name, address),
     )
     conn.commit()
 

@@ -20,6 +20,7 @@ USAGE_TEXT = """用法：
 
 站点：
   bizmaps     — biz-maps.com 日本企业信息列表
+  hellowork   — ハローワーク 日本企业信息（求人検索）
   xlsximport  — xlsx 导入官网+邮箱，Protocol+LLM 补全公司名和代表人
 """
 
@@ -71,6 +72,11 @@ def _dispatch(argv: list[str]) -> int:
         from japan_crawler.sites.bizmaps.cli import run_bizmaps
 
         return run_bizmaps(rest)
+
+    if site == "hellowork":
+        from japan_crawler.sites.hellowork.cli import run_hellowork
+
+        return run_hellowork(rest)
 
     if site == "xlsximport":
         from japan_crawler.sites.xlsximport.cli import run_xlsximport
