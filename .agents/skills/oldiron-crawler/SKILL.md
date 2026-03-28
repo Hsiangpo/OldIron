@@ -1,6 +1,6 @@
 ---
 name: oldiron-crawler
-description: Use for OldIron multi-country company data collection work: adding a new country, adding a new site to an existing country, importing Excel/CSV sources, or changing delivery/product.py logic. Covers site exploration, protocol analysis, pipeline design, implementation, smoke tests, git/deploy, and delivery integration.
+description: "Use when working on OldIron multi-country company collection tasks such as adding a country, adding a site, importing Excel/CSV sources, or changing delivery and product.py flows."
 ---
 
 # OldIron crawler skill for Codex
