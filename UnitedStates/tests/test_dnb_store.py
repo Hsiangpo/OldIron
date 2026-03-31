@@ -1,0 +1,383 @@
+"""DNB 存储重试测试。"""
+
+from __future__ import annotations
+
+import sqlite3
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+PROJECT_ROOT = ROOT.parent
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from unitedstates_crawler.sites.dnb.store import DnbUsStore
+from unitedstates_crawler.sites.dnb.store import _clean_site_emails
+
+
+class DnbStoreTests(unittest.TestCase):
+    def test_clean_site_emails_keeps_email_but_strips_encoded_prefix(self) -> None:
+        cleaned = _clean_site_emails(["05%7c02%7cdkelly@pretium.com"])
+        self.assertEqual(["dkelly@pretium.com"], cleaned)
+
+    def test_detail_task_becomes_failed_after_three_retries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme",
+                        "detail_url": "https://example.com/detail",
+                        "address": "x",
+                        "region": "y",
+                        "city": "z",
+                        "postal_code": "",
+                        "industry_path": "construction",
+                    }
+                ]
+            )
+            store.enqueue_detail_tasks(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme",
+                        "detail_url": "https://example.com/detail",
+                    }
+                ]
+            )
+            for _ in range(3):
+                store.fail_detail_task("1")
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            row = conn.execute("SELECT status, retries FROM detail_queue WHERE duns = '1'").fetchone()
+            conn.close()
+            self.assertEqual("failed", row[0])
+            self.assertEqual(3, row[1])
+
+    def test_site_result_keeps_p1_representative_when_names_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme Inc",
+                        "representative": "Jane Doe",
+                        "website": "https://acme.example",
+                        "detail_url": "https://example.com/detail",
+                        "address": "Main St",
+                        "region": "CA",
+                        "city": "LA",
+                        "postal_code": "1",
+                        "industry_path": "construction",
+                    }
+                ]
+            )
+            store.complete_detail_task("1", "Jane Doe", "https://acme.example", "")
+            store.complete_site_task(
+                "1",
+                "ACME, INC.",
+                "",
+                ["sales@acme.example"],
+                "https://acme.example",
+                "",
+                "",
+                "https://acme.example",
+            )
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            row = conn.execute(
+                "SELECT company_name, representative FROM final_companies WHERE duns = '1'"
+            ).fetchone()
+            conn.close()
+            self.assertEqual("ACME, INC.", row[0])
+            self.assertEqual("Jane Doe", row[1])
+
+    def test_site_result_drops_p1_representative_when_names_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme Inc",
+                        "representative": "Jane Doe",
+                        "website": "https://acme.example",
+                        "detail_url": "https://example.com/detail",
+                        "address": "Main St",
+                        "region": "CA",
+                        "city": "LA",
+                        "postal_code": "1",
+                        "industry_path": "construction",
+                    }
+                ]
+            )
+            store.complete_detail_task("1", "Jane Doe", "https://acme.example", "")
+            store.complete_site_task(
+                "1",
+                "Beta Holdings",
+                "",
+                ["ops@beta.example"],
+                "https://beta.example",
+                "",
+                "",
+                "https://beta.example",
+            )
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            row = conn.execute(
+                "SELECT company_name, representative, website FROM final_companies WHERE duns = '1'"
+            ).fetchone()
+            conn.close()
+            self.assertIsNone(row)
+
+    def test_requeue_empty_detail_tasks_reopens_old_empty_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme Inc",
+                        "detail_url": "https://example.com/detail",
+                        "address": "Main St",
+                        "region": "CA",
+                        "city": "LA",
+                        "postal_code": "1",
+                        "industry_path": "construction",
+                    }
+                ]
+            )
+            store.enqueue_detail_tasks(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme Inc",
+                        "detail_url": "https://example.com/detail",
+                    }
+                ]
+            )
+            store.complete_detail_task("1", "", "", "")
+            repaired = store.requeue_empty_detail_tasks()
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            row = conn.execute(
+                "SELECT detail_status FROM companies WHERE duns = '1'"
+            ).fetchone()
+            queue = conn.execute(
+                "SELECT status, retries FROM detail_queue WHERE duns = '1'"
+            ).fetchone()
+            conn.close()
+            self.assertEqual(1, repaired)
+            self.assertEqual("pending", row[0])
+            self.assertEqual("pending", queue[0])
+            self.assertEqual(0, queue[1])
+
+    def test_site_result_without_emails_does_not_delete_existing_final(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme Inc",
+                        "representative": "Jane Doe",
+                        "website": "https://acme.example",
+                        "detail_url": "https://example.com/detail",
+                        "address": "Main St",
+                        "region": "CA",
+                        "city": "LA",
+                        "postal_code": "1",
+                        "industry_path": "construction",
+                    }
+                ]
+            )
+            store.complete_detail_task("1", "Jane Doe", "https://acme.example", "")
+            store.complete_site_task(
+                "1",
+                "Acme Inc",
+                "Jane Doe",
+                ["sales@acme.example"],
+                "https://acme.example",
+                "",
+                "",
+                "https://acme.example",
+            )
+            store.complete_detail_task("1", "Jane Doe", "https://acme.example", "")
+            store.complete_site_task(
+                "1",
+                "Acme Inc",
+                "Jane Doe",
+                [],
+                "https://acme.example",
+                "",
+                "",
+                "https://acme.example",
+            )
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            row = conn.execute(
+                "SELECT company_name, representative, emails FROM final_companies WHERE duns = '1'"
+            ).fetchone()
+            conn.close()
+            self.assertEqual(("Acme Inc", "Jane Doe", "sales@acme.example"), row)
+
+    def test_site_result_merges_new_emails_into_existing_final(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme Inc",
+                        "representative": "Jane Doe",
+                        "website": "https://acme.example",
+                        "detail_url": "https://example.com/detail",
+                        "address": "Main St",
+                        "region": "CA",
+                        "city": "LA",
+                        "postal_code": "1",
+                        "industry_path": "construction",
+                    }
+                ]
+            )
+            store.complete_detail_task("1", "Jane Doe", "https://acme.example", "")
+            store.complete_site_task(
+                "1",
+                "Acme Inc",
+                "Jane Doe",
+                ["sales@acme.example"],
+                "https://acme.example",
+                "",
+                "",
+                "https://acme.example",
+            )
+            store.complete_site_task(
+                "1",
+                "Acme Inc",
+                "Jane Doe",
+                ["info@acme.example"],
+                "https://acme.example",
+                "",
+                "",
+                "https://acme.example",
+            )
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            row = conn.execute("SELECT emails FROM final_companies WHERE duns = '1'").fetchone()
+            conn.close()
+            self.assertEqual("sales@acme.example; info@acme.example", row[0])
+
+    def test_requeue_stale_running_tasks_only_recovers_old_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            conn.executescript(
+                """
+                INSERT INTO dnb_segments (
+                    segment_id, industry_path, country_iso_two_code, region_name, city_name,
+                    expected_count, next_page, status, updated_at
+                ) VALUES
+                    ('old-seg', 'industry', 'us', '', '', 0, 1, 'running', '2026-03-31 00:00:00'),
+                    ('new-seg', 'industry', 'us', '', '', 0, 1, 'running', '2099-03-31 00:00:00');
+                INSERT INTO detail_queue (duns, detail_url, company_name, status, retries, updated_at) VALUES
+                    ('old-detail', 'https://example.com/1', 'Old Detail', 'running', 0, '2026-03-31 00:00:00'),
+                    ('new-detail', 'https://example.com/2', 'New Detail', 'running', 0, '2099-03-31 00:00:00');
+                INSERT INTO gmap_queue (duns, company_name, address, region, city, status, retries, updated_at) VALUES
+                    ('old-gmap', 'Old Gmap', '', '', '', 'running', 0, '2026-03-31 00:00:00'),
+                    ('new-gmap', 'New Gmap', '', '', '', 'running', 0, '2099-03-31 00:00:00');
+                INSERT INTO site_queue (duns, company_name, website, status, retries, updated_at) VALUES
+                    ('old-site', 'Old Site', 'https://old.example', 'running', 0, '2026-03-31 00:00:00'),
+                    ('new-site', 'New Site', 'https://new.example', 'running', 0, '2099-03-31 00:00:00');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            recovered = store.requeue_stale_running_tasks(max_age_seconds=60.0)
+
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            statuses = conn.execute(
+                """
+                SELECT 'detail', duns, status FROM detail_queue
+                UNION ALL
+                SELECT 'gmap', duns, status FROM gmap_queue
+                UNION ALL
+                SELECT 'site', duns, status FROM site_queue
+                ORDER BY 1, 2
+                """
+            ).fetchall()
+            segments = conn.execute(
+                "SELECT segment_id, status FROM dnb_segments ORDER BY segment_id"
+            ).fetchall()
+            conn.close()
+            self.assertEqual(4, recovered)
+            self.assertEqual(
+                [('new-seg', 'running'), ('old-seg', 'pending')],
+                segments,
+            )
+            self.assertEqual(
+                [
+                    ('detail', 'new-detail', 'running'),
+                    ('detail', 'old-detail', 'pending'),
+                    ('gmap', 'new-gmap', 'running'),
+                    ('gmap', 'old-gmap', 'pending'),
+                    ('site', 'new-site', 'running'),
+                    ('site', 'old-site', 'pending'),
+                ],
+                statuses,
+            )
+
+    def test_claim_site_task_prioritizes_names_not_in_final(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Existing Co",
+                        "representative": "Jane Doe",
+                        "website": "https://existing.example",
+                        "detail_url": "https://example.com/1",
+                        "address": "A",
+                        "region": "CA",
+                        "city": "LA",
+                        "postal_code": "1",
+                        "industry_path": "construction",
+                    },
+                    {
+                        "duns": "2",
+                        "company_name": "New Co",
+                        "representative": "John Doe",
+                        "website": "https://new.example",
+                        "detail_url": "https://example.com/2",
+                        "address": "B",
+                        "region": "CA",
+                        "city": "LA",
+                        "postal_code": "2",
+                        "industry_path": "construction",
+                    },
+                ]
+            )
+            store.complete_detail_task("1", "Jane Doe", "https://existing.example", "")
+            store.complete_detail_task("2", "John Doe", "https://new.example", "")
+            store.complete_site_task(
+                "1",
+                "Existing Co",
+                "Jane Doe",
+                ["a@existing.example"],
+                "https://existing.example",
+                "",
+                "",
+                "https://existing.example",
+            )
+            store.complete_detail_task("1", "Jane Doe", "https://existing.example", "")
+            store.complete_detail_task("2", "John Doe", "https://new.example", "")
+            task = store.claim_site_task()
+            assert task is not None
+            self.assertEqual("2", task.duns)
+
+
+if __name__ == "__main__":
+    unittest.main()

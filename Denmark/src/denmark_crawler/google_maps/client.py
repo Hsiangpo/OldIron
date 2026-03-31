@@ -44,6 +44,71 @@ INFO_HOSTS = (
     "wikidata.org",
     "wikimedia.org",
 )
+PORTAL_HOSTS = (
+    "anota.ai",
+    "app.cardapioweb.com",
+    "api.whatsapp.com",
+    "booking.com",
+    "bluepillow.com",
+    "cartorionobrasil.com.br",
+    "descubraalagoas.com.br",
+    "fb.me",
+    "tripadvisor.com",
+    "expedia.com",
+    "hoteis.com",
+    "hotels.com",
+    "ifood.com.br",
+    "instadelivery.com.br",
+    "linktr.ee",
+    "menudino.com",
+    "goomer.app",
+    "ola.click",
+    "decolar.com",
+    "parceiromagalu.com.br",
+    "pedido.anota.ai",
+    "rvpedidos.com.br",
+    "saipos.com",
+    "sigmenu.com",
+    "viaverdeshopping.com.br",
+    "wa.me",
+    "whatsapp.com",
+)
+MEDIA_HOST_HINTS = (
+    "staticontent.com",
+    "stays.net",
+)
+BAD_HOST_SUFFIXES = (
+    ".phones",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".bmp",
+    ".avif",
+)
+BAD_PATH_HINTS = (
+    "/image/",
+    "/images/",
+    "/media/pictures/",
+    "/showuserreviews-",
+)
+SHORTENER_HOSTS = (
+    "bit.ly",
+    "buff.ly",
+    "cutt.ly",
+    "goo.gl",
+    "lnkd.in",
+    "mla.bs",
+    "ow.ly",
+    "rb.gy",
+    "rebrand.ly",
+    "shorturl.at",
+    "t.co",
+    "t.ly",
+    "tinyurl.com",
+)
 FOREIGN_TLDS = (
     ".hk",
     ".com.hk",
@@ -323,7 +388,7 @@ class GoogleMapsClient:
         candidates = _extract_place_candidates(payload, query)
         if not candidates:
             return ""
-        return _pick_best_website(query, candidates)
+        return self._resolve_redirect_website(_pick_best_website(query, candidates))
 
     def search_company_profile(
         self,
@@ -339,12 +404,46 @@ class GoogleMapsClient:
         picked = _pick_best_candidate(candidates, company_name or normalized_query)
         if picked is None:
             return GoogleMapsPlaceResult()
+        website = self._resolve_redirect_website(str(picked.get("website", "")))
         return GoogleMapsPlaceResult(
             company_name=str(picked.get("name", "")),
             phone=picked["phone"],
-            website=picked["website"],
+            website=website,
             score=picked["score"],
         )
+
+    def _resolve_redirect_website(self, website: str) -> str:
+        normalized = _normalize_url(website)
+        if not normalized:
+            return ""
+        parsed = urlparse(normalized)
+        host = (parsed.netloc or "").strip().lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if host not in SHORTENER_HOSTS:
+            return normalized
+        try:
+            response = self.session.get(
+                normalized,
+                headers={
+                    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "accept-language": "en-US,en;q=0.9",
+                },
+                timeout=min(self.config.timeout, 15.0),
+                allow_redirects=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Google Maps 官网短链展开失败：%s | %s", normalized, exc)
+            return normalized
+        final_url = _normalize_url(str(response.url or ""))
+        if not final_url:
+            return normalized
+        final_host = (urlparse(final_url).netloc or "").strip().lower()
+        if final_host.startswith("www."):
+            final_host = final_host[4:]
+        if not final_host or _is_blocked_host(final_host) or "." not in final_host:
+            return normalized
+        return final_url
 
     def close(self) -> None:
         self.session.close()
@@ -486,9 +585,19 @@ def _is_blocked_host(host: str) -> bool:
     lower_host = host.lower()
     if any(hint in lower_host for hint in GOOGLE_HOST_HINTS):
         return True
+    if any(hint in lower_host for hint in ("hotelbeds.com", "worldota.net", "googlesyndication.com", "p.fih.io")):
+        return True
+    if any(hint in lower_host for hint in MEDIA_HOST_HINTS):
+        return True
+    if any(lower_host.endswith(item) for item in PORTAL_HOSTS):
+        return True
     if any(lower_host.endswith(item) for item in SOCIAL_HOSTS):
         return True
     if any(lower_host.endswith(item) for item in INFO_HOSTS):
+        return True
+    if lower_host.endswith(".gov.br"):
+        return True
+    if any(lower_host.endswith(item) for item in BAD_HOST_SUFFIXES):
         return True
     return False
 
@@ -502,8 +611,17 @@ def _normalize_url(value: str) -> str:
     if not text.startswith(("http://", "https://")):
         text = "https://" + text
     parsed = urlparse(text)
-    host = (parsed.netloc or "").strip()
-    if not host or " " in host:
+    host = (parsed.netloc or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host or " " in host or ".." in host or host.startswith(".") or host.endswith("."):
+        return ""
+    if not re.fullmatch(r"[a-z0-9.-]+", host):
+        return ""
+    labels = [part for part in host.split(".") if part]
+    if len(labels) < 2:
+        return ""
+    if not re.fullmatch(r"[a-z]{2,}", labels[-1]):
         return ""
     scheme = "https" if parsed.scheme == "http" else parsed.scheme
     cleaned = parsed._replace(scheme=scheme, netloc=host, fragment="")
@@ -545,6 +663,10 @@ def _extract_website(details: list[Any]) -> str:
             continue
         # 域名必须包含至少一个 . 才合法（过滤 https://localguideprogram 等垃圾）
         if "." not in host:
+            continue
+        if any(hint in parsed.path.lower() for hint in BAD_PATH_HINTS):
+            continue
+        if parsed.path.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif")):
             continue
         return candidate
     return ""
@@ -663,11 +785,12 @@ def _domain_match_score(query_name: str, website: str) -> int:
 
 
 def _candidate_score(query_name: str, candidate: dict[str, str | int]) -> int:
-    name_score = _name_match_score(query_name, str(candidate.get("name", "")))
-    domain_score = _domain_match_score(query_name, str(candidate.get("website", "")))
-    base = max(name_score, domain_score)
+    candidate_name = str(candidate.get("name", ""))
     website = str(candidate.get("website", ""))
     phone = str(candidate.get("phone", ""))
+    name_score = _name_match_score(query_name, candidate_name)
+    domain_score = _domain_match_score(query_name, website)
+    base = max(name_score, domain_score)
     parsed = urlparse(website if "://" in website else f"https://{website}")
     host = (parsed.netloc or parsed.path).strip().lower()
     lower_url = website.lower()
@@ -677,7 +800,17 @@ def _candidate_score(query_name: str, candidate: dict[str, str | int]) -> int:
         base -= 40
     if any(phone.startswith(prefix) for prefix in FOREIGN_PHONE_PREFIXES):
         base -= 60 if domain_score < 80 else 40
+    if _looks_like_query_artifact_name(query_name, candidate_name) and domain_score < 80:
+        base -= 45
     return base
+
+
+def _looks_like_query_artifact_name(query_name: str, candidate_name: str) -> bool:
+    query_tokens = _company_tokens(query_name)
+    candidate_tokens = _company_tokens(candidate_name)
+    if not query_tokens or len(candidate_tokens) <= len(query_tokens) + 1:
+        return False
+    return candidate_tokens[: len(query_tokens)] == query_tokens
 
 
 def _local_name_score(value: str) -> int:
@@ -776,4 +909,3 @@ def _pick_best_candidate(
     if int(scored[0]["score"]) < MIN_CANDIDATE_SCORE:
         return None
     return scored[0]
-

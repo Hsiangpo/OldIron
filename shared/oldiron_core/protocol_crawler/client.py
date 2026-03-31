@@ -15,6 +15,14 @@ from .link_extractor import extract_same_site_links
 from .sitemap import discover_sitemap_urls
 
 LOGGER = logging.getLogger(__name__)
+_HTTP_FALLBACK_ERROR_HINTS = (
+    "ssl",
+    "tls",
+    "certificate",
+    "wrong_version_number",
+    "alert_internal_error",
+    "no alternative certificate subject name",
+)
 
 
 @dataclass()
@@ -34,6 +42,7 @@ class SiteCrawlConfig:
     default_headers: dict[str, str] = field(default_factory=lambda: {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9,da;q=0.8",
+        "Connection": "close",
     })
 
 
@@ -129,12 +138,19 @@ class SiteCrawlClient:
                 pages.append(HtmlPageResult(url=url, html=html))
         return pages
 
+    def close(self) -> None:
+        try:
+            self._session.close()
+        except Exception:  # noqa: BLE001
+            return None
+
     def _fetch_html(self, url: str) -> str:
         """带重试的 HTTP GET 获取 HTML。"""
         attempts = max(self._config.max_retries, 0) + 1
         last_error: Exception | None = None
 
         for attempt in range(attempts):
+            resp = None
             try:
                 resp = self._session.get(
                     url, timeout=self._config.timeout_seconds,
@@ -160,7 +176,25 @@ class SiteCrawlClient:
                     "协议爬虫请求异常：url=%s attempt=%s/%s error=%s",
                     url, attempt + 1, attempts, exc,
                 )
+            finally:
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:  # noqa: BLE001
+                        pass
 
         if last_error:
+            fallback_url = self._http_fallback_url(url, last_error)
+            if fallback_url:
+                LOGGER.info("协议爬虫 HTTPS 失败，尝试 HTTP 回退：url=%s fallback=%s", url, fallback_url)
+                return self._fetch_html(fallback_url)
             LOGGER.warning("协议爬虫请求最终失败：url=%s error=%s", url, last_error)
         return ""
+
+    def _http_fallback_url(self, url: str, error: Exception) -> str:
+        text = str(error or "").lower()
+        if not str(url or "").startswith("https://"):
+            return ""
+        if not any(hint in text for hint in _HTTP_FALLBACK_ERROR_HINTS):
+            return ""
+        return str(url).replace("https://", "http://", 1)

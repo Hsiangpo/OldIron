@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]  # Japan/
 def run_xlsximport(argv: list[str] | None = None) -> int:
     """xlsximport 命令行入口。"""
     parser = argparse.ArgumentParser(description="xlsximport — xlsx 导入 + Protocol+LLM 提取")
-    parser.add_argument("--concurrency", type=int, default=32, help="并发线程数 (默认 32)")
+    parser.add_argument("--concurrency", type=int, default=16, help="并发线程数 (默认 16)")
     parser.add_argument("--max-items", type=int, default=0, help="最大处理数 (0=全部)")
     parser.add_argument("--xlsx", type=str, default="", help="xlsx 文件路径 (默认 docs/日本.xlsx)")
     args = parser.parse_args(argv or [])

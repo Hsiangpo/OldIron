@@ -9,7 +9,7 @@
 - 一个站点可以拆多阶段流水线
 - 不同国家可以复用同一类能力（官网补齐、联系方式提取、增量交付等）
 
-当前仓库已经覆盖英国、丹麦、韩国、日本、印尼、马来西亚、泰国、印度等方向。
+当前仓库已经覆盖英国、丹麦、韩国、日本、印尼、马来西亚、泰国、印度，以及新接入的美国、台湾方向。
 
 ## 当前开发口径
 
@@ -29,7 +29,10 @@
 | 国家 | 活跃站点 | 主链路 | 邮箱路线 |
 |------|---------|--------|---------|
 | Denmark | `proff`、`virk` | Proff/Virk → GMap → 协议爬虫+LLM → delivery | 站点直出优先，缺邮箱用协议爬虫+LLM 补强 |
+| Brazil | `dnb` | DNB 列表 API → 隐藏详情 API → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
 | England | `companyname` | Excel 名单 → GMap → 协议爬虫+LLM → delivery | 协议爬虫+LLM |
+| UnitedStates | `dnb` | DNB API → DNB 详情 → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
+| Taiwan | `ieatpe` | 会员协议接口 → 详情接口 → delivery | 站点直出 |
 | SouthKorea | `catch`、`incheon`、`dart` 等 | 列表/详情 → 官网 → 邮箱 → 交付 | Snov 为主 |
 | Japan | `gmap_agent`、`site_agent` 等 | 官网发现 → 抽取 → 邮箱/电话/代表人 | Firecrawl + 规则 + Snov |
 | Indonesia | `gapensi`、`indonesiayp` | 列表 → 详情 → 法人 → 邮箱 | Snov 为主 |
@@ -106,11 +109,26 @@ OldIron/
 │   │   ├── fc_email/            # 协议爬虫+LLM 邮箱提取
 │   │   └── sites/{proff,virk}/
 │   └── output/
+├── Brazil/                      # 巴西项目
+│   ├── run.py
+│   ├── src/brazil_crawler/
+│   │   └── sites/dnb/
+│   └── output/
 ├── England/                     # 英国项目
 │   ├── run.py
 │   ├── src/england_crawler/
 │   │   ├── fc_email/            # → 符号链接到 Denmark 的 fc_email
 │   │   └── sites/companyname/
+│   └── output/
+├── UnitedStates/                # 美国项目
+│   ├── run.py
+│   ├── src/unitedstates_crawler/
+│   │   └── sites/dnb/
+│   └── output/
+├── Taiwan/                      # 台湾项目
+│   ├── run.py
+│   ├── src/taiwan_crawler/
+│   │   └── sites/ieatpe/
 │   └── output/
 ├── SouthKorea/
 ├── Japan/
@@ -136,6 +154,7 @@ OldIron/
 | `LLM_MODEL` | 使用的模型名称 |
 | `CRAWL_BACKEND` | 爬虫后端类型（`protocol` = 协议爬虫） |
 | `FIRECRAWL_API_KEYS` | 遗留的 Firecrawl keys（部分国家仍在用） |
+| `DNB_CDP_URL` | DNB 美国线读取 9222 浏览器 cookie 的入口 |
 
 原则：凭据按国家隔离；长期续跑的流程必须支持断点恢复。
 

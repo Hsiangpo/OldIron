@@ -62,7 +62,7 @@ class VirkConfig:
     search_workers: int = 4
     detail_workers: int = 4
     gmap_workers: int = 64
-    firecrawl_workers: int = 8  # Protocol+LLM 邮箱发现并发
+    firecrawl_workers: int = 64  # Protocol+LLM 邮箱发现并发
 
     # CF cookie
     cf_browser_headless: bool = False  # CF 检测 headless，必须有界面
@@ -107,6 +107,7 @@ class VirkConfig:
     llm_base_url: str = ""
     llm_model: str = ""
     llm_reasoning_effort: str = ""
+    llm_api_style: str = "auto"
     llm_timeout_seconds: float = 120.0
 
     # 爬虫后端
@@ -121,7 +122,7 @@ class VirkConfig:
         search_workers: int = 4,
         detail_workers: int = 4,
         gmap_workers: int = 64,
-        firecrawl_workers: int = 8,
+        firecrawl_workers: int = 64,
     ) -> VirkConfig:
         """从环境变量创建配置。"""
         store_db = output_dir / "virk_store.db"
@@ -148,6 +149,7 @@ class VirkConfig:
             llm_base_url=_env_str("LLM_BASE_URL", ""),
             llm_model=_env_str("LLM_MODEL", ""),
             llm_reasoning_effort=_env_str("LLM_REASONING_EFFORT", ""),
+            llm_api_style=_env_str("LLM_API_STYLE", "auto"),
             crawl_backend=_env_str("CRAWL_BACKEND", "firecrawl"),
             firecrawl_task_max_retries=_env_int("VIRK_FIRECRAWL_TASK_MAX_RETRIES", 5),
         )

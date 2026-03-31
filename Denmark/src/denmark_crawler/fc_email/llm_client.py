@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import re
+import warnings
 from dataclasses import dataclass
 from typing import Any
+
+from bs4 import XMLParsedAsHTMLWarning
 
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 LOGGER = logging.getLogger(__name__)
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 
 def _parse_json_text(raw: str) -> dict[str, object]:
@@ -51,6 +55,7 @@ class EmailUrlLlmClient:
         base_url: str,
         model: str,
         reasoning_effort: str,
+        api_style: str,
         timeout_seconds: float,
         fallback_model: str = "gpt-5.1-codex-mini",
     ) -> None:
@@ -64,6 +69,7 @@ class EmailUrlLlmClient:
         self._model = model
         self._fallback_model = fallback_model
         self._reasoning_effort = reasoning_effort
+        self._api_style = str(api_style or "auto").strip().lower() or "auto"
 
     def pick_candidate_urls(
         self,
@@ -128,12 +134,13 @@ class EmailUrlLlmClient:
                 result.append({"url": url, "content": ""})
                 continue
             try:
-                # 先用 BeautifulSoup 删除无用标签（连同内容）
-                soup = BeautifulSoup(html, "html.parser")
+                # 先用 BeautifulSoup 删除无用标签（连同内容），使用 lxml 解析器避免嵌套过深导致 html.parser 假死
+                soup = BeautifulSoup(html, "lxml")
                 for tag in soup.find_all(_REMOVE_TAGS):
                     tag.decompose()
-                # 再用 markdownify 转换清洗后的 HTML
-                content = md(str(soup))
+                # 再用 markdownify 转换清洗后的 HTML，直接传入 soup 避免二次解析
+                from markdownify import MarkdownConverter
+                content = MarkdownConverter().convert_soup(soup)
             except Exception:  # noqa: BLE001
                 # 解析失败则保留原始 HTML
                 content = html
@@ -159,9 +166,21 @@ class EmailUrlLlmClient:
         company_name: str,
         homepage: str,
         pages: list[dict[str, str]],
+        need_emails: bool = True,
     ) -> HtmlContactExtraction:
         # HTML → Markdown 转换 + 截断，大幅减少 token 消耗
         safe_pages = self._convert_pages_to_markdown(pages)
+        email_rules = (
+            "=== 邮箱规则 ===\n"
+            "7. 优先保留个人邮箱（如 firstname@domain），"
+            "其次保留通用邮箱（如 info@, enquiries@, hello@, mail@）。\n"
+            "8. 排除无效邮箱：noreply@, no-reply@, example@, test@, "
+            "以及社媒账号、图片中的文字邮箱。\n\n"
+            if need_emails
+            else "=== 邮箱规则 ===\n"
+            "7. 这次邮箱已经由规则引擎抽取完成，你不要再补邮箱。\n"
+            "8. emails 必须返回空列表 []。\n\n"
+        )
         prompt = (
             "你是企业官网联系人抽取器。\n"
             "目标：从给定网页内容（Markdown 格式）中抽取公司名、公司最高负责人（Director 级别以上）、所有公开邮箱。\n\n"
@@ -181,11 +200,7 @@ class EmailUrlLlmClient:
             "5. evidence_quote 必须包含代表人姓名的原文片段（从页面内容中复制）。\n"
             "   如果你无法提供包含该人名的 evidence_quote，说明你没有在页面中找到，必须留空 representative。\n"
             "6. 如果页面上有多个人但无法确定谁是最高负责人，宁可留空也不要猜。\n\n"
-            "=== 邮箱规则 ===\n"
-            "7. 优先保留个人邮箱（如 firstname@domain），"
-            "其次保留通用邮箱（如 info@, enquiries@, hello@, mail@）。\n"
-            "8. 排除无效邮箱：noreply@, no-reply@, example@, test@, "
-            "以及社媒账号、图片中的文字邮箱。\n\n"
+            f"{email_rules}"
             "=== 其他 ===\n"
             "9. company_name：如果网页明确显示公司法定名称就用官网的，否则用输入公司名。\n"
             "10. 找不到代表人就 representative 留空字符串，找不到邮箱就 emails 留空列表。绝对不要编造。\n\n"
@@ -255,14 +270,47 @@ class EmailUrlLlmClient:
                 values.append(text)
         return values
 
-    # LLM API 输入最大字符数（272k token ≈ 816k 字符，留余量取 750k）
-    _MAX_PROMPT_CHARS = 750_000
+    # 最终发给 LLM 的总 Markdown / prompt 上限，按用户要求压到 25 万字符。
+    _MAX_PROMPT_CHARS = 250_000
 
     def _call_json_with_model(self, model: str, prompt: str) -> dict[str, Any]:
         # 最终安全截断，防止超出 API 限制
         if len(prompt) > self._MAX_PROMPT_CHARS:
             LOGGER.warning("Prompt 超长截断：%d -> %d 字符", len(prompt), self._MAX_PROMPT_CHARS)
             prompt = prompt[:self._MAX_PROMPT_CHARS]
+        if self._api_style == "chat":
+            return _parse_json_text(self._call_chat_json_with_model(model, prompt))
+        if self._api_style == "responses":
+            return _parse_json_text(self._call_responses_json_with_model(model, prompt))
+        if self._prefer_chat_first(model):
+            chat_exc: Exception | None = None
+            try:
+                return _parse_json_text(self._call_chat_json_with_model(model, prompt))
+            except Exception as exc:  # noqa: BLE001
+                chat_exc = exc
+                LOGGER.warning("LLM Chat API 回退 Responses API：模型=%s 错误=%s", model, exc)
+            try:
+                return _parse_json_text(self._call_responses_json_with_model(model, prompt))
+            except Exception:
+                if chat_exc is not None:
+                    raise chat_exc
+                raise
+        response_exc: Exception | None = None
+        try:
+            return _parse_json_text(self._call_responses_json_with_model(model, prompt))
+        except Exception as exc:  # noqa: BLE001
+            response_exc = exc
+            if not self._should_try_chat_fallback(exc):
+                raise
+            LOGGER.warning("LLM Responses API 回退 chat.completions：模型=%s 错误=%s", model, exc)
+        try:
+            return _parse_json_text(self._call_chat_json_with_model(model, prompt))
+        except Exception:
+            if response_exc is not None:
+                raise response_exc
+            raise
+
+    def _call_responses_json_with_model(self, model: str, prompt: str) -> str:
         base_kwargs: dict[str, Any] = {"model": model, "input": prompt}
         if self._reasoning_effort:
             base_kwargs["reasoning"] = {"effort": self._reasoning_effort}
@@ -275,8 +323,7 @@ class EmailUrlLlmClient:
             if use_response_format:
                 kwargs["response_format"] = {"type": "json_object"}
             try:
-                output_text = self._call_api_with_retry(kwargs)
-                return _parse_json_text(output_text)
+                return self._call_api_with_retry(channel="responses", kwargs=kwargs)
             except TypeError as exc:
                 if use_response_format and "response_format" in str(exc):
                     last_exc = exc
@@ -289,20 +336,34 @@ class EmailUrlLlmClient:
                 raise
         if last_exc is not None:
             raise last_exc
-        return {}
+        return ""
 
-    def _call_api_with_retry(self, kwargs: dict[str, Any], max_retries: int = 5) -> str:
-        """带指数退避的 API 调用，处理网络错误、超时、429 限流和 5xx 错误。
+    def _call_chat_json_with_model(self, model: str, prompt: str) -> str:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": self._build_chat_messages(prompt),
+            "temperature": 0,
+        }
+        return self._call_api_with_retry(channel="chat", kwargs=kwargs)
 
-        429 限流：无限排队等待（30-60 秒），不消耗重试次数。
-        其他可重试错误：最多 max_retries 次。
+    def _call_api_with_retry(self, *, channel: str, kwargs: dict[str, Any], max_retries: int = 5) -> str:
+        """带退避的 API 调用。
+
+        规则：
+        - 429：无限排队等待
+        - 上游 5xx / overloaded / capacity：无限重试
+        - 连接超时类错误：最多 max_retries 次
         """
         import time as _time
         import random as _random
         last_exc: Exception | None = None
         attempt = 0
+        transient_attempt = 0
         while True:
             try:
+                if channel == "chat":
+                    resp = self._client.chat.completions.create(**kwargs)
+                    return self._extract_chat_output_text(resp)
                 resp = self._client.responses.create(**kwargs)
                 return str(getattr(resp, "output_text", "") or "")
             except TypeError:
@@ -317,21 +378,35 @@ class EmailUrlLlmClient:
                     LOGGER.warning("LLM API 429 限流排队，等待 %.0fs", wait)
                     _time.sleep(wait)
                     continue
-                # 其他可重试错误：网络、超时、5xx
-                retryable = any(kw in err_str for kw in (
-                    "Connection", "Timeout", "timeout", "500", "502", "503",
-                    "overloaded", "capacity",
+                is_upstream_5xx = any(kw in err_str for kw in (
+                    "500", "502", "503", "504",
+                    "Internal Server Error",
+                    "Bad Gateway",
+                    "Service Unavailable",
+                    "Gateway Timeout",
+                    "overloaded",
+                    "capacity",
+                    "upstream",
                 ))
-                if not retryable:
+                if is_upstream_5xx:
+                    attempt += 1
+                    wait = min(30 + attempt * 5, 120)
+                    LOGGER.warning("LLM API 上游 5xx/拥塞，第 %d 次重试，等待 %ds，错误: %s", attempt, wait, exc)
+                    _time.sleep(wait)
+                    continue
+                is_transient = any(kw in err_str for kw in (
+                    "Connection", "Timeout", "timeout",
+                ))
+                if not is_transient:
                     raise
-                attempt += 1
+                transient_attempt += 1
                 last_exc = exc
-                if attempt >= max_retries:
+                if transient_attempt >= max_retries:
                     raise last_exc
-                wait = min(2 ** (attempt + 1), 32)  # 2s, 4s, 8s, 16s, 32s
+                wait = min(2 ** (transient_attempt + 1), 32)  # 4s, 8s, 16s, 32s
                 LOGGER.warning(
-                    "LLM API 重试 %d/%d，等待 %ds，错误: %s",
-                    attempt, max_retries, wait, exc,
+                    "LLM API 临时错误重试 %d/%d，等待 %ds，错误: %s",
+                    transient_attempt, max_retries, wait, exc,
                 )
                 _time.sleep(wait)
 
@@ -342,3 +417,36 @@ class EmailUrlLlmClient:
                 "content": [{"type": "input_text", "text": prompt}],
             }
         ]
+
+    def _build_chat_messages(self, prompt: str) -> list[dict[str, str]]:
+        return [{"role": "user", "content": prompt}]
+
+    def _extract_chat_output_text(self, response: object) -> str:
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return ""
+        message = getattr(choices[0], "message", None)
+        return str(getattr(message, "content", "") or "")
+
+    def _should_try_chat_fallback(self, exc: Exception) -> bool:
+        text = str(exc)
+        needles = (
+            "messages must not be empty",
+            "Input must be a list",
+            "Responses API",
+            "response_format",
+            "unexpected keyword argument 'response_format'",
+        )
+        return any(needle in text for needle in needles)
+
+    def _prefer_chat_first(self, model: str) -> bool:
+        lowered = str(model or "").strip().lower()
+        chat_first_prefixes = (
+            "claude",
+            "gemini",
+            "kimi",
+            "qwen",
+            "glm",
+            "minimax",
+        )
+        return lowered.startswith(chat_first_prefixes)

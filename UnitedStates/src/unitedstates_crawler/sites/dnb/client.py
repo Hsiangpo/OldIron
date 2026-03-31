@@ -1,0 +1,339 @@
+"""DNB 美国站点协议客户端。"""
+
+from __future__ import annotations
+
+import json
+import threading
+import urllib.request
+from collections.abc import Mapping
+from dataclasses import dataclass
+from html import unescape
+from typing import Any
+from urllib.parse import quote
+from urllib.parse import urlparse
+
+from curl_cffi import requests as cffi_requests
+from playwright.sync_api import sync_playwright
+
+
+LIST_API_URL = "https://www.dnb.com/business-directory/api/companyinformation"
+DETAIL_API_URL = "https://www.dnb.com/business-directory/api/companyprofile"
+DETAIL_URL_TEMPLATE = (
+    "https://www.dnb.com/business-directory/company-profiles.{company_name_url}.html"
+)
+
+
+@dataclass(slots=True)
+class DnbListPage:
+    current_page: int
+    total_pages: int
+    page_size: int
+    country_name: str
+    industry_name: str
+    matched_count: int
+    records: list[dict[str, str]]
+
+
+@dataclass(slots=True)
+class DnbBrowserHeaders:
+    user_agent: str
+    sec_ch_ua: str
+    sec_ch_ua_platform: str
+    accept_language: str
+
+
+@dataclass(slots=True)
+class DnbDetailProfile:
+    company_name: str
+    representative: str
+    website: str
+    phone: str
+    address: str
+    city: str
+    region: str
+    postal_code: str
+
+
+def _to_int(value: object) -> int:
+    text = str(value or "").replace(",", "").strip()
+    return int(text) if text.isdigit() else 0
+
+
+def _safe_text(value: object) -> str:
+    return unescape(str(value or "").strip()).replace("\xa0", " ")
+
+
+def _as_dict(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _clean_masked_text(value: object) -> str:
+    text = _safe_text(value).replace("\t", " ").replace("\r", " ").replace("\n", " ")
+    text = " ".join(text.split())
+    compact = text.replace("?", "").replace(" ", "").strip()
+    if not compact or not any(ch.isalnum() for ch in compact):
+        return ""
+    return text
+
+
+def _normalize_website(value: object) -> str:
+    website = _clean_masked_text(value)
+    if not website:
+        return ""
+    if website.startswith(("http://", "https://")):
+        return website
+    return f"https://{website.lstrip('/')}"
+
+
+def _first_real_contact_name(contacts: object) -> str:
+    if not isinstance(contacts, list):
+        return ""
+    for item in contacts:
+        if not isinstance(item, Mapping):
+            continue
+        name = _clean_masked_text(item.get("name"))
+        if not name or name.lower().startswith("contact "):
+            continue
+        return name
+    return ""
+
+
+def _companyprofile_api_path(detail_url: str) -> str:
+    parsed = urlparse(detail_url)
+    path = parsed.path.rstrip("/")
+    if path.endswith(".html"):
+        path = path[:-5]
+    return f"https://www.dnb.com{path}"
+
+
+def parse_companyinformation_payload(payload: dict[str, Any], industry_path: str) -> DnbListPage:
+    """解析 DNB 列表 API 的返回。"""
+    records: list[dict[str, str]] = []
+    for item in payload.get("companyInformationCompany", []) or []:
+        if not isinstance(item, dict):
+            continue
+        primary_address = _as_dict(item.get("primaryAddress"))
+        street_address = _as_dict(primary_address.get("streetAddress"))
+        slug = str(item.get("companyNameUrl", "") or "").strip()
+        detail_url = ""
+        if slug:
+            detail_url = DETAIL_URL_TEMPLATE.format(company_name_url=slug)
+        records.append(
+            {
+                "duns": str(item.get("duns", "") or "").strip(),
+                "company_name": _safe_text(item.get("primaryName", "")),
+                "company_name_url": slug,
+                "detail_url": detail_url,
+                "country_code": str(item.get("addressCountryIsoAlphaTwoCode", "") or "").strip(),
+                "country_name": _safe_text(item.get("addressCountryName", "")),
+                "region": _safe_text(item.get("addressRegionNameFormatted", "")),
+                "city": _safe_text(item.get("addressLocalityNameFormatted", "")),
+                "postal_code": str(primary_address.get("postalCode", "") or "").strip(),
+                "address": _safe_text(street_address.get("line1", "")),
+                "sales_revenue": str(item.get("salesRevenue", "") or "").strip(),
+                "industry_path": industry_path,
+            }
+        )
+    return DnbListPage(
+        current_page=_to_int(payload.get("currentPageNumber")),
+        total_pages=_to_int(payload.get("totalPages")),
+        page_size=_to_int(payload.get("pageSize")),
+        country_name=_safe_text(payload.get("countryMapValue", "")),
+        industry_name=_safe_text(payload.get("industryName", "")),
+        matched_count=_to_int(payload.get("candidatesMatchedQuantityInt") or payload.get("candidatesMatchedQuantity")),
+        records=records,
+    )
+
+
+def parse_companyprofile_payload(payload: dict[str, Any]) -> DnbDetailProfile:
+    """解析 DNB 详情 JSON。"""
+    overview = payload.get("overview") or {}
+    header = payload.get("header") or {}
+    header_params = header.get("companyNewHeaderParameter") or {}
+    company_cookie = header_params.get("companyInformationForCookie") or {}
+    contacts = payload.get("contacts") or {}
+    representative = _clean_masked_text(overview.get("keyPrincipal"))
+    if not representative:
+        representative = _first_real_contact_name(contacts.get("contacts"))
+    return DnbDetailProfile(
+        company_name=_clean_masked_text(
+            overview.get("primaryName")
+            or header.get("companyName")
+            or company_cookie.get("companyName")
+        ),
+        representative=representative,
+        website=_normalize_website(overview.get("website") or header.get("companyWebsiteUrl")),
+        phone=_clean_masked_text(overview.get("phone")),
+        address=_clean_masked_text(company_cookie.get("companyAddress")),
+        city=_clean_masked_text(company_cookie.get("companyCity")),
+        region=_clean_masked_text(company_cookie.get("companyState")),
+        postal_code=_clean_masked_text(company_cookie.get("companyZip")),
+    )
+
+
+class DnbBrowserCookieProvider:
+    """从 9222 调试浏览器提取 DNB cookie。"""
+
+    def __init__(self, cdp_url: str = "http://127.0.0.1:9222") -> None:
+        self._cdp_url = cdp_url
+
+    def fetch_cookies(self, domain_keyword: str = "dnb.com") -> list[dict[str, str]]:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(self._browser_ws_url(), timeout=10000)
+            try:
+                cookies: list[dict[str, str]] = []
+                for context in browser.contexts:
+                    for item in context.cookies():
+                        domain = str(item.get("domain", "") or "")
+                        if domain_keyword in domain:
+                            cookies.append(item)
+                return cookies
+            finally:
+                browser.close()
+
+    def _browser_ws_url(self) -> str:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        version = json.loads(opener.open(f"{self._cdp_url}/json/version", timeout=5).read().decode())
+        return str(version["webSocketDebuggerUrl"])
+
+    def fetch_browser_headers(self) -> DnbBrowserHeaders:
+        version = self._browser_version_payload()
+        user_agent = str(version.get("User-Agent") or "").strip()
+        major_version = str(version.get("Browser") or "Chrome/146").split("/", 1)[-1].split(".", 1)[0]
+        return DnbBrowserHeaders(
+            user_agent=user_agent or (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+            ),
+            sec_ch_ua=(
+                f'"Chromium";v="{major_version}", '
+                f'"Not-A.Brand";v="24", "Google Chrome";v="{major_version}"'
+            ),
+            sec_ch_ua_platform=self._detect_platform(user_agent),
+            accept_language="en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+        )
+
+    def _browser_version_payload(self) -> dict[str, Any]:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return json.loads(opener.open(f"{self._cdp_url}/json/version", timeout=5).read().decode())
+
+    def _detect_platform(self, user_agent: str) -> str:
+        lowered = user_agent.lower()
+        if "mac os x" in lowered:
+            return '"macOS"'
+        if "windows" in lowered:
+            return '"Windows"'
+        if "linux" in lowered:
+            return '"Linux"'
+        return '"macOS"'
+
+
+class DnbCompanyInformationClient:
+    """带浏览器 cookie 的 DNB 列表客户端。"""
+
+    def __init__(self, cookie_provider: DnbBrowserCookieProvider | None = None) -> None:
+        self._cookie_provider = cookie_provider or DnbBrowserCookieProvider()
+        self._cookie_lock = threading.Lock()
+        self._cookies: list[dict[str, str]] = []
+        self._browser_headers: DnbBrowserHeaders | None = None
+
+    def refresh_cookies(self) -> None:
+        with self._cookie_lock:
+            self._cookies = self._cookie_provider.fetch_cookies()
+            self._browser_headers = self._cookie_provider.fetch_browser_headers()
+
+    def _get_cookies(self) -> list[dict[str, str]]:
+        with self._cookie_lock:
+            if not self._cookies:
+                self._cookies = self._cookie_provider.fetch_cookies()
+            return list(self._cookies)
+
+    def _get_browser_headers(self) -> DnbBrowserHeaders:
+        with self._cookie_lock:
+            if self._browser_headers is None:
+                self._browser_headers = self._cookie_provider.fetch_browser_headers()
+            return self._browser_headers
+
+    def _new_session(self) -> cffi_requests.Session:
+        session = cffi_requests.Session(impersonate="chrome110")
+        for cookie in self._get_cookies():
+            domain = str(cookie.get("domain") or "www.dnb.com").lstrip(".")
+            session.cookies.set(
+                str(cookie["name"]),
+                str(cookie["value"]),
+                domain=domain,
+                path=str(cookie.get("path") or "/"),
+            )
+        return session
+
+    def _detail_headers(self, detail_url: str) -> dict[str, str]:
+        browser_headers = self._get_browser_headers()
+        return {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": browser_headers.accept_language,
+            "Origin": "https://www.dnb.com",
+            "Priority": "u=1, i",
+            "Referer": detail_url,
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "User-Agent": browser_headers.user_agent,
+            "sec-ch-ua": browser_headers.sec_ch_ua,
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": browser_headers.sec_ch_ua_platform,
+        }
+
+    def fetch_page(self, industry_path: str, page_number: int, country_code: str = "us") -> DnbListPage:
+        session = self._new_session()
+        payload = {
+            "pageNumber": int(page_number),
+            "industryPath": industry_path,
+            "countryIsoTwoCode": country_code,
+        }
+        response = session.post(
+            LIST_API_URL,
+            json=payload,
+            timeout=30,
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Referer": "https://www.dnb.com/en-us/",
+                "Origin": "https://www.dnb.com",
+            },
+        )
+        if response.status_code == 403:
+            self.refresh_cookies()
+            session = self._new_session()
+            response = session.post(
+                LIST_API_URL,
+                json=payload,
+                timeout=30,
+                headers={
+                    "Accept": "application/json, text/plain, */*",
+                    "Referer": "https://www.dnb.com/en-us/",
+                    "Origin": "https://www.dnb.com",
+                },
+            )
+        response.raise_for_status()
+        return parse_companyinformation_payload(response.json(), industry_path)
+
+    def fetch_detail_profile(self, detail_url: str, country_code: str = "us") -> DnbDetailProfile:
+        session = self._new_session()
+        api_url = (
+            f"{DETAIL_API_URL}?path={quote(_companyprofile_api_path(detail_url), safe='')}"
+            f"&language=en&country={country_code}"
+        )
+        response = session.get(
+            api_url,
+            timeout=15,
+            headers=self._detail_headers(detail_url),
+        )
+        if response.status_code == 403:
+            self.refresh_cookies()
+            session = self._new_session()
+            response = session.get(
+                api_url,
+                timeout=15,
+                headers=self._detail_headers(detail_url),
+            )
+        response.raise_for_status()
+        return parse_companyprofile_payload(response.json())

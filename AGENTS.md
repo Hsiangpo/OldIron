@@ -82,10 +82,13 @@
 This repository is a multi-country company data collection workspace. Each country folder is a mostly independent project with its own runtime, output, and delivery flow. Additionally, there is a global generic backend for high concurrency generic tasks:
 
 - `Denmark/`
+- `Brazil/`
 - `England/`
 - `India/`
 - `Indonesia/`
 - `Japan/`
+- `Taiwan/`
+- `UnitedStates/`
 - `Malaysia/`
 - `SouthKorea/`
 - `Spain/`
@@ -110,6 +113,9 @@ There is no single root build step. Work inside the target country directory for
 - `cd England && python run.py dnb`
 - `cd England && python run.py companies-house`
 - `python product.py England day2`
+- `cd Brazil && python -m pip install -r requirements.txt`
+- `cd Brazil && python run.py dnb`
+- `python product.py Brazil day1`
 - `cd Denmark && python -m pip install -r requirements.txt`
 - `cd Denmark && python run.py dnb`
 - `cd Denmark && python run.py virk`
@@ -120,6 +126,8 @@ There is no single root build step. Work inside the target country directory for
 - `cd Finland && python run.py jobly`
 - `python product.py Finland day1`
 - `cd Japan && python -m pytest test -v`
+- `cd Taiwan && python -m unittest tests -v`
+- `cd UnitedStates && python -m unittest tests -v`
 - `cd Thailand && pytest tests -q`
 
 ## Coding Style And Naming Conventions
@@ -128,7 +136,11 @@ There is no single root build step. Work inside the target country directory for
 - Use `snake_case` for functions, variables, and modules.
 - Use `PascalCase` for classes.
 - Keep country-specific logic inside the matching country folder.
-- Old country projects may keep local isolation for stability, but newly extracted reusable cores must live in approved shared locations such as `shared/oldiron_core/` (Python shared business core) or `VersatileBackend/` (Go concurrent backend). Do not create ad hoc cross-country imports outside these two shared roots.
+- Old country projects may keep local isolation for stability, but newly extracted reusable cores must follow this hard rule:
+  - If a module is shared across different countries, it must live under `shared/` in an appropriate shared location such as `shared/oldiron_core/`.
+  - If a module is shared only by multiple sites inside the same country, it must live under `<Country>/shared/`.
+  - Never place reusable modules inside one country's site tree and then import/symlink/copy them into other countries.
+  - Never create ad hoc cross-country imports or cross-site imports from one site's source tree into another site's source tree.
 - `shared/oldiron_core/protocol_crawler/` is the shared protocol crawler module (curl_cffi-based site link discovery + HTML scraping). It replaces Firecrawl when `CRAWL_BACKEND=protocol` is set in a country's `.env`.
 - New active work for rewritten countries/sites must target the new framework only. Do not extend archived code under `bak/`.
 
@@ -160,10 +172,7 @@ There is no single root build step. Work inside the target country directory for
 - Every code change must be committed and pushed to GitHub immediately after verification.
 - After pushing, **all machines** must be updated to the latest code before restarting any process.
   - Machine 2 (Mac): `git pull`
-  - Machine 1 (Windows): `git pull` on the E: drive project, then manually copy symlinked directories (because symlinks don't work on Windows):
-    - `Denmark\src\denmark_crawler\fc_email` → `England\src\england_crawler\fc_email`
-    - `Denmark\src\denmark_crawler\fc_email` → `Finland\src\finland_crawler\fc_email`
-    - `Denmark\src\denmark_crawler\google_maps` → `Finland\src\finland_crawler\google_maps`
+  - Machine 1 (Windows): `git pull` on the E: drive project.
 - Never run a process on stale code. If in doubt, `git pull` first.
 - The `.env` files are not tracked by git. When `.env` changes, manually sync to all machines.
 
@@ -185,10 +194,7 @@ When a new machine joins the project, it **must** be registered here with at lea
 - Password: `deadman`
 - Project path: `E:\Develop\Masterpiece\Spider\Website\OldIron`
 - Role: runs England CompanyName + Finland (TMT, Duunitori, Jobly) pipelines
-- **Important**: `fc_email/` and `google_maps/` are symlinks on Mac/Linux. On Windows, after code sync, must manually copy:
-  - `Denmark\src\denmark_crawler\fc_email` → `England\src\england_crawler\fc_email`
-  - `Denmark\src\denmark_crawler\fc_email` → `Finland\src\finland_crawler\fc_email`
-  - `Denmark\src\denmark_crawler\google_maps` → `Finland\src\finland_crawler\google_maps`
+- **Important**: cross-country shared modules must not rely on per-country symlinks or manual copy chains. Shared code belongs in `shared/`, and same-country multi-site shared code belongs in `<Country>/shared/`.
 
 ### Machine 2 — macOS (local, primary)
 

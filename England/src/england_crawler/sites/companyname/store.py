@@ -114,6 +114,7 @@ class FirecrawlTask:
     """官网爬虫/邮箱补充任务。"""
     orgnr: str
     company_name: str
+    representative: str
     website: str
     domain: str
     override_mode: str
@@ -340,7 +341,7 @@ class CompanyNameStore:
         now = _utc_now()
         with self._lock:
             row = self._conn.execute(
-                """SELECT q.orgnr, c.company_name, c.homepage, c.domain, c.override_mode, q.retries
+                """SELECT q.orgnr, c.company_name, c.representative, c.homepage, c.domain, c.override_mode, q.retries
                    FROM firecrawl_queue q JOIN companies c ON q.orgnr = c.orgnr
                    WHERE q.status = 'pending' AND q.next_run_at <= ?
                    ORDER BY q.updated_at ASC LIMIT 1""",
@@ -356,6 +357,7 @@ class CompanyNameStore:
             return FirecrawlTask(
                 orgnr=row["orgnr"],
                 company_name=row["company_name"],
+                representative=row["representative"] or "",
                 website=row["homepage"] or "",
                 domain=row["domain"] or "",
                 override_mode=row["override_mode"] or "",

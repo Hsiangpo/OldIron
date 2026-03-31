@@ -137,6 +137,19 @@ class TestSiteCrawlClient(unittest.TestCase):
         self.assertEqual("https://a.com/1", pages[0].url)
         self.assertEqual("https://a.com/3", pages[1].url)
 
+    def test_fetch_html_falls_back_to_http_on_tls_error(self) -> None:
+        client = SiteCrawlClient(SiteCrawlConfig(max_retries=0))
+        https_error = RuntimeError("curl: (60) SSL certificate problem")
+        http_response = MagicMock(status_code=200, text="<html>ok</html>")
+        client._session.get = MagicMock(side_effect=[https_error, http_response])
+
+        html = client._fetch_html("https://example.com")
+
+        self.assertEqual("<html>ok</html>", html)
+        self.assertEqual(2, client._session.get.call_count)
+        self.assertEqual("https://example.com", client._session.get.call_args_list[0].args[0])
+        self.assertEqual("http://example.com", client._session.get.call_args_list[1].args[0])
+
     def test_html_page_result_fields(self) -> None:
         result = HtmlPageResult(url="https://test.com", html="<p>hi</p>")
         self.assertEqual("https://test.com", result.url)

@@ -124,6 +124,7 @@ class FirecrawlTask:
 
     orgnr: str
     company_name: str
+    representative: str
     website: str
     domain: str
     override_mode: str
@@ -453,6 +454,7 @@ class ProffStore:
         return FirecrawlTask(
             orgnr=orgnr,
             company_name=str(company.get("company_name", "")).strip(),
+            representative=str(company.get("representative", "")).strip(),
             website=website,
             domain=str(company.get("domain", "")).strip() or _extract_domain(website),
             override_mode=str(company.get("override_mode", "")).strip(),

@@ -1,0 +1,6 @@
+python-dotenv
+curl_cffi
+playwright
+openai
+beautifulsoup4
+markdownify

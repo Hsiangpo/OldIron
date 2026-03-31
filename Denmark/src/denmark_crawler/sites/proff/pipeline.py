@@ -98,6 +98,7 @@ class ProffPipelineRunner:
             llm_base_url=self.config.llm_base_url,
             llm_model=self.config.llm_model,
             llm_reasoning_effort=self.config.llm_reasoning_effort,
+            llm_api_style=self.config.llm_api_style,
             llm_timeout_seconds=self.config.llm_timeout_seconds,
             prefilter_limit=self.config.firecrawl_prefilter_limit,
             llm_pick_count=self.config.firecrawl_llm_pick_count,
@@ -391,6 +392,7 @@ class ProffPipelineRunner:
                 company_name=task.company_name,
                 homepage=task.website,
                 domain=task.domain,
+                existing_representative=task.representative,
             )
         except FirecrawlError as exc:
             self._handle_firecrawl_failure(task, exc)
@@ -541,12 +543,13 @@ class ProffPipelineRunner:
                 raise
             raise
 
-    def _discover_emails(self, *, company_name: str, homepage: str, domain: str):
+    def _discover_emails(self, *, company_name: str, homepage: str, domain: str, existing_representative: str):
         service = self._get_firecrawl_service()
         return service.discover_emails(
             company_name=company_name,
             homepage=homepage,
             domain=domain,
+            existing_representative=existing_representative,
         )
 
 

@@ -43,13 +43,15 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
     """构建 Japan 日交付包，各站点独立落盘。"""
     day = parse_day_label(day_label)
     delivery_dir = Path(delivery_root) / f"Japan_day{day:03d}"
+    baseline_day = max(day - 1, 0)
 
     if delivery_dir.exists():
         shutil.rmtree(delivery_dir)
     delivery_dir.mkdir(parents=True, exist_ok=True)
 
-    total_companies = 0
-    site_stats: dict[str, int] = {}
+    total_current_companies = 0
+    total_delta_companies = 0
+    site_stats: dict[str, dict[str, int]] = {}
 
     # 遍历 output/ 下每个站点目录
     if data_root.exists():
@@ -75,22 +77,32 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
                 and r.get("representative", "").strip() != "-"
                 and r.get("emails", "").strip()
             ]
+            baseline_keys = _load_site_baseline_keys(delivery_root=Path(delivery_root), site_name=site_name, baseline_day=baseline_day)
+            delta_records = [record for record in qualified if _record_key(record) not in baseline_keys]
+            current_keys = sorted(baseline_keys | {_record_key(record) for record in qualified})
 
             # 写站点独立 CSV
             csv_path = delivery_dir / f"{site_name}.csv"
-            _write_site_csv(csv_path, qualified)
-            site_stats[site_name] = len(qualified)
-            total_companies += len(qualified)
-            print(f"  {site_name}: DB 总计 {raw_count} → 合格落盘 {len(qualified)} 家公司")
+            _write_site_csv(csv_path, delta_records)
+            (delivery_dir / f"{site_name}.keys.txt").write_text("\n".join(current_keys), encoding="utf-8")
+            site_stats[site_name] = {
+                "qualified_current": len(qualified),
+                "delta": len(delta_records),
+            }
+            total_current_companies += len(qualified)
+            total_delta_companies += len(delta_records)
+            print(
+                f"  {site_name}: DB 总计 {raw_count} → 当前合格 {len(qualified)} 家公司 → 当日新增 {len(delta_records)} 家公司"
+            )
 
     summary = {
         "country": "Japan",
         "day": day,
-        "baseline_day": max(day - 1, 0),
-        "total_companies": total_companies,
+        "baseline_day": baseline_day,
+        "total_companies": total_current_companies,
         # product.py 根入口需要的字段
-        "delta_companies": total_companies,
-        "total_current_companies": total_companies,
+        "delta_companies": total_delta_companies,
+        "total_current_companies": total_current_companies,
         "sites": site_stats,
     }
     (delivery_dir / "summary.json").write_text(
@@ -232,6 +244,38 @@ def _filter_emails(emails_str: str) -> str:
     return "; ".join(filtered)
 
 
+def _record_key(record: dict[str, str]) -> str:
+    parts = (
+        str(record.get("company_name", "") or "").strip().lower(),
+        str(record.get("representative", "") or "").strip().lower(),
+        str(record.get("website", "") or "").strip().lower(),
+        str(record.get("address", "") or "").strip().lower(),
+    )
+    return " | ".join(parts)
+
+
+def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_day: int) -> set[str]:
+    if baseline_day <= 0:
+        return set()
+    baseline_dir = delivery_root / f"Japan_day{baseline_day:03d}"
+    key_path = baseline_dir / f"{site_name}.keys.txt"
+    if key_path.exists():
+        return {
+            line.strip()
+            for line in key_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+    csv_path = baseline_dir / f"{site_name}.csv"
+    if not csv_path.exists():
+        return set()
+    with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+        return {
+            _record_key(row)
+            for row in csv.DictReader(fp)
+            if row.get("company_name", "").strip()
+        }
+
+
 def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
     """写站点级 CSV。"""
     fieldnames = [
@@ -242,4 +286,3 @@ def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
-

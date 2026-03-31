@@ -129,6 +129,7 @@ class ProffDenmarkConfig:
     llm_base_url: str
     llm_model: str
     llm_reasoning_effort: str
+    llm_api_style: str
     llm_timeout_seconds: float
     firecrawl_prefilter_limit: int
     firecrawl_llm_pick_count: int
@@ -197,10 +198,11 @@ class ProffDenmarkConfig:
             llm_base_url=_env_str("LLM_BASE_URL", "https://api.gpteamservices.com/v1"),
             llm_model=_env_str("LLM_MODEL", "gpt-5.1-codex-mini"),
             llm_reasoning_effort=_env_str("LLM_REASONING_EFFORT", "medium"),
+            llm_api_style=_env_str("LLM_API_STYLE", "auto"),
             llm_timeout_seconds=_env_float("LLM_TIMEOUT_SECONDS", 120.0),
-            firecrawl_prefilter_limit=_env_int("FIRECRAWL_PREFILTER_LIMIT", 40),
-            firecrawl_llm_pick_count=_env_int("FIRECRAWL_LLM_PICK_COUNT", 8),
-            firecrawl_extract_max_urls=_env_int("FIRECRAWL_EXTRACT_MAX_URLS", 8),
+            firecrawl_prefilter_limit=_env_int("FIRECRAWL_PREFILTER_LIMIT", 12),
+            firecrawl_llm_pick_count=_env_int("FIRECRAWL_LLM_PICK_COUNT", 5),
+            firecrawl_extract_max_urls=_env_int("FIRECRAWL_EXTRACT_MAX_URLS", 5),
             firecrawl_zero_retry_seconds=_env_float("FIRECRAWL_ZERO_RETRY_SECONDS", 43200.0),
             firecrawl_contact_form_retry_seconds=_env_float("FIRECRAWL_CONTACT_FORM_RETRY_SECONDS", 259200.0),
             prefer_go_gmap_backend=_env_bool("PROFF_USE_GO_GMAP_BACKEND", False),

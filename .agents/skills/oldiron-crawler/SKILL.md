@@ -15,8 +15,12 @@ When this skill is activated, state clearly:
 
 - New country/site crawler work must use **Python**.
 - Do **not** introduce new Go backend dependencies for new country/site crawler implementations.
-- Prefer shared modules under `shared/oldiron_core/`.
-- Do not copy or symlink shared business modules into country folders.
+- Shared-module placement hard rule:
+  - If a module is shared across different countries, place it under repo-level `shared/` in the appropriate shared location such as `shared/oldiron_core/`.
+  - If a module is shared only by multiple sites inside one country, place it under `<Country>/shared/`.
+  - Never put reusable modules inside one country's site tree and then import/symlink/copy them into another country.
+  - Never create cross-country imports or cross-site imports from one site's source tree into another site's source tree.
+- Do not copy or symlink shared business modules into country folders as a long-term architecture pattern.
 - Keep all files UTF-8.
 - Code comments must be Chinese.
 - User-facing frontend text must be Chinese.

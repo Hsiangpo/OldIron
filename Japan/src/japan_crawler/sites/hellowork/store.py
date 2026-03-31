@@ -156,7 +156,11 @@ class HelloworkStore:
                              corp_number, detail_url)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(corp_number) DO UPDATE SET
-                            representative=CASE WHEN excluded.representative != '' THEN excluded.representative ELSE companies.representative END,
+                            representative=CASE
+                                WHEN excluded.representative NOT IN ('', '-')
+                                THEN excluded.representative
+                                ELSE companies.representative
+                            END,
                             website=CASE WHEN excluded.website != '' THEN excluded.website ELSE companies.website END,
                             phone=CASE WHEN excluded.phone != '' THEN excluded.phone ELSE companies.phone END,
                             employees=CASE WHEN excluded.employees != '' THEN excluded.employees ELSE companies.employees END,
@@ -183,7 +187,11 @@ class HelloworkStore:
                              corp_number, detail_url)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(company_name, address) DO UPDATE SET
-                            representative=CASE WHEN excluded.representative != '' THEN excluded.representative ELSE companies.representative END,
+                            representative=CASE
+                                WHEN excluded.representative NOT IN ('', '-')
+                                THEN excluded.representative
+                                ELSE companies.representative
+                            END,
                             website=CASE WHEN excluded.website != '' THEN excluded.website ELSE companies.website END
                     """, (
                         pref_code, name,

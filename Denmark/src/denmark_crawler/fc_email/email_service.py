@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import html
+import logging
+import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote
 from urllib.parse import urlparse
 
 from .client import FirecrawlClient
@@ -16,6 +22,8 @@ from .key_pool import FirecrawlKeyPool
 from .key_pool import KeyPoolConfig
 from .llm_client import EmailUrlLlmClient
 
+
+LOGGER = logging.getLogger(__name__)
 
 _URL_KEYWORDS = {
     "contact": 100,
@@ -56,7 +64,40 @@ _IGNORE_LOCAL_PARTS = {
     "do-not-reply",
 }
 
+_EMAIL_RE = re.compile(
+    r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})",
+    re.IGNORECASE,
+)
+_NON_ALPHA_RE = re.compile(r"[^a-z0-9]+")
+_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif")
+_BAD_HOST_KEYWORDS = (
+    "googlesyndication.com",
+    "doubleclick.net",
+    "hotelbeds.com",
+    "worldota.net",
+    "googleusercontent.com",
+    "p.fih.io",
+)
+_BAD_EMAIL_TLDS = {
+    "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "avif",
+    "mp4", "webm", "mov", "pdf", "js", "css", "woff", "woff2", "ttf", "eot",
+}
+_BAD_EMAIL_HOST_HINTS = (
+    "example.com",
+    "example.org",
+    "example.net",
+    "sample.com",
+    "sample.co.jp",
+    "mysite.com",
+    "mysite.co.jp",
+    "eksempel.dk",
+    "sentry.io",
+    "sentry.wixpress.com",
+    "sentry-next.wixpress.com",
+)
+
 _KEY_FILE_WRITE_LOCK = threading.Lock()
+_KEYWORD_POOL_LOCK = threading.Lock()
 
 
 def extract_domain(website_url: str) -> str:
@@ -99,11 +140,13 @@ class FirecrawlEmailSettings:
     llm_base_url: str = "https://api.gpteamservices.com/v1"
     llm_model: str = "gpt-5.1-codex-mini"
     llm_reasoning_effort: str = "medium"
+    llm_api_style: str = "auto"
     llm_timeout_seconds: float = 120.0
+    learned_keyword_file: Path = Path("output/cache/high_value_url_keywords.json")
     map_limit: int = 200
     prefilter_limit: int = 40
     llm_pick_count: int = 16
-    extract_max_urls: int = 12
+    extract_max_urls: int = 5
     zero_retry_seconds: float = 43200.0
     contact_form_retry_seconds: float = 259200.0
     per_key_limit: int = 0
@@ -162,6 +205,7 @@ class FirecrawlEmailService:
         firecrawl_client: object | None = None,
     ) -> None:
         self._settings = settings
+        self._learned_keywords = self._load_learned_keywords()
         # 如果外部已注入 client（如协议爬虫），跳过 key_pool 构建
         if firecrawl_client is not None:
             self._key_pool = key_pool
@@ -181,12 +225,18 @@ class FirecrawlEmailService:
             base_url=settings.llm_base_url,
             model=settings.llm_model,
             reasoning_effort=settings.llm_reasoning_effort,
+            api_style=settings.llm_api_style,
             timeout_seconds=settings.llm_timeout_seconds,
         )
 
     def close(self) -> None:
         if self._key_pool is not None:
             self._key_pool.close()
+        if hasattr(self._firecrawl, "close"):
+            try:
+                self._firecrawl.close()
+            except Exception:  # noqa: BLE001
+                pass
         return None
 
     @staticmethod
@@ -233,13 +283,26 @@ class FirecrawlEmailService:
     def get_domain_emails(self, domain: str) -> list[str]:
         return self.discover_emails(company_name="", homepage=domain, domain=domain).emails
 
-    def discover_emails(self, *, company_name: str, homepage: str, domain: str = "") -> EmailDiscoveryResult:
+    def discover_emails(
+        self,
+        *,
+        company_name: str,
+        homepage: str,
+        domain: str = "",
+        existing_representative: str = "",
+        secondary_email_lookup: Callable[..., list[str]] | None = None,
+        allow_llm_email_extraction: bool = True,
+    ) -> EmailDiscoveryResult:
         start_url = self._normalize_start_url(homepage, domain)
         if not start_url:
             return EmailDiscoveryResult(emails=[])
+        reliable_representative = self._normalize_existing_representative(existing_representative)
         result = self._discover_pass(
             company_name=company_name,
             start_url=start_url,
+            existing_representative=reliable_representative,
+            secondary_email_lookup=secondary_email_lookup,
+            allow_llm_email_extraction=allow_llm_email_extraction,
             plan=_EmailPassPlan(
                 prefilter_limit=max(self._settings.prefilter_limit, 1),
                 llm_pick_count=max(self._settings.llm_pick_count, 1),
@@ -256,50 +319,153 @@ class FirecrawlEmailService:
 
     def _normalize_start_url(self, homepage: str, domain: str) -> str:
         if str(homepage or "").strip().startswith("http"):
-            return str(homepage).strip()
+            raw = str(homepage).strip()
+            return raw if self._is_supported_site_url(raw) else ""
         clean_domain = str(domain or "").strip().lower()
         if not clean_domain:
             return ""
-        return f"https://{clean_domain}"
+        raw = f"https://{clean_domain}"
+        return raw if self._is_supported_site_url(raw) else ""
 
-    def _discover_pass(self, *, company_name: str, start_url: str, plan: _EmailPassPlan) -> EmailDiscoveryResult:
+    def _discover_pass(
+        self,
+        *,
+        company_name: str,
+        start_url: str,
+        existing_representative: str,
+        secondary_email_lookup: Callable[..., list[str]] | None,
+        allow_llm_email_extraction: bool,
+        plan: _EmailPassPlan,
+    ) -> EmailDiscoveryResult:
         mapped_urls = self._map_site(start_url)
-        # 全量 URL 排序（不截断），规则推荐仅作参考
         all_urls = self._rank_all_urls(start_url, mapped_urls)
-        recommended = all_urls[:plan.prefilter_limit]
+        final_urls = self._select_urls_for_scrape(
+            company_name=company_name,
+            start_url=start_url,
+            all_urls=all_urls,
+            plan=plan,
+            use_llm=not bool(str(existing_representative or "").strip()),
+        )
+        pages = self._scrape_html_pages(final_urls)
+        emails = self._extract_rule_emails(start_url, pages)
+        if not emails and secondary_email_lookup is not None:
+            try:
+                fallback_emails = secondary_email_lookup(
+                    company_name=company_name,
+                    homepage=start_url,
+                    pages=[{"url": page.url, "html": page.html} for page in pages if page.html],
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("二级邮箱补充失败：company=%s homepage=%s error=%s", company_name or "-", start_url, exc)
+            else:
+                emails = self._filter_same_domain_emails(start_url, fallback_emails)
+                if not emails:
+                    emails = self._clean_emails(list(fallback_emails or []))
+        representative = str(existing_representative or "").strip()
+        extracted_company_name = str(company_name or "").strip()
+        evidence_url = final_urls[0] if final_urls else start_url
+        evidence_quote = ""
+        if not pages:
+            return EmailDiscoveryResult(
+                company_name=extracted_company_name,
+                representative=representative,
+                emails=emails,
+                evidence_url=evidence_url,
+                evidence_quote=evidence_quote,
+                contact_form_only=False,
+                selected_urls=final_urls,
+            )
+
+        need_llm_representative = not representative
+        need_llm_emails = allow_llm_email_extraction and not bool(emails)
+        if need_llm_representative or need_llm_emails:
+            LOGGER.info(
+                "邮箱补充进入 LLM 抽取：company=%s homepage=%s pages=%d rep=%s email=%s",
+                company_name or "-",
+                start_url,
+                len(pages),
+                int(need_llm_representative),
+                int(need_llm_emails),
+            )
+            extracted = self._llm.extract_contacts_from_html(
+                company_name=company_name,
+                homepage=start_url,
+                pages=[{"url": page.url, "html": page.html} for page in pages if page.html],
+                need_emails=need_llm_emails,
+            )
+            if need_llm_emails:
+                emails = self._filter_same_domain_emails(start_url, extracted.emails)
+                if not emails:
+                    emails = self._clean_emails(extracted.emails)
+            if need_llm_representative:
+                representative = str(extracted.representative or "").strip()
+            if need_llm_representative and extracted.company_name:
+                extracted_company_name = str(extracted.company_name).strip()
+            evidence_url = str(extracted.evidence_url or evidence_url).strip()
+            evidence_quote = str(extracted.evidence_quote or "").strip()
+        else:
+            LOGGER.debug("邮箱补充跳过 LLM：已有代表人 company=%s representative=%s", company_name or "-", representative)
+
+        return EmailDiscoveryResult(
+            company_name=extracted_company_name,
+            representative=representative,
+            emails=emails,
+            evidence_url=evidence_url,
+            evidence_quote=evidence_quote,
+            contact_form_only=False,
+            selected_urls=final_urls,
+        )
+
+    def _select_urls_for_scrape(
+        self,
+        *,
+        company_name: str,
+        start_url: str,
+        all_urls: list[str],
+        plan: _EmailPassPlan,
+        use_llm: bool,
+    ) -> list[str]:
+        rule_shortlist = self._build_rule_shortlist(
+            start_url=start_url,
+            all_urls=all_urls,
+            limit=max(plan.prefilter_limit, plan.extract_max_urls),
+        )
+        if not use_llm or len(rule_shortlist) <= plan.extract_max_urls:
+            return rule_shortlist[: plan.extract_max_urls]
         ranked_urls = self._llm.pick_candidate_urls(
             company_name=company_name,
             domain=extract_domain(start_url),
             homepage=start_url,
-            candidate_urls=all_urls,
+            candidate_urls=rule_shortlist,
             target_count=plan.llm_pick_count,
-            recommended_urls=recommended,
+            recommended_urls=rule_shortlist[: min(plan.extract_max_urls, len(rule_shortlist))],
         )
-        final_urls = self._build_final_urls(
+        self._remember_keywords_from_urls(ranked_urls)
+        return self._build_final_urls(
             start_url,
             ranked_urls,
-            all_urls,
+            rule_shortlist,
             limit=plan.extract_max_urls,
         )
-        pages = self._scrape_html_pages(final_urls)
-        extracted = self._llm.extract_contacts_from_html(
-            company_name=company_name,
-            homepage=start_url,
-            pages=[{"url": page.url, "html": page.html} for page in pages if page.html],
-        )
-        emails = self._filter_same_domain_emails(start_url, extracted.emails)
-        if not emails:
-            emails = extracted.emails
-        emails = self._clean_emails(emails)
-        return EmailDiscoveryResult(
-            company_name=extracted.company_name,
-            representative=extracted.representative,
-            emails=emails,
-            evidence_url=extracted.evidence_url,
-            evidence_quote=extracted.evidence_quote,
-            contact_form_only=False,
-            selected_urls=final_urls,
-        )
+
+    def _build_rule_shortlist(self, *, start_url: str, all_urls: list[str], limit: int) -> list[str]:
+        strong: list[str] = []
+        weak: list[str] = []
+        for url in all_urls:
+            if url == start_url:
+                continue
+            score = self._score_url(start_url, url)
+            if score >= 60:
+                strong.append(url)
+            else:
+                weak.append(url)
+        shortlist = [start_url]
+        for url in strong + weak:
+            if url not in shortlist:
+                shortlist.append(url)
+            if len(shortlist) >= limit:
+                break
+        return shortlist[:limit]
 
     def _rank_all_urls(self, start_url: str, mapped_urls: list[str]) -> list[str]:
         """全量 URL 按规则打分排序，不截断。"""
@@ -362,6 +528,7 @@ class FirecrawlEmailService:
         for keyword, weight in _URL_KEYWORDS.items():
             if keyword in lowered:
                 score += weight
+        score += self._score_learned_keywords(lowered)
         depth = lowered.count("/")
         return score - min(depth, 10)
 
@@ -388,13 +555,150 @@ class FirecrawlEmailService:
     def _clean_emails(self, emails: list[str]) -> list[str]:
         cleaned: list[str] = []
         for email in emails:
-            value = str(email or "").strip().lower()
+            value = self._normalize_email_candidate(email)
             if not value or "@" not in value:
                 continue
             local = value.split("@", 1)[0]
             if local in _IGNORE_LOCAL_PARTS:
                 continue
+            domain = value.split("@", 1)[1]
+            suffix = domain.rsplit(".", 1)[-1] if "." in domain else ""
+            if suffix in _BAD_EMAIL_TLDS:
+                continue
+            if any(flag in domain for flag in _BAD_EMAIL_HOST_HINTS):
+                continue
             if value not in cleaned:
                 cleaned.append(value)
         return cleaned
 
+    def _normalize_email_candidate(self, value: object) -> str:
+        text = unquote(str(value or "")).strip().lower()
+        if not text:
+            return ""
+        text = text.replace("mailto:", "")
+        text = re.sub(r"^(?:u003e|u003c|>|<)+", "", text)
+        match = _EMAIL_RE.search(text)
+        if match is None:
+            return ""
+        return str(match.group(1) or "").strip().lower()
+
+    def _extract_rule_emails(self, start_url: str, pages: list[HtmlPageResult]) -> list[str]:
+        candidates: list[str] = []
+        for page in pages:
+            for email in self._extract_rule_emails_from_html(page.html):
+                if email not in candidates:
+                    candidates.append(email)
+        same_domain = self._filter_same_domain_emails(start_url, candidates)
+        if same_domain:
+            return self._clean_emails(same_domain)
+        return self._clean_emails(candidates)
+
+    def _extract_rule_emails_from_html(self, raw_html: str) -> list[str]:
+        html_text = str(raw_html or "")
+        if not html_text.strip():
+            return []
+        normalized = html.unescape(html_text)
+        normalized = normalized.replace("%40", "@").replace("%2E", ".")
+        normalized = re.sub(r"(?i)\[(?:at)\]|\((?:at)\)|\s+at\s+", "@", normalized)
+        normalized = re.sub(r"(?i)\[(?:dot)\]|\((?:dot)\)|\s+dot\s+", ".", normalized)
+        found: list[str] = []
+        for match in _EMAIL_RE.findall(normalized):
+            value = str(match or "").strip().lower().rstrip(".,);:]}>")
+            if value and value not in found:
+                found.append(value)
+        return found
+
+    def _normalize_existing_representative(self, value: str) -> str:
+        text = str(value or "").strip()
+        if text in {"-", "—", "--", "?", "？", "N/A", "n/a", "null", "None"}:
+            return ""
+        return text
+
+    def _is_supported_site_url(self, url: str) -> bool:
+        parsed = urlparse(str(url or "").strip())
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        host = parsed.netloc.lower()
+        if not host:
+            return False
+        if any(flag in host for flag in _BAD_HOST_KEYWORDS):
+            return False
+        if parsed.path.lower().endswith(_IMAGE_EXTENSIONS):
+            return False
+        return True
+
+    def _score_learned_keywords(self, lowered_url: str) -> int:
+        score = 0
+        normalized_url = self._normalize_for_match(lowered_url)
+        for keyword in self._learned_keywords:
+            if len(keyword) < 4:
+                continue
+            if keyword in normalized_url or normalized_url in keyword:
+                score += 40
+        return score
+
+    def _load_learned_keywords(self) -> list[str]:
+        path = self._resolve_learned_keyword_file()
+        if not path.exists():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return []
+        values = payload.get("keywords") if isinstance(payload, dict) else payload
+        if not isinstance(values, list):
+            return []
+        result: list[str] = []
+        for item in values:
+            token = self._normalize_for_match(str(item or ""))
+            if token and token not in result:
+                result.append(token)
+        return result
+
+    def _remember_keywords_from_urls(self, urls: list[str]) -> None:
+        tokens: list[str] = []
+        for url in urls:
+            for token in self._extract_path_keywords(url):
+                if token not in tokens:
+                    tokens.append(token)
+        if not tokens:
+            return
+        changed = False
+        for token in tokens:
+            if token not in self._learned_keywords:
+                self._learned_keywords.append(token)
+                changed = True
+        if changed:
+            self._save_learned_keywords()
+
+    def _save_learned_keywords(self) -> None:
+        path = self._resolve_learned_keyword_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _KEYWORD_POOL_LOCK:
+            payload = {"keywords": sorted(self._learned_keywords)}
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _resolve_learned_keyword_file(self) -> Path:
+        configured = Path(self._settings.learned_keyword_file)
+        if configured.is_absolute():
+            return configured
+        project_root = Path(self._settings.project_root)
+        if project_root.name == "output":
+            country_root = project_root.parent
+        else:
+            country_root = project_root
+        repo_root = country_root.parent if country_root.parent.exists() else country_root
+        return repo_root / configured
+
+    def _extract_path_keywords(self, url: str) -> list[str]:
+        parsed = urlparse(str(url or ""))
+        parts = [segment for segment in parsed.path.split("/") if segment]
+        tokens: list[str] = []
+        for part in parts:
+            normalized = self._normalize_for_match(part)
+            if len(normalized) >= 4 and normalized not in tokens:
+                tokens.append(normalized)
+        return tokens
+
+    def _normalize_for_match(self, value: str) -> str:
+        return _NON_ALPHA_RE.sub("", str(value or "").strip().lower())

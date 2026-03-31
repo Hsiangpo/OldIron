@@ -21,7 +21,7 @@ from .store import XlsxImportStore
 
 logger = logging.getLogger("xlsximport.pipeline")
 
-DEFAULT_CONCURRENCY = 32
+DEFAULT_CONCURRENCY = 64
 XLSX_PATH = Path(__file__).resolve().parents[4] / "docs" / "日本.xlsx"
 
 
@@ -115,10 +115,11 @@ def _run_extraction(
         llm_base_url=os.getenv("LLM_BASE_URL", "https://api.gpteamservices.com/v1"),
         llm_model=os.getenv("LLM_MODEL", "gpt-5.4-mini"),
         llm_reasoning_effort=os.getenv("LLM_REASONING_EFFORT", "medium"),
+        llm_api_style=os.getenv("LLM_API_STYLE", "auto"),
         llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
-        prefilter_limit=int(os.getenv("FIRECRAWL_PREFILTER_LIMIT", "40")),
-        llm_pick_count=int(os.getenv("FIRECRAWL_LLM_PICK_COUNT", "8")),
-        extract_max_urls=int(os.getenv("FIRECRAWL_EXTRACT_MAX_URLS", "8")),
+        prefilter_limit=int(os.getenv("FIRECRAWL_PREFILTER_LIMIT", "12")),
+        llm_pick_count=int(os.getenv("FIRECRAWL_LLM_PICK_COUNT", "5")),
+        extract_max_urls=int(os.getenv("FIRECRAWL_EXTRACT_MAX_URLS", "5")),
     )
     settings.validate()
 

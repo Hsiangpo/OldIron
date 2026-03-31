@@ -90,6 +90,7 @@ class VirkPipelineRunner:
             llm_base_url=config.llm_base_url,
             llm_model=config.llm_model,
             llm_reasoning_effort=config.llm_reasoning_effort,
+            llm_api_style=config.llm_api_style,
             llm_timeout_seconds=config.llm_timeout_seconds,
             prefilter_limit=config.firecrawl_prefilter_limit,
             llm_pick_count=config.firecrawl_llm_pick_count,
@@ -469,6 +470,7 @@ class VirkPipelineRunner:
                 company_name=task.company_name,
                 homepage=task.website,
                 domain=task.domain,
+                existing_representative=task.representative,
             )
         except (FirecrawlError, Exception) as exc:
             self._handle_firecrawl_failure(task, exc)
@@ -534,12 +536,13 @@ class VirkPipelineRunner:
         )
         return self._firecrawl_local.service
 
-    def _discover_emails(self, *, company_name: str, homepage: str, domain: str) -> EmailDiscoveryResult:
+    def _discover_emails(self, *, company_name: str, homepage: str, domain: str, existing_representative: str) -> EmailDiscoveryResult:
         service = self._get_firecrawl_service()
         return service.discover_emails(
             company_name=company_name,
             homepage=homepage,
             domain=domain,
+            existing_representative=existing_representative,
         )
 
 

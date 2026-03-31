@@ -55,7 +55,7 @@ class CompanyNameConfig:
     firecrawl_key_failure_threshold: int = 5
     firecrawl_prefilter_limit: int = 40
     firecrawl_llm_pick_count: int = 10
-    firecrawl_extract_max_urls: int = 8
+    firecrawl_extract_max_urls: int = 5
     firecrawl_zero_retry_seconds: float = 43200.0
     firecrawl_contact_form_retry_seconds: float = 259200.0
 
@@ -64,6 +64,7 @@ class CompanyNameConfig:
     llm_base_url: str = "https://api.gpteamservices.com/v1"
     llm_model: str = "gpt-5.1-codex-mini"
     llm_reasoning_effort: str = "medium"
+    llm_api_style: str = "auto"
     llm_timeout_seconds: float = 120.0
 
     # 协议爬虫
@@ -109,15 +110,16 @@ class CompanyNameConfig:
             firecrawl_key_wait_seconds=_env_float("FIRECRAWL_KEY_WAIT_SECONDS", 60.0),
             firecrawl_key_cooldown_seconds=_env_float("FIRECRAWL_KEY_COOLDOWN_SECONDS", 86400.0),
             firecrawl_key_failure_threshold=_env_int("FIRECRAWL_KEY_FAILURE_THRESHOLD", 5),
-            firecrawl_prefilter_limit=_env_int("FIRECRAWL_PREFILTER_LIMIT", 40),
-            firecrawl_llm_pick_count=_env_int("FIRECRAWL_LLM_PICK_COUNT", 10),
-            firecrawl_extract_max_urls=_env_int("FIRECRAWL_EXTRACT_MAX_URLS", 8),
+            firecrawl_prefilter_limit=_env_int("FIRECRAWL_PREFILTER_LIMIT", 12),
+            firecrawl_llm_pick_count=_env_int("FIRECRAWL_LLM_PICK_COUNT", 5),
+            firecrawl_extract_max_urls=_env_int("FIRECRAWL_EXTRACT_MAX_URLS", 5),
             firecrawl_zero_retry_seconds=_env_float("FIRECRAWL_ZERO_RETRY_SECONDS", 43200.0),
             firecrawl_contact_form_retry_seconds=_env_float("FIRECRAWL_CONTACT_FORM_RETRY_SECONDS", 259200.0),
             llm_api_key=_env_str("LLM_API_KEY"),
             llm_base_url=_env_str("LLM_BASE_URL", "https://api.gpteamservices.com/v1"),
             llm_model=_env_str("LLM_MODEL", "gpt-5.1-codex-mini"),
             llm_reasoning_effort=_env_str("LLM_REASONING_EFFORT", "medium"),
+            llm_api_style=_env_str("LLM_API_STYLE", "auto"),
             llm_timeout_seconds=_env_float("LLM_TIMEOUT_SECONDS", 120.0),
             crawl_backend=_env_str("CRAWL_BACKEND", "protocol"),
         )

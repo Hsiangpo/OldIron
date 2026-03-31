@@ -124,7 +124,11 @@ class BizmapsStore:
                         industry, phone, founded_year, capital, detail_url)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(company_name, address) DO UPDATE SET
-                           representative=CASE WHEN excluded.representative != '' THEN excluded.representative ELSE companies.representative END,
+                           representative=CASE
+                               WHEN excluded.representative NOT IN ('', '-')
+                               THEN excluded.representative
+                               ELSE companies.representative
+                           END,
                            website=CASE WHEN excluded.website != '' THEN excluded.website ELSE companies.website END,
                            phone=CASE WHEN excluded.phone != '' THEN excluded.phone ELSE companies.phone END,
                            detail_url=CASE WHEN excluded.detail_url != '' THEN excluded.detail_url ELSE companies.detail_url END

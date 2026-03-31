@@ -88,7 +88,8 @@ def run_pipeline_gmap(
         location = _extract_location_prefix(addr)
         query = f"{name} {location}" if location else name
         try:
-            website = _get_client().search_official_website(query)
+            result = _get_client().search_company_profile(query, name)
+            website = result.website if result else ""
             website = _clean_website(website)
             return name, addr, website
         except Exception as exc:

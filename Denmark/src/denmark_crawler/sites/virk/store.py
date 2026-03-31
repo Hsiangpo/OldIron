@@ -122,6 +122,7 @@ class VirkFirecrawlTask:
     """Firecrawl 邮箱补全任务。"""
     cvr: str
     company_name: str
+    representative: str
     website: str
     domain: str
     retries: int = 0
@@ -648,7 +649,7 @@ class VirkStore:
         now = _utc_now()
         with self._lock:
             row = self._conn.execute(
-                """SELECT f.cvr, f.retries, c.company_name, c.homepage, c.domain
+                """SELECT f.cvr, f.retries, c.company_name, c.representative, c.homepage, c.domain
                 FROM firecrawl_queue f JOIN companies c ON f.cvr = c.cvr
                 WHERE f.status = 'pending' AND f.next_run_at <= ?
                 ORDER BY f.updated_at ASC LIMIT 1""",
@@ -663,6 +664,7 @@ class VirkStore:
             self._conn.commit()
             return VirkFirecrawlTask(
                 cvr=row["cvr"], company_name=row["company_name"],
+                representative=row["representative"] or "",
                 website=row["homepage"], domain=row["domain"],
                 retries=row["retries"],
             )

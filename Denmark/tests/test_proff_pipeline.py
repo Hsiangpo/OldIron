@@ -67,8 +67,15 @@ class _FakeGMapClient:
 
 
 class _FakeFirecrawlService:
-    def discover_emails(self, *, company_name: str, homepage: str, domain: str = "") -> EmailDiscoveryResult:
-        _ = company_name, homepage, domain
+    def discover_emails(
+        self,
+        *,
+        company_name: str,
+        homepage: str,
+        domain: str = "",
+        existing_representative: str = "",
+    ) -> EmailDiscoveryResult:
+        _ = company_name, homepage, domain, existing_representative
         return EmailDiscoveryResult(
             company_name="Beta ApS",
             representative="Bob",
@@ -77,8 +84,15 @@ class _FakeFirecrawlService:
 
 
 class _BrokenFirecrawlService:
-    def discover_emails(self, *, company_name: str, homepage: str, domain: str = "") -> EmailDiscoveryResult:
-        _ = company_name, homepage, domain
+    def discover_emails(
+        self,
+        *,
+        company_name: str,
+        homepage: str,
+        domain: str = "",
+        existing_representative: str = "",
+    ) -> EmailDiscoveryResult:
+        _ = company_name, homepage, domain, existing_representative
         raise RuntimeError("llm unavailable")
 
 

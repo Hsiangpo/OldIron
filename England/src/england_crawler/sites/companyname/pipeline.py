@@ -81,6 +81,7 @@ class CompanyNamePipelineRunner:
             llm_base_url=self.config.llm_base_url,
             llm_model=self.config.llm_model,
             llm_reasoning_effort=self.config.llm_reasoning_effort,
+            llm_api_style=self.config.llm_api_style,
             llm_timeout_seconds=self.config.llm_timeout_seconds,
             prefilter_limit=self.config.firecrawl_prefilter_limit,
             llm_pick_count=self.config.firecrawl_llm_pick_count,
@@ -281,6 +282,7 @@ class CompanyNamePipelineRunner:
                 company_name=task.company_name,
                 homepage=task.website,
                 domain=task.domain,
+                existing_representative=task.representative,
             )
             emails = result.emails if hasattr(result, "emails") else []
             ev = result.evidence_url if hasattr(result, "evidence_url") else ""

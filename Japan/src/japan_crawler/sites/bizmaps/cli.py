@@ -50,8 +50,8 @@ def run_bizmaps(argv: list[str]) -> int:
         help="P2 GMap 并发数（默认 16）",
     )
     parser.add_argument(
-        "--email-workers", type=int, default=32,
-        help="P3 邮箱提取并发数（默认 32）",
+        "--email-workers", type=int, default=64,
+        help="P3 邮箱提取并发数（默认 64）",
     )
     parser.add_argument(
         "--log-level", type=str, default="INFO",
