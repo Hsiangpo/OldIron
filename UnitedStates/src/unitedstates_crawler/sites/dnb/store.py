@@ -303,6 +303,7 @@ class DnbUsStore:
                 website TEXT NOT NULL DEFAULT '',
                 phone TEXT NOT NULL DEFAULT '',
                 address TEXT NOT NULL DEFAULT '',
+                site_emails TEXT NOT NULL DEFAULT '',
                 region TEXT NOT NULL DEFAULT '',
                 city TEXT NOT NULL DEFAULT '',
                 postal_code TEXT NOT NULL DEFAULT '',
@@ -371,7 +372,13 @@ class DnbUsStore:
             ON final_companies(lower(trim(company_name)));
             """
         )
+        self._ensure_companies_columns(conn)
         conn.commit()
+
+    def _ensure_companies_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(companies)").fetchall()}
+        if "site_emails" not in columns:
+            conn.execute("ALTER TABLE companies ADD COLUMN site_emails TEXT NOT NULL DEFAULT ''")
 
     def seed_segments(self, segments: list[dict[str, str | int]]) -> int:
         def _action(conn: sqlite3.Connection) -> int:
@@ -764,7 +771,7 @@ class DnbUsStore:
             final_emails = _clean_site_emails(emails)
             current = conn.execute(
                 """
-                SELECT company_name, representative, website, phone, address
+                SELECT company_name, representative, website, phone, address, site_emails
                 FROM companies
                 WHERE duns = ?
                 """,
@@ -775,6 +782,7 @@ class DnbUsStore:
             current_website = str(current["website"] or "").strip() if current else ""
             current_phone = str(current["phone"] or "").strip() if current else ""
             current_address = str(current["address"] or "").strip() if current else ""
+            current_site_emails = _clean_site_emails(str(current["site_emails"] or "").split(";")) if current else []
             existing_final = conn.execute(
                 """
                 SELECT company_name, representative, emails, website, phone, address, evidence_url
@@ -785,7 +793,9 @@ class DnbUsStore:
             ).fetchone()
             if existing_final is not None:
                 existing_emails = _clean_site_emails(str(existing_final["emails"] or "").split(";"))
-                final_emails = _clean_site_emails([*existing_emails, *final_emails])
+                final_emails = _clean_site_emails([*existing_emails, *current_site_emails, *final_emails])
+            else:
+                final_emails = _clean_site_emails([*current_site_emails, *final_emails])
             final_company_name = str(company_name or "").strip() or current_company_name
             names_match = (
                 not final_company_name
@@ -802,10 +812,19 @@ class DnbUsStore:
             conn.execute(
                 """
                 UPDATE companies
-                SET company_name = ?, representative = ?, website = ?, phone = ?, address = ?, site_status = 'done', updated_at = ?
+                SET company_name = ?, representative = ?, website = ?, phone = ?, address = ?, site_emails = ?, site_status = 'done', updated_at = ?
                 WHERE duns = ?
                 """,
-                (final_company_name, final_representative, final_website, final_phone, final_address, _now_text(), duns),
+                (
+                    final_company_name,
+                    final_representative,
+                    final_website,
+                    final_phone,
+                    final_address,
+                    "; ".join(final_emails),
+                    _now_text(),
+                    duns,
+                ),
             )
             if final_company_name and final_representative and final_emails:
                 conn.execute(
