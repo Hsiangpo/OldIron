@@ -50,6 +50,35 @@ class DeliveryTests(unittest.TestCase):
             summary = build_delivery_bundle(root / "output", root / "delivery", "day1")
             self.assertEqual(1, summary["delta_companies"])
 
+    def test_day1_keeps_same_name_with_different_representative_as_two_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            data_root = root / "output" / "dnb"
+            data_root.mkdir(parents=True)
+            conn = sqlite3.connect(str(data_root / "dnb_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE final_companies (
+                    duns TEXT PRIMARY KEY,
+                    company_name TEXT,
+                    representative TEXT,
+                    emails TEXT,
+                    website TEXT,
+                    phone TEXT,
+                    address TEXT,
+                    evidence_url TEXT
+                );
+                INSERT INTO final_companies VALUES
+                    ('1', 'Acme Inc', 'Jane Doe', 'sales@acme.com', 'https://acme.com', '1', 'x', 'https://acme.com'),
+                    ('2', 'Acme Inc', 'John Doe', 'ops@acme.com', 'https://acme-branch.com', '2', 'y', 'https://acme-branch.com');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            summary = build_delivery_bundle(root / "output", root / "delivery", "day1")
+            self.assertEqual(2, summary["delta_companies"])
+
 
 if __name__ == "__main__":
     unittest.main()

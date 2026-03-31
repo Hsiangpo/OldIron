@@ -119,10 +119,18 @@ def _load_dnb_data(site_dir: Path) -> list[dict[str, str]]:
     ).fetchall()
     conn.close()
 
-    # 按公司名归并，选字段最全的，邮箱合并去重
+    # 按交付键归并，只合并完全相同的交付实体，不提前按公司名压扁
     grouped: dict[str, list[sqlite3.Row]] = {}
     for row in rows:
-        key = str(row["company_name"] or "").strip().lower()
+        key = _record_key(
+            {
+                "company_name": str(row["company_name"] or "").strip(),
+                "representative": str(row["representative"] or "").strip(),
+                "website": str(row["website"] or "").strip(),
+            }
+        )
+        if not key.strip(" |"):
+            continue
         grouped.setdefault(key, []).append(row)
 
     records: list[dict[str, str]] = []
