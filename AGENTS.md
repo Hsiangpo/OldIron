@@ -170,6 +170,7 @@ There is no single root build step. Work inside the target country directory for
 ## Code Sync Rules
 
 - Every code change must be committed and pushed to GitHub immediately after verification.
+- Every time code changes are deployed or verified against a running site process, stop the old process first, then restart it on the new code. Never leave an old process running on stale code after a code change.
 - After pushing, **all machines** must be updated to the latest code before restarting any process.
   - Machine 2 (Mac): `git pull`
   - Machine 1 (Windows): `git pull` on the E: drive project.

@@ -745,6 +745,7 @@ class DnbBrStore:
                 FROM site_queue q
                 JOIN companies c ON c.duns = q.duns
                 WHERE q.status = 'pending'
+                  AND (c.representative != '' OR c.detail_status != 'pending')
                   AND q.updated_at <= ?
                 ORDER BY
                     CASE

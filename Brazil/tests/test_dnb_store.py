@@ -329,6 +329,32 @@ class DnbStoreTests(unittest.TestCase):
                 statuses,
             )
 
+    def test_claim_site_task_skips_rep_missing_while_detail_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbBrStore(Path(tmpdir) / "store.db")
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            conn.executescript(
+                """
+                INSERT INTO companies (
+                    duns, company_name, representative, website, phone, address, region, city,
+                    postal_code, detail_url, industry_path, detail_status, gmap_status, site_status, updated_at
+                ) VALUES
+                    ('1', 'Pending Detail Co', '', 'https://pending.example', '', 'A', 'B', 'C', '1', 'https://example.com/1', 'construction', 'pending', 'done', 'pending', '2026-03-31 00:00:00'),
+                    ('2', 'Ready Detail Co', '', 'https://ready.example', '', 'A', 'B', 'C', '1', 'https://example.com/2', 'construction', 'done', 'done', 'pending', '2026-03-31 00:00:00');
+                INSERT INTO site_queue (duns, company_name, website, status, retries, updated_at) VALUES
+                    ('1', 'Pending Detail Co', 'https://pending.example', 'pending', 0, '2026-03-31 00:00:00'),
+                    ('2', 'Ready Detail Co', 'https://ready.example', 'pending', 0, '2026-03-31 00:00:00');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            task = store.claim_site_task()
+
+            self.assertIsNotNone(task)
+            assert task is not None
+            self.assertEqual("2", task.duns)
+
     def test_purge_bad_websites_clears_dirty_gmap_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DnbBrStore(Path(tmpdir) / "store.db")
