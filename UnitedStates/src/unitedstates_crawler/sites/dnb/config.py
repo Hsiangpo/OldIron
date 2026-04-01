@@ -15,8 +15,8 @@ class DnbUsConfig:
     country_iso_two_code: str = "us"
     segment_workers: int = 4
     detail_workers: int = 4
-    gmap_workers: int = 16
-    email_workers: int = 64
+    gmap_workers: int = 4
+    email_workers: int = 4
     max_segments: int = 0
     max_pages_per_segment: int = 20
     industry_paths: tuple[str, ...] = ()

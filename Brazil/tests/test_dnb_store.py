@@ -361,6 +361,12 @@ class DnbStoreTests(unittest.TestCase):
             conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
             conn.executescript(
                 """
+                INSERT INTO companies (
+                    duns, company_name, representative, website, phone, address, region, city,
+                    postal_code, detail_url, industry_path, detail_status, gmap_status, site_status, updated_at
+                ) VALUES
+                    ('1', 'JOSE DA SILVA', '', '', '', 'Rua A', 'Bahia', 'Salvador', '1', 'https://example.com/1', 'construction', 'pending', 'pending', 'pending', '2026-03-31 00:00:00'),
+                    ('2', 'POUSADA SOL NASCENTE LTDA', '', '', '', 'Rua B', 'Bahia', 'Salvador', '1', 'https://example.com/2', 'construction', 'pending', 'pending', 'pending', '2026-03-31 00:00:00');
                 INSERT INTO gmap_queue (duns, company_name, address, region, city, status, retries, updated_at) VALUES
                     ('1', 'JOSE DA SILVA', 'Rua A', 'Bahia', 'Salvador', 'pending', 0, '2026-03-31 00:00:00'),
                     ('2', 'POUSADA SOL NASCENTE LTDA', 'Rua B', 'Bahia', 'Salvador', 'pending', 0, '2026-03-31 00:00:00');

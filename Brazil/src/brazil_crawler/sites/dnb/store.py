@@ -676,7 +676,32 @@ class DnbBrStore:
         self._run_write(_action)
 
     def claim_detail_task(self) -> DnbDetailTask | None:
-        return self._claim_simple_task("detail_queue", DnbDetailTask)
+        def _action(conn: sqlite3.Connection) -> DnbDetailTask | None:
+            now_text = _now_text()
+            rows = conn.execute(
+                """
+                SELECT q.*
+                FROM detail_queue q
+                JOIN companies c ON c.duns = q.duns
+                WHERE q.status = 'pending'
+                  AND q.updated_at <= ?
+                ORDER BY
+                    CASE WHEN c.website != '' THEN 0 ELSE 1 END,
+                    q.updated_at,
+                    q.duns
+                LIMIT 1
+                """,
+                (now_text,),
+            ).fetchone()
+            if rows is None:
+                return None
+            conn.execute(
+                "UPDATE detail_queue SET status = 'running', updated_at = ? WHERE duns = ?",
+                (now_text, rows["duns"]),
+            )
+            return DnbDetailTask(**dict(rows))
+
+        return self._run_write(_action)
 
     def complete_detail_task(self, duns: str, representative: str, website: str, phone: str) -> None:
         def _action(conn: sqlite3.Connection) -> None:
@@ -734,11 +759,13 @@ class DnbBrStore:
             now_text = _now_text()
             rows = conn.execute(
                 """
-                SELECT *
-                FROM gmap_queue
-                WHERE status = 'pending'
-                  AND updated_at <= ?
-                ORDER BY updated_at, duns
+                SELECT q.*,
+                       CASE WHEN c.representative != '' THEN 0 ELSE 1 END AS rep_priority
+                FROM gmap_queue q
+                JOIN companies c ON c.duns = q.duns
+                WHERE q.status = 'pending'
+                  AND q.updated_at <= ?
+                ORDER BY q.updated_at, q.duns
                 LIMIT 200
                 """,
                 (now_text,),
@@ -748,6 +775,7 @@ class DnbBrStore:
             ranked = sorted(
                 rows,
                 key=lambda row: (
+                    int(row["rep_priority"]),
                     1 if _looks_like_person_name(str(row["company_name"] or "")) else 0,
                     str(row["updated_at"] or ""),
                     str(row["duns"] or ""),
@@ -758,7 +786,9 @@ class DnbBrStore:
                 "UPDATE gmap_queue SET status = 'running', updated_at = ? WHERE duns = ?",
                 (now_text, row["duns"]),
             )
-            return DnbGMapTask(**dict(row))
+            payload = dict(row)
+            payload.pop("rep_priority", None)
+            return DnbGMapTask(**payload)
 
         return self._run_write(_action)
 

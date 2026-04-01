@@ -609,7 +609,32 @@ class DnbUsStore:
         self._run_write(_action)
 
     def claim_detail_task(self) -> DnbDetailTask | None:
-        return self._claim_simple_task("detail_queue", DnbDetailTask)
+        def _action(conn: sqlite3.Connection) -> DnbDetailTask | None:
+            now_text = _now_text()
+            row = conn.execute(
+                """
+                SELECT q.*
+                FROM detail_queue q
+                JOIN companies c ON c.duns = q.duns
+                WHERE q.status = 'pending'
+                  AND q.updated_at <= ?
+                ORDER BY
+                    CASE WHEN c.website != '' THEN 0 ELSE 1 END,
+                    q.updated_at,
+                    q.duns
+                LIMIT 1
+                """,
+                (now_text,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE detail_queue SET status = 'running', updated_at = ? WHERE duns = ?",
+                (now_text, row["duns"]),
+            )
+            return DnbDetailTask(**dict(row))
+
+        return self._run_write(_action)
 
     def complete_detail_task(self, duns: str, representative: str, website: str, phone: str) -> None:
         def _action(conn: sqlite3.Connection) -> None:
@@ -663,7 +688,32 @@ class DnbUsStore:
         return self._run_write(_action)
 
     def claim_gmap_task(self) -> DnbGMapTask | None:
-        return self._claim_simple_task("gmap_queue", DnbGMapTask)
+        def _action(conn: sqlite3.Connection) -> DnbGMapTask | None:
+            now_text = _now_text()
+            row = conn.execute(
+                """
+                SELECT q.*
+                FROM gmap_queue q
+                JOIN companies c ON c.duns = q.duns
+                WHERE q.status = 'pending'
+                  AND q.updated_at <= ?
+                ORDER BY
+                    CASE WHEN c.representative != '' THEN 0 ELSE 1 END,
+                    q.updated_at,
+                    q.duns
+                LIMIT 1
+                """,
+                (now_text,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE gmap_queue SET status = 'running', updated_at = ? WHERE duns = ?",
+                (now_text, row["duns"]),
+            )
+            return DnbGMapTask(**dict(row))
+
+        return self._run_write(_action)
 
     def complete_gmap_task(self, duns: str, website: str, phone: str) -> None:
         def _action(conn: sqlite3.Connection) -> None:

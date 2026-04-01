@@ -14,9 +14,9 @@ class DnbBrConfig:
     cdp_url: str = "http://127.0.0.1:9222"
     country_iso_two_code: str = "br"
     segment_workers: int = 4
-    detail_workers: int = 16
-    gmap_workers: int = 128
-    email_workers: int = 128
+    detail_workers: int = 4
+    gmap_workers: int = 4
+    email_workers: int = 4
     max_segments: int = 0
     max_pages_per_segment: int = 20
     industry_paths: tuple[str, ...] = ()
