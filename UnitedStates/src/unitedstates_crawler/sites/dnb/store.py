@@ -746,7 +746,6 @@ class DnbUsStore:
                 FROM site_queue q
                 JOIN companies c ON c.duns = q.duns
                 WHERE q.status = 'pending'
-                  AND (c.representative != '' OR c.detail_status != 'pending')
                   AND q.updated_at <= ?
                 ORDER BY
                     CASE
@@ -965,16 +964,12 @@ class DnbUsStore:
         if row is None:
             return
         website = _clean_website_candidate(row["website"])
-        representative = str(row["representative"] or "").strip()
-        detail_status = str(row["detail_status"] or "").strip()
         if website:
             conn.execute(
                 "UPDATE companies SET website = ?, site_status = 'pending', updated_at = ? WHERE duns = ?",
                 (website, _now_text(), duns),
             )
         if not website:
-            return
-        if not representative and detail_status == "pending":
             return
         conn.execute(
             """

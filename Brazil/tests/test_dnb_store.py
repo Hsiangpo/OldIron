@@ -329,7 +329,7 @@ class DnbStoreTests(unittest.TestCase):
                 statuses,
             )
 
-    def test_claim_site_task_skips_rep_missing_while_detail_pending(self) -> None:
+    def test_claim_site_task_allows_rep_missing_while_detail_pending(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DnbBrStore(Path(tmpdir) / "store.db")
             conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
@@ -353,7 +353,7 @@ class DnbStoreTests(unittest.TestCase):
 
             self.assertIsNotNone(task)
             assert task is not None
-            self.assertEqual("2", task.duns)
+            self.assertEqual("1", task.duns)
 
     def test_claim_gmap_task_prioritizes_company_like_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -381,7 +381,7 @@ class DnbStoreTests(unittest.TestCase):
             assert task is not None
             self.assertEqual("2", task.duns)
 
-    def test_complete_gmap_task_defers_site_queue_until_detail_ready(self) -> None:
+    def test_complete_gmap_task_enqueues_site_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DnbBrStore(Path(tmpdir) / "store.db")
             store.upsert_companies(
@@ -400,10 +400,10 @@ class DnbStoreTests(unittest.TestCase):
             )
             store.complete_gmap_task("1", "https://acmehotel.com.br", "")
             conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
-            queue_count = conn.execute("SELECT count(*) FROM site_queue").fetchone()[0]
+            queue = conn.execute("SELECT duns, website, status FROM site_queue").fetchone()
             company = conn.execute("SELECT website, site_status FROM companies WHERE duns='1'").fetchone()
             conn.close()
-            self.assertEqual(0, queue_count)
+            self.assertEqual(("1", "https://acmehotel.com.br", "pending"), queue)
             self.assertEqual(("https://acmehotel.com.br", "pending"), company)
 
     def test_fail_detail_task_enqueues_site_when_website_already_exists(self) -> None:
