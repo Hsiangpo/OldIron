@@ -290,30 +290,43 @@ class DnbBrowserCookieProvider:
 
     def _fetch_snapshot_via_http(self, domain_keyword: str) -> tuple[list[dict[str, str]], DnbBrowserHeaders]:
         proxy = str(os.getenv("HTTP_PROXY", "http://127.0.0.1:7897") or "").strip()
-        proxies = {"http": proxy, "https": proxy} if proxy else None
-        session = cffi_requests.Session(impersonate="chrome110", proxies=proxies)
-        try:
-            response = session.get("https://www.dnb.com/", timeout=20, allow_redirects=True)
-            response.raise_for_status()
-            cookies: list[dict[str, str]] = []
-            for cookie in session.cookies.jar:
-                domain = str(getattr(cookie, "domain", "") or "")
-                if domain_keyword in domain:
-                    cookies.append(
-                        {
-                            "name": str(getattr(cookie, "name", "") or ""),
-                            "value": str(getattr(cookie, "value", "") or ""),
-                            "domain": domain,
-                            "path": str(getattr(cookie, "path", "/") or "/"),
-                        }
-                    )
-            return cookies, self._build_headers(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-                "Chrome/110.0.0.0",
-            )
-        finally:
-            session.close()
+        candidates = []
+        if proxy:
+            candidates.append({"http": proxy, "https": proxy})
+        candidates.append(None)
+        last_error: Exception | None = None
+        for proxies in candidates:
+            for _ in range(3):
+                session = cffi_requests.Session(impersonate="chrome110", proxies=proxies)
+                try:
+                    response = session.get("https://www.dnb.com/", timeout=20, allow_redirects=True)
+                    response.raise_for_status()
+                    cookies: list[dict[str, str]] = []
+                    for cookie in session.cookies.jar:
+                        domain = str(getattr(cookie, "domain", "") or "")
+                        if domain_keyword in domain:
+                            cookies.append(
+                                {
+                                    "name": str(getattr(cookie, "name", "") or ""),
+                                    "value": str(getattr(cookie, "value", "") or ""),
+                                    "domain": domain,
+                                    "path": str(getattr(cookie, "path", "/") or "/"),
+                                }
+                            )
+                    if cookies:
+                        return cookies, self._build_headers(
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+                            "Chrome/110.0.0.0",
+                        )
+                except Exception as exc:
+                    last_error = exc
+                    time.sleep(1.0)
+                finally:
+                    session.close()
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("DNB HTTP cookie seed failed")
 
     def _launch_browser(self, playwright) -> Any:
         channel = str(os.getenv("DNB_COOKIE_BROWSER_CHANNEL", "") or "").strip()
