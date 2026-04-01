@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import quote
 from urllib.parse import urlparse
 
+from curl_cffi import CurlHttpVersion
 from curl_cffi import requests as cffi_requests
 from playwright.sync_api import sync_playwright
 
@@ -23,6 +24,16 @@ LIST_API_URL = "https://www.dnb.com/business-directory/api/companyinformation"
 DETAIL_API_URL = "https://www.dnb.com/business-directory/api/companyprofile"
 DETAIL_URL_TEMPLATE = (
     "https://www.dnb.com/business-directory/company-profiles.{company_name_url}.html"
+)
+_DNB_REQUEST_RETRIES = 4
+_RETRYABLE_CURL_HINTS = (
+    "curl: (92)",
+    "http/2 stream",
+    "internal_error",
+    "curl: (35)",
+    "tls connect error",
+    "curl: (28)",
+    "timed out",
 )
 
 
@@ -302,7 +313,12 @@ class DnbBrowserCookieProvider:
             for _ in range(3):
                 session = cffi_requests.Session(impersonate="chrome110", proxies=proxies)
                 try:
-                    response = session.get("https://www.dnb.com/", timeout=20, allow_redirects=True)
+                    response = session.get(
+                        "https://www.dnb.com/",
+                        timeout=20,
+                        allow_redirects=True,
+                        http_version=CurlHttpVersion.V1_1,
+                    )
                     response.raise_for_status()
                     cookies: list[dict[str, str]] = []
                     for cookie in session.cookies.jar:
@@ -434,6 +450,51 @@ class DnbCompanyInformationClient:
             )
         return session
 
+    def _is_retryable_request_error(self, exc: Exception) -> bool:
+        text = str(exc or "").lower()
+        return any(hint in text for hint in _RETRYABLE_CURL_HINTS)
+
+    def _request_json_with_retries(
+        self,
+        *,
+        method: str,
+        url: str,
+        timeout: float,
+        headers: dict[str, str],
+        json_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        last_error: Exception | None = None
+        for attempt in range(_DNB_REQUEST_RETRIES):
+            session = self._new_session()
+            try:
+                request = session.post if method.upper() == "POST" else session.get
+                kwargs: dict[str, Any] = {
+                    "timeout": timeout,
+                    "headers": headers,
+                    "http_version": CurlHttpVersion.V1_1,
+                }
+                if json_payload is not None:
+                    kwargs["json"] = json_payload
+                response = request(url, **kwargs)
+                if response.status_code == 403 and attempt < _DNB_REQUEST_RETRIES - 1:
+                    self.refresh_cookies()
+                    continue
+                response.raise_for_status()
+                payload = response.json()
+                return payload if isinstance(payload, dict) else {}
+            except Exception as exc:
+                last_error = exc
+                if not self._is_retryable_request_error(exc):
+                    raise
+                if attempt < _DNB_REQUEST_RETRIES - 1:
+                    time.sleep(min(1.5 * (attempt + 1), 5.0))
+                    continue
+            finally:
+                session.close()
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("DNB request failed without exception")
+
     def _detail_headers(self, detail_url: str) -> dict[str, str]:
         browser_headers = self._get_browser_headers()
         return {
@@ -476,7 +537,6 @@ class DnbCompanyInformationClient:
         region_name: str = "",
         city_name: str = "",
     ) -> DnbListPage:
-        session = self._new_session()
         payload = {
             "pageNumber": int(page_number),
             "industryPath": industry_path,
@@ -493,42 +553,24 @@ class DnbCompanyInformationClient:
             city_name,
             int(page_number),
         )
-        response = session.post(
-            LIST_API_URL,
-            json=payload,
+        result = self._request_json_with_retries(
+            method="POST",
+            url=LIST_API_URL,
+            json_payload=payload,
             timeout=30,
             headers=self._list_headers(referer_url),
         )
-        if response.status_code == 403:
-            self.refresh_cookies()
-            session = self._new_session()
-            response = session.post(
-                LIST_API_URL,
-                json=payload,
-                timeout=30,
-                headers=self._list_headers(referer_url),
-            )
-        response.raise_for_status()
-        return parse_companyinformation_payload(response.json(), industry_path)
+        return parse_companyinformation_payload(result, industry_path)
 
     def fetch_detail_profile(self, detail_url: str, country_code: str = "br") -> DnbDetailProfile:
-        session = self._new_session()
         api_url = (
             f"{DETAIL_API_URL}?path={quote(_companyprofile_api_path(detail_url), safe='')}"
             f"&language=en&country={country_code}"
         )
-        response = session.get(
-            api_url,
+        result = self._request_json_with_retries(
+            method="GET",
+            url=api_url,
             timeout=15,
             headers=self._detail_headers(detail_url),
         )
-        if response.status_code == 403:
-            self.refresh_cookies()
-            session = self._new_session()
-            response = session.get(
-                api_url,
-                timeout=15,
-                headers=self._detail_headers(detail_url),
-            )
-        response.raise_for_status()
-        return parse_companyprofile_payload(response.json())
+        return parse_companyprofile_payload(result)
