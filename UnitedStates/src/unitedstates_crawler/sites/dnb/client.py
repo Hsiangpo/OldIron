@@ -179,7 +179,7 @@ class DnbBrowserCookieProvider:
 
     def __init__(self, cdp_url: str = "http://127.0.0.1:9222") -> None:
         self._cdp_url = cdp_url
-        self._cookie_source = str(os.getenv("DNB_COOKIE_SOURCE", "launch") or "launch").strip().lower()
+        self._cookie_source = str(os.getenv("DNB_COOKIE_SOURCE", "http") or "http").strip().lower()
         self._seed_url = str(
             os.getenv("DNB_COOKIE_SEED_URL", "https://www.dnb.com/business-directory.html") or ""
         ).strip() or "https://www.dnb.com/business-directory.html"
@@ -212,8 +212,10 @@ class DnbBrowserCookieProvider:
                 return list(self._snapshot_cookies), self._snapshot_headers
             if self._cookie_source == "cdp":
                 cookies, headers = self._fetch_snapshot_via_cdp(domain_keyword)
-            else:
+            elif self._cookie_source == "launch":
                 cookies, headers = self._fetch_snapshot_via_launch(domain_keyword)
+            else:
+                cookies, headers = self._fetch_snapshot_via_http(domain_keyword)
             self._snapshot_cookies = list(cookies)
             self._snapshot_headers = headers
             self._snapshot_expire_at = now + self._snapshot_ttl_seconds
@@ -254,6 +256,33 @@ class DnbBrowserCookieProvider:
                 return cookies, self._build_headers_from_user_agent(user_agent)
             finally:
                 browser.close()
+
+    def _fetch_snapshot_via_http(self, domain_keyword: str) -> tuple[list[dict[str, str]], DnbBrowserHeaders]:
+        proxy = str(os.getenv("HTTP_PROXY", "http://127.0.0.1:7897") or "").strip()
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        session = cffi_requests.Session(impersonate="chrome110", proxies=proxies)
+        try:
+            response = session.get("https://www.dnb.com/", timeout=20, allow_redirects=True)
+            response.raise_for_status()
+            cookies: list[dict[str, str]] = []
+            for cookie in session.cookies.jar:
+                domain = str(getattr(cookie, "domain", "") or "")
+                if domain_keyword in domain:
+                    cookies.append(
+                        {
+                            "name": str(getattr(cookie, "name", "") or ""),
+                            "value": str(getattr(cookie, "value", "") or ""),
+                            "domain": domain,
+                            "path": str(getattr(cookie, "path", "/") or "/"),
+                        }
+                    )
+            return cookies, self._build_headers(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+                "Chrome/110.0.0.0",
+            )
+        finally:
+            session.close()
 
     def _launch_browser(self, playwright) -> Any:
         channel = str(os.getenv("DNB_COOKIE_BROWSER_CHANNEL", "") or "").strip()
