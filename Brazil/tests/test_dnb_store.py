@@ -375,6 +375,67 @@ class DnbStoreTests(unittest.TestCase):
             assert task is not None
             self.assertEqual("2", task.duns)
 
+    def test_complete_gmap_task_defers_site_queue_until_detail_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbBrStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme Hotel Ltda",
+                        "detail_url": "https://example.com/detail",
+                        "address": "Rua X",
+                        "region": "Bahia",
+                        "city": "Salvador",
+                        "postal_code": "1",
+                        "industry_path": "accommodation_and_food_services",
+                    }
+                ]
+            )
+            store.complete_gmap_task("1", "https://acmehotel.com.br", "")
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            queue_count = conn.execute("SELECT count(*) FROM site_queue").fetchone()[0]
+            company = conn.execute("SELECT website, site_status FROM companies WHERE duns='1'").fetchone()
+            conn.close()
+            self.assertEqual(0, queue_count)
+            self.assertEqual(("https://acmehotel.com.br", "pending"), company)
+
+    def test_fail_detail_task_enqueues_site_when_website_already_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbBrStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme Hotel Ltda",
+                        "detail_url": "https://example.com/detail",
+                        "website": "https://acmehotel.com.br",
+                        "address": "Rua X",
+                        "region": "Bahia",
+                        "city": "Salvador",
+                        "postal_code": "1",
+                        "industry_path": "accommodation_and_food_services",
+                    }
+                ]
+            )
+            store.enqueue_detail_tasks(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "Acme Hotel Ltda",
+                        "detail_url": "https://example.com/detail",
+                    }
+                ]
+            )
+            for _ in range(3):
+                store.fail_detail_task("1")
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            queue = conn.execute("SELECT duns, website, status FROM site_queue").fetchone()
+            company = conn.execute("SELECT detail_status, site_status FROM companies WHERE duns='1'").fetchone()
+            conn.close()
+            self.assertEqual(("1", "https://acmehotel.com.br", "pending"), queue)
+            self.assertEqual(("failed", "pending"), company)
+
     def test_purge_bad_websites_clears_dirty_gmap_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DnbBrStore(Path(tmpdir) / "store.db")

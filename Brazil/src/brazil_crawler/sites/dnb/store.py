@@ -694,24 +694,7 @@ class DnbBrStore:
                 """,
                 (representative, representative, website, website, phone, phone, website, website, _now_text(), duns),
             )
-            if website:
-                row = conn.execute(
-                    "SELECT duns, company_name, website FROM companies WHERE duns = ?",
-                    (duns,),
-                ).fetchone()
-                if row is not None:
-                    conn.execute(
-                        """
-                        INSERT INTO site_queue (duns, company_name, website, status, retries, updated_at)
-                        VALUES (?, ?, ?, 'pending', 0, ?)
-                        ON CONFLICT(duns) DO UPDATE SET
-                            company_name = excluded.company_name,
-                            website = excluded.website,
-                            status = 'pending',
-                            updated_at = excluded.updated_at
-                        """,
-                        (row["duns"], row["company_name"], row["website"], _now_text()),
-                    )
+            self._enqueue_site_if_ready(conn, duns)
             conn.execute(
                 "UPDATE detail_queue SET status = 'done', updated_at = ? WHERE duns = ?",
                 (_now_text(), duns),
@@ -788,30 +771,12 @@ class DnbBrStore:
                 SET website = CASE WHEN ? != '' THEN ? ELSE website END,
                     phone = CASE WHEN ? != '' THEN ? ELSE phone END,
                     gmap_status = 'done',
-                    site_status = CASE WHEN ? != '' THEN 'pending' ELSE site_status END,
                     updated_at = ?
                 WHERE duns = ?
                 """,
-                (clean_website, clean_website, phone, phone, clean_website, _now_text(), duns),
+                (clean_website, clean_website, phone, phone, _now_text(), duns),
             )
-            if clean_website:
-                row = conn.execute(
-                    "SELECT duns, company_name, website FROM companies WHERE duns = ?",
-                    (duns,),
-                ).fetchone()
-                if row is not None:
-                    conn.execute(
-                        """
-                        INSERT INTO site_queue (duns, company_name, website, status, retries, updated_at)
-                        VALUES (?, ?, ?, 'pending', 0, ?)
-                        ON CONFLICT(duns) DO UPDATE SET
-                            company_name = excluded.company_name,
-                            website = excluded.website,
-                            status = 'pending',
-                            updated_at = excluded.updated_at
-                        """,
-                        (row["duns"], row["company_name"], row["website"], _now_text()),
-                    )
+            self._enqueue_site_if_ready(conn, duns)
             conn.execute("UPDATE gmap_queue SET status = 'done', updated_at = ? WHERE duns = ?", (_now_text(), duns))
 
         self._run_write(_action)
@@ -1020,6 +985,8 @@ class DnbBrStore:
                     "UPDATE companies SET detail_status = ?, updated_at = ? WHERE duns = ?",
                     (status, _now_text(), duns),
                 )
+                if status == "failed":
+                    self._enqueue_site_if_ready(conn, duns)
             if table == "gmap_queue":
                 conn.execute(
                     "UPDATE companies SET gmap_status = ?, updated_at = ? WHERE duns = ?",
@@ -1032,6 +999,43 @@ class DnbBrStore:
                 )
 
         self._run_write(_action)
+
+    def _enqueue_site_if_ready(self, conn: sqlite3.Connection, duns: str) -> None:
+        row = conn.execute(
+            """
+            SELECT duns, company_name, website, representative, detail_status
+            FROM companies
+            WHERE duns = ?
+            """,
+            (duns,),
+        ).fetchone()
+        if row is None:
+            return
+        website = _clean_website_candidate(row["website"])
+        representative = str(row["representative"] or "").strip()
+        detail_status = str(row["detail_status"] or "").strip()
+        if website:
+            conn.execute(
+                "UPDATE companies SET website = ?, site_status = 'pending', updated_at = ? WHERE duns = ?",
+                (website, _now_text(), duns),
+            )
+        if not website:
+            return
+        if not representative and detail_status == "pending":
+            return
+        conn.execute(
+            """
+            INSERT INTO site_queue (duns, company_name, website, status, retries, updated_at)
+            VALUES (?, ?, ?, 'pending', 0, ?)
+            ON CONFLICT(duns) DO UPDATE SET
+                company_name = excluded.company_name,
+                website = excluded.website,
+                status = 'pending',
+                retries = 0,
+                updated_at = excluded.updated_at
+            """,
+            (row["duns"], row["company_name"], website, _now_text()),
+        )
 
     def _claim_simple_task(self, table: str, model):
         def _action(conn: sqlite3.Connection):
