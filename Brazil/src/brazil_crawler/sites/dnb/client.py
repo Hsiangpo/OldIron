@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
+import time
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -203,12 +206,55 @@ def parse_companyprofile_payload(payload: dict[str, Any]) -> DnbDetailProfile:
 
 
 class DnbBrowserCookieProvider:
-    """从 9222 调试浏览器提取 DNB cookie。"""
+    """获取 DNB cookie，默认临时启动浏览器，不依赖 9222。"""
 
     def __init__(self, cdp_url: str = "http://127.0.0.1:9222") -> None:
         self._cdp_url = cdp_url
+        self._cookie_source = str(os.getenv("DNB_COOKIE_SOURCE", "launch") or "launch").strip().lower()
+        self._seed_url = str(
+            os.getenv("DNB_COOKIE_SEED_URL", "https://www.dnb.com/business-directory.html") or ""
+        ).strip() or "https://www.dnb.com/business-directory.html"
+        self._launch_timeout_ms = int(float(os.getenv("DNB_COOKIE_TIMEOUT_SECONDS", "30")) * 1000)
+        self._launch_wait_ms = int(float(os.getenv("DNB_COOKIE_WAIT_SECONDS", "2.5")) * 1000)
+        self._snapshot_ttl_seconds = max(float(os.getenv("DNB_COOKIE_CACHE_SECONDS", "60")), 0.0)
+        self._snapshot_lock = threading.Lock()
+        self._snapshot_cookies: list[dict[str, str]] = []
+        self._snapshot_headers: DnbBrowserHeaders | None = None
+        self._snapshot_expire_at = 0.0
 
     def fetch_cookies(self, domain_keyword: str = "dnb.com") -> list[dict[str, str]]:
+        cookies, _headers = self.fetch_snapshot(domain_keyword=domain_keyword)
+        return list(cookies)
+
+    def fetch_snapshot(
+        self,
+        domain_keyword: str = "dnb.com",
+        *,
+        force: bool = False,
+    ) -> tuple[list[dict[str, str]], DnbBrowserHeaders]:
+        with self._snapshot_lock:
+            now = time.time()
+            if (
+                not force
+                and self._snapshot_headers is not None
+                and self._snapshot_cookies
+                and now < self._snapshot_expire_at
+            ):
+                return list(self._snapshot_cookies), self._snapshot_headers
+            if self._cookie_source == "cdp":
+                cookies, headers = self._fetch_snapshot_via_cdp(domain_keyword)
+            else:
+                cookies, headers = self._fetch_snapshot_via_launch(domain_keyword)
+            self._snapshot_cookies = list(cookies)
+            self._snapshot_headers = headers
+            self._snapshot_expire_at = now + self._snapshot_ttl_seconds
+            return list(cookies), headers
+
+    def fetch_browser_headers(self) -> DnbBrowserHeaders:
+        _cookies, headers = self.fetch_snapshot()
+        return headers
+
+    def _fetch_snapshot_via_cdp(self, domain_keyword: str) -> tuple[list[dict[str, str]], DnbBrowserHeaders]:
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect_over_cdp(self._browser_ws_url(), timeout=10000)
             try:
@@ -218,35 +264,79 @@ class DnbBrowserCookieProvider:
                         domain = str(item.get("domain", "") or "")
                         if domain_keyword in domain:
                             cookies.append(item)
-                return cookies
+                return cookies, self._build_headers_from_version(self._browser_version_payload())
             finally:
                 browser.close()
+
+    def _fetch_snapshot_via_launch(self, domain_keyword: str) -> tuple[list[dict[str, str]], DnbBrowserHeaders]:
+        with sync_playwright() as playwright:
+            browser = self._launch_browser(playwright)
+            try:
+                context = browser.new_context(locale="en-US")
+                page = context.new_page()
+                page.goto(self._seed_url, wait_until="domcontentloaded", timeout=self._launch_timeout_ms)
+                page.wait_for_timeout(self._launch_wait_ms)
+                user_agent = str(page.evaluate("() => navigator.userAgent") or "").strip()
+                cookies = [
+                    item
+                    for item in context.cookies()
+                    if domain_keyword in str(item.get("domain", "") or "")
+                ]
+                return cookies, self._build_headers_from_user_agent(user_agent)
+            finally:
+                browser.close()
+
+    def _launch_browser(self, playwright) -> Any:
+        channel = str(os.getenv("DNB_COOKIE_BROWSER_CHANNEL", "") or "").strip()
+        headless = str(os.getenv("DNB_COOKIE_HEADLESS", "1") or "1").strip() not in {"0", "false", "False"}
+        launch_args = {"headless": headless}
+        if channel:
+            try:
+                return playwright.chromium.launch(channel=channel, **launch_args)
+            except Exception:
+                return playwright.chromium.launch(**launch_args)
+        return playwright.chromium.launch(**launch_args)
 
     def _browser_ws_url(self) -> str:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         version = json.loads(opener.open(f"{self._cdp_url}/json/version", timeout=5).read().decode())
         return str(version["webSocketDebuggerUrl"])
 
-    def fetch_browser_headers(self) -> DnbBrowserHeaders:
-        version = self._browser_version_payload()
+    def _browser_version_payload(self) -> dict[str, Any]:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return json.loads(opener.open(f"{self._cdp_url}/json/version", timeout=5).read().decode())
+
+    def _build_headers_from_version(self, version: dict[str, Any]) -> DnbBrowserHeaders:
         user_agent = str(version.get("User-Agent") or "").strip()
-        major_version = str(version.get("Browser") or "Chrome/146").split("/", 1)[-1].split(".", 1)[0]
+        browser_label = str(version.get("Browser") or "").strip()
+        return self._build_headers(user_agent, browser_label)
+
+    def _build_headers_from_user_agent(self, user_agent: str) -> DnbBrowserHeaders:
+        return self._build_headers(user_agent, "")
+
+    def _build_headers(self, user_agent: str, browser_label: str) -> DnbBrowserHeaders:
+        final_user_agent = user_agent or (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+        )
+        major_version = self._extract_major_version(final_user_agent, browser_label)
         return DnbBrowserHeaders(
-            user_agent=user_agent or (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-            ),
+            user_agent=final_user_agent,
             sec_ch_ua=(
                 f'"Chromium";v="{major_version}", '
                 f'"Not-A.Brand";v="24", "Google Chrome";v="{major_version}"'
             ),
-            sec_ch_ua_platform=self._detect_platform(user_agent),
+            sec_ch_ua_platform=self._detect_platform(final_user_agent),
             accept_language="en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
         )
 
-    def _browser_version_payload(self) -> dict[str, Any]:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        return json.loads(opener.open(f"{self._cdp_url}/json/version", timeout=5).read().decode())
+    def _extract_major_version(self, user_agent: str, browser_label: str) -> str:
+        matched = re.search(r"Chrome/(\d+)", str(user_agent or ""))
+        if matched is not None:
+            return str(matched.group(1) or "146")
+        if "/" in str(browser_label or ""):
+            return str(browser_label).split("/", 1)[-1].split(".", 1)[0]
+        return "146"
 
     def _detect_platform(self, user_agent: str) -> str:
         lowered = user_agent.lower()
@@ -270,8 +360,7 @@ class DnbCompanyInformationClient:
 
     def refresh_cookies(self) -> None:
         with self._cookie_lock:
-            self._cookies = self._cookie_provider.fetch_cookies()
-            self._browser_headers = self._cookie_provider.fetch_browser_headers()
+            self._cookies, self._browser_headers = self._cookie_provider.fetch_snapshot(force=True)
 
     def _get_cookies(self) -> list[dict[str, str]]:
         with self._cookie_lock:
