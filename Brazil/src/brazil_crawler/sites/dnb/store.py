@@ -100,6 +100,35 @@ _BAD_WEBSITE_PATH_HINTS = (
     "/media/pictures/",
     "/image/",
 )
+_BRAZIL_COMPANY_HINTS = (
+    "ltda",
+    "hotel",
+    "pousada",
+    "restaurante",
+    "pizzaria",
+    "comercio",
+    "indústria",
+    "industria",
+    "bar",
+    "lanchonete",
+    "turismo",
+    "viagem",
+    "aliment",
+    "serv",
+    "empreendimento",
+    "motel",
+    "farmacia",
+    "drogaria",
+    "clinica",
+    "consult",
+    "advog",
+    "engenharia",
+    "constr",
+    "academia",
+    "moveis",
+    "mercado",
+    "padaria",
+)
 
 
 def _normalize_website_candidate(value: object) -> str:
@@ -166,6 +195,30 @@ def _clean_site_emails(values: list[str]) -> list[str]:
             if email not in cleaned:
                 cleaned.append(email)
     return cleaned
+
+
+def _looks_like_person_name(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if any(hint in text for hint in _BRAZIL_COMPANY_HINTS):
+        return False
+    tokens = [
+        token.strip(" .,'`´-")
+        for token in re.split(r"\s+", text)
+        if token.strip(" .,'`´-")
+    ]
+    if not 2 <= len(tokens) <= 5:
+        return False
+    long_tokens = [token for token in tokens if len(token) >= 2]
+    if len(long_tokens) < 2:
+        return False
+    for token in tokens:
+        if any(ch.isdigit() for ch in token):
+            return False
+        if not all(ch.isalpha() or ch in ".'`´-" for ch in token):
+            return False
+    return True
 
 
 def _normalize_email_candidate(value: object) -> str:
@@ -694,7 +747,37 @@ class DnbBrStore:
         return self._run_write(_action)
 
     def claim_gmap_task(self) -> DnbGMapTask | None:
-        return self._claim_simple_task("gmap_queue", DnbGMapTask)
+        def _action(conn: sqlite3.Connection) -> DnbGMapTask | None:
+            now_text = _now_text()
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM gmap_queue
+                WHERE status = 'pending'
+                  AND updated_at <= ?
+                ORDER BY updated_at, duns
+                LIMIT 200
+                """,
+                (now_text,),
+            ).fetchall()
+            if not rows:
+                return None
+            ranked = sorted(
+                rows,
+                key=lambda row: (
+                    1 if _looks_like_person_name(str(row["company_name"] or "")) else 0,
+                    str(row["updated_at"] or ""),
+                    str(row["duns"] or ""),
+                ),
+            )
+            row = ranked[0]
+            conn.execute(
+                "UPDATE gmap_queue SET status = 'running', updated_at = ? WHERE duns = ?",
+                (now_text, row["duns"]),
+            )
+            return DnbGMapTask(**dict(row))
+
+        return self._run_write(_action)
 
     def complete_gmap_task(self, duns: str, website: str, phone: str) -> None:
         def _action(conn: sqlite3.Connection) -> None:

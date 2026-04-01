@@ -355,6 +355,26 @@ class DnbStoreTests(unittest.TestCase):
             assert task is not None
             self.assertEqual("2", task.duns)
 
+    def test_claim_gmap_task_prioritizes_company_like_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbBrStore(Path(tmpdir) / "store.db")
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            conn.executescript(
+                """
+                INSERT INTO gmap_queue (duns, company_name, address, region, city, status, retries, updated_at) VALUES
+                    ('1', 'JOSE DA SILVA', 'Rua A', 'Bahia', 'Salvador', 'pending', 0, '2026-03-31 00:00:00'),
+                    ('2', 'POUSADA SOL NASCENTE LTDA', 'Rua B', 'Bahia', 'Salvador', 'pending', 0, '2026-03-31 00:00:00');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            task = store.claim_gmap_task()
+
+            self.assertIsNotNone(task)
+            assert task is not None
+            self.assertEqual("2", task.duns)
+
     def test_purge_bad_websites_clears_dirty_gmap_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DnbBrStore(Path(tmpdir) / "store.db")
