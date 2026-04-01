@@ -179,10 +179,10 @@ class DnbBrowserCookieProvider:
 
     def __init__(self, cdp_url: str = "http://127.0.0.1:9222") -> None:
         self._cdp_url = cdp_url
-        self._cookie_source = str(os.getenv("DNB_COOKIE_SOURCE", "http") or "http").strip().lower()
+        self._cookie_source = str(os.getenv("DNB_COOKIE_SOURCE", "launch") or "launch").strip().lower()
         self._seed_url = str(
-            os.getenv("DNB_COOKIE_SEED_URL", "https://www.dnb.com/business-directory.html") or ""
-        ).strip() or "https://www.dnb.com/business-directory.html"
+            os.getenv("DNB_COOKIE_SEED_URL", "https://www.dnb.com/") or ""
+        ).strip() or "https://www.dnb.com/"
         self._launch_timeout_ms = int(float(os.getenv("DNB_COOKIE_TIMEOUT_SECONDS", "30")) * 1000)
         self._launch_wait_ms = int(float(os.getenv("DNB_COOKIE_WAIT_SECONDS", "2.5")) * 1000)
         self._snapshot_ttl_seconds = max(float(os.getenv("DNB_COOKIE_CACHE_SECONDS", "60")), 0.0)
@@ -213,7 +213,10 @@ class DnbBrowserCookieProvider:
             if self._cookie_source == "cdp":
                 cookies, headers = self._fetch_snapshot_via_cdp(domain_keyword)
             elif self._cookie_source == "launch":
-                cookies, headers = self._fetch_snapshot_via_launch(domain_keyword)
+                try:
+                    cookies, headers = self._fetch_snapshot_via_launch(domain_keyword)
+                except Exception:
+                    cookies, headers = self._fetch_snapshot_via_http(domain_keyword)
             else:
                 cookies, headers = self._fetch_snapshot_via_http(domain_keyword)
             self._snapshot_cookies = list(cookies)
@@ -298,9 +301,12 @@ class DnbBrowserCookieProvider:
         raise RuntimeError("DNB HTTP cookie seed failed")
 
     def _launch_browser(self, playwright) -> Any:
-        channel = str(os.getenv("DNB_COOKIE_BROWSER_CHANNEL", "") or "").strip()
-        headless = str(os.getenv("DNB_COOKIE_HEADLESS", "1") or "1").strip() not in {"0", "false", "False"}
-        launch_args = {"headless": headless}
+        channel = str(os.getenv("DNB_COOKIE_BROWSER_CHANNEL", "chrome") or "chrome").strip()
+        headless = str(os.getenv("DNB_COOKIE_HEADLESS", "0") or "0").strip() not in {"0", "false", "False"}
+        proxy = str(os.getenv("HTTP_PROXY", "http://127.0.0.1:7897") or "").strip()
+        launch_args: dict[str, Any] = {"headless": headless}
+        if proxy:
+            launch_args["proxy"] = {"server": proxy}
         if channel:
             try:
                 return playwright.chromium.launch(channel=channel, **launch_args)
