@@ -74,6 +74,9 @@ At the start of substantial work:
    - `LLM_MODEL`
    - proxy settings (`7897` is the default outbound proxy port in this project)
 4. If protocol exploration is needed, ensure the workflow follows the repository's crawler tooling expectations.
+5. Read `coordination/active_tasks.json` and `coordination/shared_locks.json` before substantial edits.
+6. If the planned work touches a high-risk shared zone recorded in `AGENTS.md`, register the task and claim the shared lock before editing.
+7. If another active task already owns or locks the same scope, stop and report the conflict instead of editing through it.
 
 ## 4. Trigger routing
 

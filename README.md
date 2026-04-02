@@ -14,6 +14,7 @@
 ## 当前开发口径
 
 - 多机协作模型：**不同机器跑不同站点**，按国家维度合并交付。不做同一站点多机分片。
+- 双 Codex 并行开发时，统一使用 `coordination/` + GitHub issue / PR 双通道做任务登记、共享区加锁和交接。
 - 邮箱补充路线：已从 `Firecrawl` 迁移到**协议爬虫（curl_cffi）+ LLM**。协议爬虫抓取网页，HTML 转 Markdown 后由 LLM 提取邮箱和代表人。
 - 老旧实现统一归档到 `<Country>/bak/` 或 `former/`，新开发全部接入新框架。
 
@@ -23,6 +24,11 @@
 |------|------|------|---------|------|
 | Machine 1 | Windows | Administrator | `E:\Develop\Masterpiece\Spider\Website\OldIron` | 跑 England CompanyName |
 | Machine 2 | macOS | Zhuanz1 | `/Users/Zhuanz1/Develop/Masterpiece/Spider/Website/OldIron` | 主开发机；跑 Denmark Proff + Virk |
+
+说明：
+
+- 上表是默认运行职责，不是永久独占开发锁。
+- 实时“谁正在改什么”以 `coordination/active_tasks.json` 和 `coordination/shared_locks.json` 为准。
 
 ## 当前国家与站点覆盖
 
@@ -34,7 +40,7 @@
 | UnitedStates | `dnb` | DNB API → DNB 详情 → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
 | Taiwan | `ieatpe` | 会员协议接口 → 详情接口 → delivery | 站点直出 |
 | SouthKorea | `catch`、`incheon`、`dart` 等 | 列表/详情 → 官网 → 邮箱 → 交付 | Snov 为主 |
-| Japan | `gmap_agent`、`site_agent` 等 | 官网发现 → 抽取 → 邮箱/电话/代表人 | Firecrawl + 规则 + Snov |
+| Japan | `bizmaps`、`hellowork`、`xlsximport` | 站点列表/导入 → 官网/邮箱补齐 → delivery | 协议爬虫+LLM + 站点字段 |
 | Indonesia | `gapensi`、`indonesiayp` | 列表 → 详情 → 法人 → 邮箱 | Snov 为主 |
 | Malaysia | `CTOS`、`BusinessList` | 公司名池 → 官网/管理人 → 邮箱 → 交付 | Snov 为主 |
 | Thailand | `dnb` | DNB → 官网解析 → 站点抽取 → 邮箱 | Snov 为主 |
@@ -73,7 +79,7 @@
 
 ```bash
 cd England
-.venv\Scripts\python run.py companyname
+python run.py companyname
 ```
 
 ## Denmark 当前状态
@@ -84,14 +90,49 @@ cd England
 
 ```bash
 cd Denmark
-.venv/bin/python run.py proff
-.venv/bin/python run.py virk
+python run.py proff
+python run.py virk
 ```
 
 交付：
 ```bash
-Denmark/.venv/bin/python product.py Denmark day1
+python product.py Denmark day1
 ```
+
+## 双 Codex 协作协议
+
+当两台机器上的 Codex 可能同时开发时，仓库本身就是协作面：
+
+- `coordination/active_tasks.json`
+  - 记录谁在做什么、准备改哪些文件、GitHub 对应任务是什么
+- `coordination/shared_locks.json`
+  - 记录哪些高风险共享路径正在被占用
+- `coordination/handoffs/`
+  - 记录中途暂停、部分完成、阻塞后的交接说明
+- GitHub issue / PR
+  - 提供给人类看的长期留痕和审计记录
+
+高风险共享区包括：
+
+- `shared/`
+- repo-root `product.py`
+- repo-root `AGENTS.md`
+- repo-root `README.md`
+- `.github/`
+- `coordination/`
+- 任意 `<Country>/shared/`
+- 任意 `<Country>/src/*/delivery.py`
+
+默认流程：
+
+1. `git pull`
+2. 读取 `AGENTS.md`
+3. 读取 `coordination/active_tasks.json`
+4. 读取 `coordination/shared_locks.json`
+5. 先登记任务，再动手
+6. 如果要改高风险共享区，必须先加锁再改
+7. 改完后 push，并释放锁
+8. 如果工作未完成，写 `coordination/handoffs/` 交接文档
 
 ## 目录约定
 
@@ -99,14 +140,17 @@ Denmark/.venv/bin/python product.py Denmark day1
 OldIron/
 ├── AGENTS.md                    # 全局协作规则
 ├── README.md                    # 本文件
+├── coordination/                # 双 Codex 协作状态与交接
 ├── product.py                   # 统一交付入口
 ├── shared/oldiron_core/         # 共享 Python 业务核心
+│   ├── delivery/                # 共享交付辅助
+│   ├── fc_email/                # 共享邮箱/代表人提取
+│   ├── google_maps/             # 共享 Google Maps 补齐
 │   └── protocol_crawler/        # 协议爬虫模块（curl_cffi）
 ├── VersatileBackend/            # Go 通用后端（Gmap 等高并发服务）
 ├── Denmark/                     # 丹麦项目
 │   ├── run.py
 │   ├── src/denmark_crawler/
-│   │   ├── fc_email/            # 协议爬虫+LLM 邮箱提取
 │   │   └── sites/{proff,virk}/
 │   └── output/
 ├── Brazil/                      # 巴西项目
@@ -117,7 +161,6 @@ OldIron/
 ├── England/                     # 英国项目
 │   ├── run.py
 │   ├── src/england_crawler/
-│   │   ├── fc_email/            # → 符号链接到 Denmark 的 fc_email
 │   │   └── sites/companyname/
 │   └── output/
 ├── UnitedStates/                # 美国项目
@@ -140,7 +183,8 @@ OldIron/
 ```
 
 注意：
-- England 的 `fc_email/` 是指向 Denmark 的符号链接。Windows 上需要手动复制。
+- 共享能力统一收敛到 `shared/oldiron_core/`，不再使用跨国家符号链接做长期共享。
+- `coordination/` 和 `.github/` 里的协作文件属于 Git 管理范围，不走 SSH/scp 代码覆盖同步。
 - `.env`、`output/`、API keys 不进 git。
 
 ## 常见依赖与凭据

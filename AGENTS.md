@@ -47,6 +47,44 @@
 - Multi-machine work should be done by assigning different sites (or different whole pipelines) to different machines, then pulling back site outputs and merging at the country level.
 - Example: Mac runs `Denmark proff` + `Denmark virk`, Windows runs `England companyname` + `Finland tmt/duunitori/jobly`. This is the preferred model.
 
+## Dual Codex Coordination Protocol
+
+- This protocol applies whenever two or more Codex/AI agents may work in parallel without direct chat communication.
+- Use a dual channel:
+  - repo-local coordination files under `coordination/` for machine-readable real-time state
+  - GitHub issue / PR updates for human-visible audit history
+- Every substantial task must start with:
+  1. `git pull`
+  2. read `AGENTS.md`
+  3. read `coordination/active_tasks.json`
+  4. read `coordination/shared_locks.json`
+  5. check whether the planned scope is already owned or locked
+- Default ownership rule:
+  - one active Codex owns one country/site scope at a time
+  - do not let two active Codex agents edit the same site scope simultaneously
+- High-risk shared zone rule:
+  - the following paths are high-risk shared zones:
+    - `shared/`
+    - repo-root `product.py`
+    - repo-root `AGENTS.md`
+    - repo-root `README.md`
+    - `.github/`
+    - `coordination/`
+    - any `<Country>/shared/`
+    - any `<Country>/src/*/delivery.py`
+  - before editing any high-risk shared zone, the agent must:
+    1. register or update its task in `coordination/active_tasks.json`
+    2. claim the exact path(s) in `coordination/shared_locks.json`
+    3. record the related GitHub issue/PR reference in the task/lock entry
+- Country/site-local changes outside the high-risk shared zone still require an active task entry, but do not require a shared lock unless they touch shared paths.
+- If a planned path is already locked by another active task, do not edit it. Stop, sync the latest state, and ask the user to reassign or sequence the work.
+- Keep lock scope small. Lock exact files or narrow directories; do not lock an entire country unless the whole country truly needs exclusive ownership.
+- Release rule:
+  - after push or when handing work back, update `coordination/active_tasks.json`
+  - release any shared lock in `coordination/shared_locks.json`
+  - if the work is partial, add a handoff note under `coordination/handoffs/`
+- Machine roles in the `Machines` section are default runtime responsibilities, not permanent exclusive development locks. Real-time ownership is defined by the coordination files and current task assignment.
+
 ## Country Delivery Rules
 
 - Daily delivery files use a unified entry at the project root. Do not use `<Country>/product.py` directly for execution.
@@ -133,14 +171,13 @@ In each country project, keep source code under `src/`, tests under `tests/` or 
 There is no single root build step. Work inside the target country directory for scrapers, but run delivery from the root.
 
 - `cd England && python -m pip install -r requirements.txt`
-- `cd England && python run.py dnb`
-- `cd England && python run.py companies-house`
-- `python product.py England day2`
+- `cd England && python run.py companyname`
+- `python product.py England day1`
 - `cd Brazil && python -m pip install -r requirements.txt`
 - `cd Brazil && python run.py dnb`
 - `python product.py Brazil day1`
 - `cd Denmark && python -m pip install -r requirements.txt`
-- `cd Denmark && python run.py dnb`
+- `cd Denmark && python run.py proff`
 - `cd Denmark && python run.py virk`
 - `python product.py Denmark day1`
 - `cd Finland && python -m pip install -r requirements.txt`
@@ -148,6 +185,17 @@ There is no single root build step. Work inside the target country directory for
 - `cd Finland && python run.py duunitori`
 - `cd Finland && python run.py jobly`
 - `python product.py Finland day1`
+- `cd Japan && python -m pip install -r requirements.txt`
+- `cd Japan && python run.py bizmaps`
+- `cd Japan && python run.py hellowork`
+- `cd Japan && python run.py xlsximport`
+- `python product.py Japan day1`
+- `cd Taiwan && python -m pip install -r requirements.txt`
+- `cd Taiwan && python run.py ieatpe`
+- `python product.py Taiwan day1`
+- `cd UnitedStates && python -m pip install -r requirements.txt`
+- `cd UnitedStates && python run.py dnb`
+- `python product.py UnitedStates day1`
 - `cd Japan && python -m pytest test -v`
 - `cd Taiwan && python -m unittest tests -v`
 - `cd UnitedStates && python -m unittest tests -v`
@@ -207,6 +255,7 @@ There is no single root build step. Work inside the target country directory for
   - Mac pushes verified code to GitHub.
   - Other machines receive code changes via `git pull`.
   - Do not use SSH/scp to push normal code files, test files, temp scripts, or cache files to another machine as the default workflow.
+- `coordination/` and `.github/` are normal repo files. They must stay in Git, not in ad hoc SSH/scp sync.
 - Only the following untracked or special data may be synced by SSH/scp when needed:
   - `.env`
   - SQLite databases / checkpoint databases
@@ -219,6 +268,7 @@ There is no single root build step. Work inside the target country directory for
   2. sync only the required files
   3. verify file size / timestamp / openability on the target machine
   4. restart on the target machine only after verification
+- Before editing a high-risk shared zone, sync the latest Git state first and then re-check `coordination/shared_locks.json`.
 - England exception rule:
   - if Windows is the active England runtime machine, do not overwrite the Windows England database or England output tree from another machine unless the task explicitly says to do so
 - After pushing, **all machines** must be updated to the latest code before restarting any process.
