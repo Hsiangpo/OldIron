@@ -61,6 +61,9 @@ def run_dnb(argv: list[str]) -> int:
     recovered = store.requeue_stale_running_tasks()
     if recovered:
         logging.getLogger("brazil_crawler.sites.dnb.cli").info("DNB 启动回收僵住任务：%d", recovered)
+    revived = store.requeue_failed_tasks()
+    if revived:
+        logging.getLogger("brazil_crawler.sites.dnb.cli").info("DNB 启动回收失败任务：%d", revived)
     cleaned = store.purge_bad_websites()
     if cleaned:
         logging.getLogger("brazil_crawler.sites.dnb.cli").info("DNB 启动清理脏官网：%d", cleaned)

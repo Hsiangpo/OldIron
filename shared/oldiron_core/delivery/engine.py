@@ -29,6 +29,28 @@ def parse_day_label(raw: str) -> int:
     return value
 
 
+def validate_day_sequence(delivery_root: Path, country_name: str, day_label: str) -> tuple[int, int]:
+    """校验目标 day 是否符合交付顺序要求。"""
+    target_day = parse_day_label(day_label)
+    pattern = re.compile(rf"{re.escape(str(country_name or '').strip())}_day(\d{{3}})$")
+    existing_days: list[int] = []
+    if delivery_root.exists():
+        for item in delivery_root.iterdir():
+            if not item.is_dir():
+                continue
+            matched = pattern.fullmatch(item.name)
+            if matched:
+                existing_days.append(int(matched.group(1)))
+    latest = max(existing_days, default=0)
+    if latest == 0 and target_day != 1:
+        raise ValueError("尚未有交付记录，首个交付只能执行 day1。")
+    if target_day < latest:
+        raise ValueError(f"第{target_day}天已交付，当前最新是第{latest}天。")
+    if target_day > latest + 1:
+        raise ValueError(f"只能执行 day{latest}（重跑）或 day{latest + 1}（新一天）。")
+    return target_day, latest
+
+
 def extract_domain(url: str) -> str:
     """从 URL 提取域名。"""
     if not url:
@@ -367,4 +389,3 @@ def build_delivery_bundle(
     }
     _write_bundle_files(day_dir, keyed_records, delta_records, summary)
     return summary
-

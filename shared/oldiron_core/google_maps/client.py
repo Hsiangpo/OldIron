@@ -247,16 +247,6 @@ import platform as _platform
 # 只设置业务相关 headers，不设置 sec-ch-ua 系列
 # sec-ch-ua/sec-fetch/user-agent 全部由 curl_cffi impersonate 自动处理
 # 否则版本号不匹配（如 TLS 是 Chrome110 但 sec-ch-ua 声称 Chrome134）会被 Google 429
-MAP_HEADERS = {
-    "accept": "*/*",
-    "accept-language": "en-GB,en;q=0.9,en-US;q=0.8",
-    "referer": "https://www.google.com/maps?hl=en&gl=gb",
-    "priority": "u=1, i",
-    "x-browser-channel": "stable",
-    "x-browser-year": "2026",
-}
-
-
 def _default_google_maps_proxy() -> str:
     return os.getenv("GOOGLE_MAPS_PROXY_URL", "").strip() or "socks5h://127.0.0.1:7897"
 
@@ -305,12 +295,26 @@ class GoogleMapsClient:
             session.proxies = {"http": proxy, "https": proxy}
         return session
 
+    def _search_headers(self) -> dict[str, str]:
+        language = str(self.config.hl or "en").strip() or "en"
+        return {
+            "accept": "*/*",
+            "accept-language": f"{language},{language};q=0.9,en-US;q=0.8,en;q=0.7",
+            "referer": f"{self.config.base_url.rstrip('/')}/maps?hl={self.config.hl}&gl={self.config.gl}",
+            "priority": "u=1, i",
+            "x-browser-channel": "stable",
+            "x-browser-year": "2026",
+        }
+
     def _warm_up(self) -> None:
         """先访问 Google Maps 首页拿 cookie，模拟真实浏览器行为。"""
         try:
             self.session.get(
                 f"{self.config.base_url}/maps?hl={self.config.hl}&gl={self.config.gl}",
-                headers={"accept": "text/html", "accept-language": "en-GB,en;q=0.9"},
+                headers={
+                    "accept": "text/html",
+                    "accept-language": f"{self.config.hl},{self.config.hl};q=0.9,en-US;q=0.8,en;q=0.7",
+                },
                 timeout=self.config.timeout,
             )
         except Exception:
@@ -353,7 +357,7 @@ class GoogleMapsClient:
         for attempt in range(1, max_retries + 1):
             self._sleep()
             try:
-                resp = self.session.get(url, headers=MAP_HEADERS, timeout=self.config.timeout)
+                resp = self.session.get(url, headers=self._search_headers(), timeout=self.config.timeout)
             except Exception as exc:
                 err_text = str(exc)
                 logger.warning("Google Maps 请求异常 (第%d次): %s — %s", attempt, query, err_text)

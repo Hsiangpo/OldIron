@@ -303,7 +303,13 @@ class TmtPipelineRunner:
     def _get_gmap_client(self) -> GoogleMapsClient:
         client = getattr(self._gmap_local, "client", None)
         if client is None:
-            client = GoogleMapsClient(GoogleMapsConfig(proxy_url=self.config.proxy_url))
+            client = GoogleMapsClient(
+                GoogleMapsConfig(
+                    hl="fi",
+                    gl="fi",
+                    proxy_url=self.config.proxy_url,
+                )
+            )
             self._gmap_local.client = client
         return client
 

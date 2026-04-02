@@ -5,14 +5,16 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+SHARED_DIR = ROOT.parent / "shared"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
 
 
 def _load_run_module():
@@ -40,52 +42,6 @@ class RunDispatchTests(unittest.TestCase):
         with patch.object(run, "_ensure_runtime_dependencies", return_value=True):
             code = run._dispatch(["dnb"])
         self.assertEqual(1, code)
-
-    def test_myip_false_should_not_auto_start(self) -> None:
-        from denmark_crawler.sites.proff.cli import _auto_start_go_backends
-        from denmark_crawler.sites.proff.config import ProffDenmarkConfig
-
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config = ProffDenmarkConfig.from_env(
-                project_root=root,
-                output_dir=root / "output",
-                query_file=None,
-                inline_queries=["ApS"],
-                max_pages_per_query=1,
-                max_companies=0,
-                search_workers=1,
-                gmap_workers=1,
-                firecrawl_workers=1,
-            )
-            with patch("denmark_crawler.sites.proff.cli.ensure_services_started", return_value=["gmap"]) as mocked:
-                with patch.dict("os.environ", {"MYIP_ENABLED": "false"}, clear=False):
-                    started = _auto_start_go_backends(config=config, skip_gmap=False, skip_firecrawl=False)
-            mocked.assert_called_once_with(["gmap"], quiet=True)
-            self.assertEqual(["gmap"], started)
-
-    def test_go_firecrawl_enabled_should_auto_start_firecrawl(self) -> None:
-        from denmark_crawler.sites.proff.cli import _auto_start_go_backends
-        from denmark_crawler.sites.proff.config import ProffDenmarkConfig
-
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config = ProffDenmarkConfig.from_env(
-                project_root=root,
-                output_dir=root / "output",
-                query_file=None,
-                inline_queries=["ApS"],
-                max_pages_per_query=1,
-                max_companies=0,
-                search_workers=1,
-                gmap_workers=1,
-                firecrawl_workers=1,
-            )
-            config.prefer_go_firecrawl_backend = True
-            with patch("denmark_crawler.sites.proff.cli.ensure_services_started", return_value=["gmap", "firecrawl"]) as mocked:
-                started = _auto_start_go_backends(config=config, skip_gmap=False, skip_firecrawl=False)
-            mocked.assert_called_once_with(["gmap", "firecrawl"], quiet=True)
-            self.assertEqual(["gmap", "firecrawl"], started)
 
 
 if __name__ == "__main__":

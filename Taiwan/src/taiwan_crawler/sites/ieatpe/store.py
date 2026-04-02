@@ -93,17 +93,21 @@ class IeatpeStore:
 
     def claim_letter_task(self) -> dict[str, Any] | None:
         conn = self._conn()
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT letter FROM letters WHERE status='pending' ORDER BY letter LIMIT 1"
         ).fetchone()
         if row is None:
+            conn.commit()
             return None
         letter = str(row["letter"])
-        conn.execute(
+        updated = conn.execute(
             "UPDATE letters SET status='running', updated_at=? WHERE letter=? AND status='pending'",
             (time.time(), letter),
-        )
+        ).rowcount
         conn.commit()
+        if updated != 1:
+            return None
         return {"letter": letter}
 
     def mark_letter_done(self, letter: str, *, result_count: int) -> None:
@@ -165,6 +169,7 @@ class IeatpeStore:
 
     def claim_detail_task(self) -> dict[str, Any] | None:
         conn = self._conn()
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             """
             SELECT member_id, flow FROM companies
@@ -173,13 +178,16 @@ class IeatpeStore:
             """
         ).fetchone()
         if row is None:
+            conn.commit()
             return None
         member_id = str(row["member_id"])
-        conn.execute(
+        updated = conn.execute(
             "UPDATE companies SET detail_status='running', updated_at=? WHERE member_id=? AND detail_status='pending'",
             (time.time(), member_id),
-        )
+        ).rowcount
         conn.commit()
+        if updated != 1:
+            return None
         return {"member_id": member_id, "flow": str(row["flow"] or "12")}
 
     def save_detail_result(self, member_id: str, detail: dict[str, str]) -> None:

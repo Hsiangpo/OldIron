@@ -1,11 +1,4 @@
-"""Japan 交付包装 — 新规范。
-
-与 Denmark/England 的区别：
-  - 各站点/路线独立落盘，**不合并、不去重**
-  - 产出结构：Japan/output/delivery/Japan_dayN/bizmaps.csv, site2.csv, ...
-  - 邮箱过滤：只保留指定白名单域名的邮箱
-  - **落盘门槛**：公司名 + 代表人 + 邮箱 三者同时有值才落盘
-"""
+"""Japan 国家级交付。"""
 
 from __future__ import annotations
 
@@ -16,14 +9,16 @@ import sqlite3
 import sys
 from pathlib import Path
 
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SHARED_ROOT = PROJECT_ROOT / "shared"
 if str(SHARED_ROOT) not in sys.path:
     sys.path.insert(0, str(SHARED_ROOT))
 
-from oldiron_core.delivery.engine import parse_day_label
+from oldiron_core.delivery.engine import validate_day_sequence
+from oldiron_core.delivery.sanitize import sanitize_record
 
-# 白名单：只保留这些域名的邮箱
+
 ALLOWED_EMAIL_DOMAINS = {
     "gmail.com",
     "icloud.com",
@@ -33,77 +28,46 @@ ALLOWED_EMAIL_DOMAINS = {
     "msn.com",
 }
 
-# 站点名 → 数据加载函数的映射
-SITE_LOADERS = {
-    "bizmaps": "_load_bizmaps_data",
-}
+_CSV_FIELDS = [
+    "company_name",
+    "representative",
+    "emails",
+    "website",
+    "phone",
+    "evidence_url",
+]
 
 
 def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) -> dict[str, object]:
-    """构建 Japan 日交付包，各站点独立落盘。"""
-    day = parse_day_label(day_label)
+    """构建 Japan 国家级日交付包。"""
+    day, _latest = validate_day_sequence(Path(delivery_root), "Japan", day_label)
     delivery_dir = Path(delivery_root) / f"Japan_day{day:03d}"
-    baseline_day = max(day - 1, 0)
-
     if delivery_dir.exists():
         shutil.rmtree(delivery_dir)
     delivery_dir.mkdir(parents=True, exist_ok=True)
 
-    total_current_companies = 0
-    total_delta_companies = 0
-    site_stats: dict[str, dict[str, int]] = {}
+    current_records = _load_and_merge_records(Path(data_root))
+    baseline_keys = _load_baseline_keys(Path(delivery_root), day - 1)
+    delta_records = [row for row in current_records if _record_key(row) not in baseline_keys]
 
-    # 遍历 output/ 下每个站点目录
-    if data_root.exists():
-        for site_dir in sorted(data_root.iterdir()):
-            if not site_dir.is_dir() or site_dir.name == "delivery":
-                continue
-            site_name = site_dir.name
-            records = _load_site_records(site_name, site_dir)
-            if not records:
-                continue
-            raw_count = len(records)
+    csv_path = delivery_dir / "companies.csv"
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=_CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(delta_records)
 
-            # 白名单过滤邮箱域名
-            for rec in records:
-                if "emails" in rec:
-                    rec["emails"] = _filter_emails(rec["emails"])
-
-            # 落盘门槛：必须同时有公司名 + 代表人 + 邮箱
-            qualified = [
-                r for r in records
-                if r.get("company_name", "").strip()
-                and r.get("representative", "").strip()
-                and r.get("representative", "").strip() != "-"
-                and r.get("emails", "").strip()
-            ]
-            baseline_keys = _load_site_baseline_keys(delivery_root=Path(delivery_root), site_name=site_name, baseline_day=baseline_day)
-            delta_records = [record for record in qualified if _record_key(record) not in baseline_keys]
-            current_keys = sorted(baseline_keys | {_record_key(record) for record in qualified})
-
-            # 写站点独立 CSV
-            csv_path = delivery_dir / f"{site_name}.csv"
-            _write_site_csv(csv_path, delta_records)
-            (delivery_dir / f"{site_name}.keys.txt").write_text("\n".join(current_keys), encoding="utf-8")
-            site_stats[site_name] = {
-                "qualified_current": len(qualified),
-                "delta": len(delta_records),
-            }
-            total_current_companies += len(qualified)
-            total_delta_companies += len(delta_records)
-            print(
-                f"  {site_name}: DB 总计 {raw_count} → 当前合格 {len(qualified)} 家公司 → 当日新增 {len(delta_records)} 家公司"
-            )
+    keys_path = delivery_dir / "keys.txt"
+    keys_path.write_text(
+        "\n".join(_record_key(row) for row in current_records),
+        encoding="utf-8",
+    )
 
     summary = {
         "country": "Japan",
         "day": day,
-        "baseline_day": baseline_day,
-        "total_companies": total_current_companies,
-        # product.py 根入口需要的字段
-        "delta_companies": total_delta_companies,
-        "total_current_companies": total_current_companies,
-        "sites": site_stats,
+        "baseline_day": max(day - 1, 0),
+        "delta_companies": len(delta_records),
+        "total_current_companies": len(current_records),
     }
     (delivery_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
@@ -112,8 +76,27 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
     return summary
 
 
+def _load_and_merge_records(data_root: Path) -> list[dict[str, str]]:
+    grouped: dict[str, dict[str, str | list[str]]] = {}
+    if not data_root.exists():
+        return []
+
+    for site_dir in sorted(data_root.iterdir()):
+        if not site_dir.is_dir() or site_dir.name == "delivery":
+            continue
+        for record in _load_site_records(site_dir.name, site_dir):
+            _merge_record(grouped, record)
+
+    merged: list[dict[str, str]] = []
+    for entry in grouped.values():
+        emails = _split_emails(str(entry.pop("_emails", "")))
+        cleaned = sanitize_record(entry, emails)
+        if cleaned is not None:
+            merged.append(cleaned)
+    return merged
+
+
 def _load_site_records(site_name: str, site_dir: Path) -> list[dict[str, str]]:
-    """根据站点名加载数据。"""
     if site_name == "bizmaps":
         return _load_bizmaps_data(site_dir)
     if site_name == "xlsximport":
@@ -124,165 +107,171 @@ def _load_site_records(site_name: str, site_dir: Path) -> list[dict[str, str]]:
 
 
 def _load_xlsximport_data(site_dir: Path) -> list[dict[str, str]]:
-    """从 xlsximport SQLite 加载数据。"""
     db_path = site_dir / "xlsximport_store.db"
     if not db_path.exists():
         return []
 
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT website, email, company_name, representative
         FROM companies
         WHERE company_name != '' AND company_name IS NOT NULL
         ORDER BY id
-    """).fetchall()
+        """
+    ).fetchall()
     conn.close()
 
-    records: list[dict[str, str]] = []
-    for row in rows:
-        d = dict(row)
-        records.append({
-            "company_name": str(d.get("company_name", "") or "").strip(),
-            "representative": str(d.get("representative", "") or "").strip(),
-            "website": str(d.get("website", "") or "").strip(),
-            "emails": str(d.get("email", "") or "").strip(),
-        })
-    return records
+    return [
+        {
+            "company_name": str(row["company_name"] or "").strip(),
+            "representative": str(row["representative"] or "").strip(),
+            "website": str(row["website"] or "").strip(),
+            "emails": _filter_emails(str(row["email"] or "").strip()),
+            "phone": "",
+            "evidence_url": str(row["website"] or "").strip(),
+        }
+        for row in rows
+    ]
 
 
 def _load_hellowork_data(site_dir: Path) -> list[dict[str, str]]:
-    """从 hellowork SQLite 加载企业数据。"""
     db_path = site_dir / "hellowork_store.db"
     if not db_path.exists():
         return []
 
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("""
-        SELECT company_name, representative, website, address,
-               industry, phone, employees, capital, founded_year,
-               corp_number, detail_url, emails
+    rows = conn.execute(
+        """
+        SELECT company_name, representative, website, phone, detail_url, emails
         FROM companies
         WHERE company_name != '' AND company_name IS NOT NULL
         ORDER BY id
-    """).fetchall()
+        """
+    ).fetchall()
     conn.close()
 
-    records: list[dict[str, str]] = []
-    for row in rows:
-        d = dict(row)
-        records.append({
-            "company_name": str(d.get("company_name", "") or "").strip(),
-            "representative": str(d.get("representative", "") or "").strip(),
-            "website": str(d.get("website", "") or "").strip(),
-            "address": str(d.get("address", "") or "").strip(),
-            "industry": str(d.get("industry", "") or "").strip(),
-            "phone": str(d.get("phone", "") or "").strip(),
-            "founded_year": str(d.get("founded_year", "") or "").strip(),
-            "capital": str(d.get("capital", "") or "").strip(),
-            "detail_url": str(d.get("detail_url", "") or "").strip(),
-            "emails": str(d.get("emails", "") or "").strip(),
-        })
-    return records
+    return [
+        {
+            "company_name": str(row["company_name"] or "").strip(),
+            "representative": str(row["representative"] or "").strip(),
+            "website": str(row["website"] or "").strip(),
+            "emails": _filter_emails(str(row["emails"] or "").strip()),
+            "phone": str(row["phone"] or "").strip(),
+            "evidence_url": str(row["detail_url"] or "").strip(),
+        }
+        for row in rows
+    ]
 
 
 def _load_bizmaps_data(site_dir: Path) -> list[dict[str, str]]:
-    """从 bizmaps SQLite 加载公司数据。"""
     db_path = site_dir / "bizmaps_store.db"
     if not db_path.exists():
         return []
 
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
-
-    # 探测实际存在的列名，避免查不存在的列导致 fallback 丢字段
     col_info = conn.execute("PRAGMA table_info(companies)").fetchall()
-    existing_cols = {c["name"] for c in col_info}
-
-    # 基础列 + 可选列
-    base_cols = ["company_name", "representative", "website", "address",
-                 "industry", "detail_url"]
-    optional_cols = ["phone", "founded_year", "capital", "emails"]
-    select_cols = base_cols + [c for c in optional_cols if c in existing_cols]
-
-    sql = f"SELECT {', '.join(select_cols)} FROM companies WHERE company_name != '' ORDER BY id"
-    rows = conn.execute(sql).fetchall()
+    existing_cols = {col["name"] for col in col_info}
+    optional_cols = [col for col in ("phone", "detail_url", "emails") if col in existing_cols]
+    select_cols = ["company_name", "representative", "website"] + optional_cols
+    rows = conn.execute(
+        f"SELECT {', '.join(select_cols)} FROM companies WHERE company_name != '' ORDER BY id"
+    ).fetchall()
     conn.close()
 
     records: list[dict[str, str]] = []
     for row in rows:
-        d = dict(row)
-        records.append({
-            "company_name": str(d.get("company_name", "") or "").strip(),
-            "representative": str(d.get("representative", "") or "").strip(),
-            "website": str(d.get("website", "") or "").strip(),
-            "address": str(d.get("address", "") or "").strip(),
-            "industry": str(d.get("industry", "") or "").strip(),
-            "phone": str(d.get("phone", "") or "").strip(),
-            "founded_year": str(d.get("founded_year", "") or "").strip(),
-            "capital": str(d.get("capital", "") or "").strip(),
-            "detail_url": str(d.get("detail_url", "") or "").strip(),
-            "emails": str(d.get("emails", "") or "").strip(),
-        })
+        records.append(
+            {
+                "company_name": str(row["company_name"] or "").strip(),
+                "representative": str(row["representative"] or "").strip(),
+                "website": str(row["website"] or "").strip(),
+                "emails": _filter_emails(str(row["emails"] or "").strip()),
+                "phone": str(row["phone"] or "").strip() if "phone" in existing_cols else "",
+                "evidence_url": str(row["detail_url"] or "").strip() if "detail_url" in existing_cols else "",
+            }
+        )
     return records
 
 
+def _merge_record(grouped: dict[str, dict[str, str | list[str]]], record: dict[str, str]) -> None:
+    company_name = str(record.get("company_name", "")).strip()
+    if not company_name:
+        return
+    key = company_name.lower()
+    current = grouped.get(key)
+    emails = _split_emails(str(record.get("emails", "")))
+    if current is None:
+        grouped[key] = {
+            "company_name": company_name,
+            "representative": str(record.get("representative", "")).strip(),
+            "website": str(record.get("website", "")).strip(),
+            "phone": str(record.get("phone", "")).strip(),
+            "evidence_url": str(record.get("evidence_url", "")).strip(),
+            "_emails": "; ".join(emails),
+        }
+        return
+
+    for field in ("representative", "website", "phone", "evidence_url"):
+        if not str(current.get(field, "")).strip():
+            value = str(record.get(field, "")).strip()
+            if value:
+                current[field] = value
+
+    merged_emails = _split_emails(str(current.get("_emails", "")))
+    for email in emails:
+        if email not in merged_emails:
+            merged_emails.append(email)
+    current["_emails"] = "; ".join(merged_emails)
+
+
+def _split_emails(emails_str: str) -> list[str]:
+    if not emails_str:
+        return []
+    values: list[str] = []
+    for raw in emails_str.replace(",", ";").split(";"):
+        email = str(raw or "").strip().lower()
+        if email and email not in values:
+            values.append(email)
+    return values
+
+
 def _filter_emails(emails_str: str) -> str:
-    """白名单过滤：只保留指定域名的邮箱。"""
     if not emails_str:
         return ""
-    # 支持逗号和分号分隔
-    parts = [e.strip().lower() for e in emails_str.replace(";", ",").split(",") if e.strip()]
-    filtered = []
-    for email in parts:
+    filtered: list[str] = []
+    for email in _split_emails(emails_str):
         if "@" not in email:
             continue
-        domain = email.split("@")[1]
-        if domain in ALLOWED_EMAIL_DOMAINS:
+        if email.split("@", 1)[1] in ALLOWED_EMAIL_DOMAINS:
             filtered.append(email)
     return "; ".join(filtered)
 
 
 def _record_key(record: dict[str, str]) -> str:
-    parts = (
-        str(record.get("company_name", "") or "").strip().lower(),
-        str(record.get("representative", "") or "").strip().lower(),
-        str(record.get("website", "") or "").strip().lower(),
-        str(record.get("address", "") or "").strip().lower(),
-    )
-    return " | ".join(parts)
+    return str(record.get("company_name", "")).strip().lower()
 
 
-def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_day: int) -> set[str]:
+def _load_baseline_keys(delivery_root: Path, baseline_day: int) -> set[str]:
     if baseline_day <= 0:
         return set()
-    baseline_dir = delivery_root / f"Japan_day{baseline_day:03d}"
-    key_path = baseline_dir / f"{site_name}.keys.txt"
-    if key_path.exists():
+    day_dir = Path(delivery_root) / f"Japan_day{baseline_day:03d}"
+    keys_path = day_dir / "keys.txt"
+    if keys_path.exists():
         return {
             line.strip()
-            for line in key_path.read_text(encoding="utf-8").splitlines()
+            for line in keys_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         }
-    csv_path = baseline_dir / f"{site_name}.csv"
+    csv_path = day_dir / "companies.csv"
     if not csv_path.exists():
         return set()
     with csv_path.open(encoding="utf-8-sig", newline="") as fp:
         return {
             _record_key(row)
             for row in csv.DictReader(fp)
-            if row.get("company_name", "").strip()
+            if str(row.get("company_name", "")).strip()
         }
-
-
-def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
-    """写站点级 CSV。"""
-    fieldnames = [
-        "company_name", "representative", "website", "emails",
-        "phone", "address", "industry", "founded_year", "capital", "detail_url",
-    ]
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(records)

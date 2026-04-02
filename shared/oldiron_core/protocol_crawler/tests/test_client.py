@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 from dataclasses import dataclass
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[4]
+SHARED_DIR = ROOT / "shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
 
 from oldiron_core.protocol_crawler.client import SiteCrawlClient, SiteCrawlConfig, HtmlPageResult
 from oldiron_core.protocol_crawler.sitemap import discover_sitemap_urls
@@ -56,6 +64,20 @@ class TestLinkExtractor(unittest.TestCase):
         links = extract_same_site_links(html, "https://example.com/")
         self.assertIn("https://www.example.com/about", links)
 
+    def test_subdomain_is_excluded_by_default(self) -> None:
+        html = '<a href="https://blog.example.com/post">博客</a>'
+        links = extract_same_site_links(html, "https://example.com/")
+        self.assertEqual([], links)
+
+    def test_subdomain_is_included_when_enabled(self) -> None:
+        html = '<a href="https://blog.example.com/post">博客</a>'
+        links = extract_same_site_links(
+            html,
+            "https://example.com/",
+            include_subdomains=True,
+        )
+        self.assertEqual(["https://blog.example.com/post"], links)
+
 
 # ──────────────────────────────────────────────────────
 # sitemap 测试
@@ -94,6 +116,48 @@ class TestSitemap(unittest.TestCase):
 
         urls = discover_sitemap_urls(session, "https://example.com", limit=100)
         self.assertEqual([], urls)
+
+    def test_filters_out_subdomain_urls_by_default(self) -> None:
+        robots_resp = _MockResponse(200, text="Sitemap: https://example.com/sitemap.xml")
+        sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <url><loc>https://example.com/page1</loc></url>
+            <url><loc>https://blog.example.com/page2</loc></url>
+        </urlset>'''
+        sitemap_resp = _MockResponse(200, text=sitemap_xml, content=sitemap_xml.encode())
+
+        session = MagicMock()
+        session.get.side_effect = lambda url, **kw: (
+            robots_resp if "robots.txt" in url else sitemap_resp
+        )
+
+        urls = discover_sitemap_urls(session, "https://example.com", limit=100)
+        self.assertEqual(["https://example.com/page1"], urls)
+
+    def test_keeps_subdomain_urls_when_enabled(self) -> None:
+        robots_resp = _MockResponse(200, text="Sitemap: https://example.com/sitemap.xml")
+        sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <url><loc>https://example.com/page1</loc></url>
+            <url><loc>https://blog.example.com/page2</loc></url>
+        </urlset>'''
+        sitemap_resp = _MockResponse(200, text=sitemap_xml, content=sitemap_xml.encode())
+
+        session = MagicMock()
+        session.get.side_effect = lambda url, **kw: (
+            robots_resp if "robots.txt" in url else sitemap_resp
+        )
+
+        urls = discover_sitemap_urls(
+            session,
+            "https://example.com",
+            limit=100,
+            include_subdomains=True,
+        )
+        self.assertEqual(
+            ["https://example.com/page1", "https://blog.example.com/page2"],
+            urls,
+        )
 
 
 # ──────────────────────────────────────────────────────

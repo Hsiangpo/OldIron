@@ -41,7 +41,7 @@ class SiteCrawlConfig:
     impersonate: str = "chrome110"
     default_headers: dict[str, str] = field(default_factory=lambda: {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,da;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
         "Connection": "close",
     })
 
@@ -86,13 +86,12 @@ class SiteCrawlClient:
         Returns:
             站点链接列表
         """
-        _ = include_subdomains  # 保留接口兼容性
-
         # 第一步：尝试 sitemap
         sitemap_urls = discover_sitemap_urls(
             self._session, url,
             limit=limit,
             timeout=self._config.timeout_seconds,
+            include_subdomains=include_subdomains,
         )
         if sitemap_urls:
             LOGGER.info("协议爬虫 sitemap 发现链接：url=%s count=%s", url, len(sitemap_urls))
@@ -104,7 +103,12 @@ class SiteCrawlClient:
         if not homepage_html:
             return []
 
-        links = extract_same_site_links(homepage_html, url, limit=limit)
+        links = extract_same_site_links(
+            homepage_html,
+            url,
+            limit=limit,
+            include_subdomains=include_subdomains,
+        )
         LOGGER.info("协议爬虫首页链接提取：url=%s count=%s", url, len(links))
         return links
 

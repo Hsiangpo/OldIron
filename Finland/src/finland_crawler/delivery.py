@@ -20,7 +20,7 @@ SHARED_ROOT = PROJECT_ROOT / "shared"
 if str(SHARED_ROOT) not in sys.path:
     sys.path.insert(0, str(SHARED_ROOT))
 
-from oldiron_core.delivery.engine import parse_day_label
+from oldiron_core.delivery.engine import validate_day_sequence
 from oldiron_core.delivery.sanitize import sanitize_record
 
 
@@ -43,7 +43,7 @@ def build_delivery_bundle(
     data_root: Path, delivery_root: Path, day_label: str,
 ) -> dict[str, object]:
     """构建 Finland 日交付包。"""
-    day = parse_day_label(day_label)
+    day, _latest = validate_day_sequence(Path(delivery_root), "Finland", day_label)
     delivery_dir = Path(delivery_root) / f"Finland_day{day:03d}"
     if delivery_dir.exists():
         shutil.rmtree(delivery_dir)

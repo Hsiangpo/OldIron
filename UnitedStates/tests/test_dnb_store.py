@@ -329,6 +329,98 @@ class DnbStoreTests(unittest.TestCase):
                 statuses,
             )
 
+    def test_requeue_failed_tasks_reopens_failed_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            conn.executescript(
+                """
+                INSERT INTO detail_queue (duns, detail_url, company_name, status, retries, updated_at) VALUES
+                    ('detail-1', 'https://example.com/1', 'Acme', 'failed', 3, '2026-03-31 00:00:00');
+                INSERT INTO gmap_queue (duns, company_name, address, region, city, status, retries, updated_at) VALUES
+                    ('gmap-1', 'Acme', '', '', '', 'failed', 3, '2026-03-31 00:00:00');
+                INSERT INTO site_queue (duns, company_name, website, status, retries, updated_at) VALUES
+                    ('site-1', 'Acme', 'https://acme.example', 'failed', 3, '2026-03-31 00:00:00');
+                INSERT INTO companies (duns, company_name, detail_status, gmap_status, site_status, updated_at) VALUES
+                    ('detail-1', 'Acme', 'failed', 'pending', 'pending', '2026-03-31 00:00:00'),
+                    ('gmap-1', 'Acme', 'pending', 'failed', 'pending', '2026-03-31 00:00:00'),
+                    ('site-1', 'Acme', 'pending', 'pending', 'failed', '2026-03-31 00:00:00');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            revived = store.requeue_failed_tasks()
+
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            detail = conn.execute("SELECT status, retries FROM detail_queue WHERE duns = 'detail-1'").fetchone()
+            gmap = conn.execute("SELECT status, retries FROM gmap_queue WHERE duns = 'gmap-1'").fetchone()
+            site = conn.execute("SELECT status, retries FROM site_queue WHERE duns = 'site-1'").fetchone()
+            statuses = conn.execute(
+                "SELECT duns, detail_status, gmap_status, site_status FROM companies ORDER BY duns"
+            ).fetchall()
+            conn.close()
+
+            self.assertEqual(3, revived)
+            self.assertEqual(("pending", 0), detail)
+            self.assertEqual(("pending", 0), gmap)
+            self.assertEqual(("pending", 0), site)
+            self.assertEqual(
+                [
+                    ("detail-1", "pending", "pending", "pending"),
+                    ("gmap-1", "pending", "pending", "pending"),
+                    ("site-1", "pending", "pending", "pending"),
+                ],
+                statuses,
+            )
+
+    def test_requeue_failed_tasks_reopens_failed_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbUsStore(Path(tmpdir) / "store.db")
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            conn.executescript(
+                """
+                INSERT INTO detail_queue (duns, detail_url, company_name, status, retries, updated_at) VALUES
+                    ('detail-1', 'https://example.com/1', 'Acme', 'failed', 3, '2026-03-31 00:00:00');
+                INSERT INTO gmap_queue (duns, company_name, address, region, city, status, retries, updated_at) VALUES
+                    ('gmap-1', 'Acme', '', '', '', 'failed', 3, '2026-03-31 00:00:00');
+                INSERT INTO site_queue (duns, company_name, website, status, retries, updated_at) VALUES
+                    ('site-1', 'Acme', 'https://acme.example', 'failed', 3, '2026-03-31 00:00:00');
+                INSERT INTO companies (
+                    duns, company_name, detail_status, gmap_status, site_status, updated_at
+                ) VALUES
+                    ('detail-1', 'Acme', 'failed', 'pending', 'pending', '2026-03-31 00:00:00'),
+                    ('gmap-1', 'Acme', 'pending', 'failed', 'pending', '2026-03-31 00:00:00'),
+                    ('site-1', 'Acme', 'pending', 'pending', 'failed', '2026-03-31 00:00:00');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            revived = store.requeue_failed_tasks()
+
+            conn = sqlite3.connect(str(Path(tmpdir) / "store.db"))
+            detail = conn.execute("SELECT status, retries FROM detail_queue WHERE duns = 'detail-1'").fetchone()
+            gmap = conn.execute("SELECT status, retries FROM gmap_queue WHERE duns = 'gmap-1'").fetchone()
+            site = conn.execute("SELECT status, retries FROM site_queue WHERE duns = 'site-1'").fetchone()
+            statuses = conn.execute(
+                "SELECT duns, detail_status, gmap_status, site_status FROM companies ORDER BY duns"
+            ).fetchall()
+            conn.close()
+
+            self.assertEqual(3, revived)
+            self.assertEqual(("pending", 0), detail)
+            self.assertEqual(("pending", 0), gmap)
+            self.assertEqual(("pending", 0), site)
+            self.assertEqual(
+                [
+                    ("detail-1", "pending", "pending", "pending"),
+                    ("gmap-1", "pending", "pending", "pending"),
+                    ("site-1", "pending", "pending", "pending"),
+                ],
+                statuses,
+            )
+
     def test_claim_site_task_allows_rep_missing_while_detail_pending(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DnbUsStore(Path(tmpdir) / "store.db")

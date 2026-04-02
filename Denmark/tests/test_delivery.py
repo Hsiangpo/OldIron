@@ -14,7 +14,7 @@ if str(SRC) not in sys.path:
 
 
 class DeliveryTests(unittest.TestCase):
-    def test_day1_creates_three_column_csv(self) -> None:
+    def test_day1_creates_unified_delivery_csv(self) -> None:
         from denmark_crawler.delivery import build_delivery_bundle
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -40,7 +40,10 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(1, summary["day"])
             self.assertTrue(csv_path.exists())
             header = csv_path.read_text(encoding="utf-8-sig").splitlines()[0]
-            self.assertEqual("company_name,representative,email", header)
+            self.assertEqual(
+                "company_name,representative,emails,website,phone,evidence_url",
+                header,
+            )
 
     def test_day2_only_outputs_delta(self) -> None:
         from denmark_crawler.delivery import build_delivery_bundle
@@ -79,7 +82,7 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(1, summary["delta_companies"])
             self.assertEqual(2, summary["total_current_companies"])
             self.assertEqual(2, len(rows))
-            self.assertIn("Beta ApS,John Doe,team@beta.dk", rows[1])
+            self.assertIn("Beta ApS,John Doe,team@beta.dk,,,", rows[1])
 
 
 if __name__ == "__main__":

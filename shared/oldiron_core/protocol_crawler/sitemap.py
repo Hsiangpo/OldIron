@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import gzip
-import io
 import logging
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 from curl_cffi import requests as cffi_requests
@@ -26,6 +25,7 @@ def discover_sitemap_urls(
     *,
     limit: int = 200,
     timeout: float = 20.0,
+    include_subdomains: bool = False,
 ) -> list[str]:
     """从目标站点发现 sitemap 并解析出 URL 列表。
 
@@ -39,12 +39,15 @@ def discover_sitemap_urls(
 
     urls: list[str] = []
     visited: set[str] = set()
+    base_host = (urlparse(base_url).netloc or "").strip().lower()
     for loc in sitemap_locations:
         if len(urls) >= limit:
             break
         _parse_sitemap_recursive(
             session, loc, urls, visited,
             limit=limit, timeout=timeout, depth=0,
+            base_host=base_host,
+            include_subdomains=include_subdomains,
         )
     return urls[:limit]
 
@@ -78,6 +81,8 @@ def _parse_sitemap_recursive(
     limit: int,
     timeout: float,
     depth: int,
+    base_host: str,
+    include_subdomains: bool,
 ) -> None:
     """递归解析 sitemap（含 sitemapindex）。"""
     if depth > 3 or sitemap_url in visited or len(result) >= limit:
@@ -106,15 +111,35 @@ def _parse_sitemap_recursive(
                 _parse_sitemap_recursive(
                     session, child_url, result, visited,
                     limit=limit, timeout=timeout, depth=depth + 1,
+                    base_host=base_host,
+                    include_subdomains=include_subdomains,
                 )
     else:
         for loc in root.findall(".//sm:url/sm:loc", _NS):
             url = (loc.text or "").strip()
-            if url and url not in visited:
+            if (
+                url
+                and url not in visited
+                and _is_allowed_host(base_host, url, include_subdomains=include_subdomains)
+            ):
                 visited.add(url)
                 result.append(url)
                 if len(result) >= limit:
                     return
+
+
+def _is_allowed_host(base_host: str, candidate_url: str, *, include_subdomains: bool) -> bool:
+    link_host = (urlparse(candidate_url).netloc or "").strip().lower()
+    if not base_host or not link_host:
+        return False
+    if base_host == link_host:
+        return True
+    bare = base_host[4:] if base_host.startswith("www.") else base_host
+    if link_host == bare or link_host == f"www.{bare}":
+        return True
+    if include_subdomains and link_host.endswith(f".{bare}"):
+        return True
+    return False
 
 
 def _fetch_sitemap_text(

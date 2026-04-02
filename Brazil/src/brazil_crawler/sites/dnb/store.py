@@ -334,6 +334,8 @@ class DnbBrStore:
                     conn.commit()
                     return result
                 except sqlite3.OperationalError as exc:
+                    conn = self._conn()
+                    conn.rollback()
                     if "database is locked" not in str(exc).lower():
                         raise
                     if attempt == self._MAX_WRITE_RETRIES - 1:
@@ -496,6 +498,34 @@ class DnbBrStore:
                     (_now_text(), cutoff),
                 )
                 recovered += conn.total_changes - before
+            return recovered
+
+        return int(self._run_write(_action) or 0)
+
+    def requeue_failed_tasks(self) -> int:
+        now = _now_text()
+
+        def _action(conn: sqlite3.Connection) -> int:
+            recovered = 0
+            for table in ("detail_queue", "gmap_queue", "site_queue"):
+                before = conn.total_changes
+                conn.execute(
+                    f"""
+                    UPDATE {table}
+                    SET status = 'pending', retries = 0, updated_at = ?
+                    WHERE status = 'failed'
+                    """,
+                    (now,),
+                )
+                recovered += conn.total_changes - before
+            conn.execute(
+                """
+                UPDATE companies
+                SET detail_status = 'pending', gmap_status = 'pending', site_status = 'pending', updated_at = ?
+                WHERE detail_status = 'failed' OR gmap_status = 'failed' OR site_status = 'failed'
+                """,
+                (now,),
+            )
             return recovered
 
         return int(self._run_write(_action) or 0)

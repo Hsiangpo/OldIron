@@ -26,6 +26,7 @@ def extract_same_site_links(
     page_url: str,
     *,
     limit: int = 200,
+    include_subdomains: bool = False,
 ) -> list[str]:
     """从 HTML 中提取同站链接，去重和归一化。
 
@@ -55,7 +56,7 @@ def extract_same_site_links(
 
         # 只保留同站链接
         link_host = parsed.netloc.lower()
-        if not _is_same_site(base_host, link_host):
+        if not _is_same_site(base_host, link_host, include_subdomains=include_subdomains):
             continue
 
         # 跳过静态资源
@@ -77,8 +78,8 @@ def extract_same_site_links(
     return result
 
 
-def _is_same_site(base_host: str, link_host: str) -> bool:
-    """判断两个 host 是否属于同一站点（含子域名）。"""
+def _is_same_site(base_host: str, link_host: str, *, include_subdomains: bool) -> bool:
+    """判断两个 host 是否属于同一站点。"""
     if not link_host:
         return False
     if base_host == link_host:
@@ -90,6 +91,6 @@ def _is_same_site(base_host: str, link_host: str) -> bool:
         bare = base_host
     if link_host == bare or link_host == f"www.{bare}":
         return True
-    if link_host.endswith(f".{bare}"):
+    if include_subdomains and link_host.endswith(f".{bare}"):
         return True
     return False
