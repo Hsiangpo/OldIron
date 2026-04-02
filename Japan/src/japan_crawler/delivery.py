@@ -19,14 +19,34 @@ from oldiron_core.delivery.engine import validate_day_sequence
 
 
 PERSONAL_EMAIL_DOMAINS = {
-    "gmail.com", "yahoo.com", "yahoo.co.jp", "hotmail.com",
-    "outlook.com", "outlook.jp", "icloud.com", "live.com",
-    "live.jp", "msn.com", "me.com", "aol.com",
-    "docomo.ne.jp", "softbank.ne.jp", "ezweb.ne.jp",
-    "au.com", "i.softbank.jp", "ymobile.ne.jp",
-    "nifty.com", "ocn.ne.jp", "plala.or.jp", "biglobe.ne.jp",
-    "so-net.ne.jp", "dion.ne.jp", "infoweb.ne.jp",
-    "gol.com", "jcom.home.ne.jp", "ybb.ne.jp",
+    "gmail.com",
+    "yahoo.com",
+    "yahoo.co.jp",
+    "hotmail.com",
+    "outlook.com",
+    "outlook.jp",
+    "icloud.com",
+    "live.com",
+    "live.jp",
+    "msn.com",
+    "me.com",
+    "aol.com",
+    "docomo.ne.jp",
+    "softbank.ne.jp",
+    "ezweb.ne.jp",
+    "au.com",
+    "i.softbank.jp",
+    "ymobile.ne.jp",
+    "nifty.com",
+    "ocn.ne.jp",
+    "plala.or.jp",
+    "biglobe.ne.jp",
+    "so-net.ne.jp",
+    "dion.ne.jp",
+    "infoweb.ne.jp",
+    "gol.com",
+    "jcom.home.ne.jp",
+    "ybb.ne.jp",
 }
 
 
@@ -53,11 +73,14 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
             if not records:
                 continue
             raw_count = len(records)
+
             for record in records:
                 if "emails" in record:
                     record["emails"] = _filter_emails(record["emails"])
+
             qualified = [
-                record for record in records
+                record
+                for record in records
                 if record.get("company_name", "").strip()
                 and record.get("representative", "").strip()
                 and record.get("representative", "").strip() != "-"
@@ -73,8 +96,10 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
 
             csv_path = delivery_dir / f"{site_name}.csv"
             _write_site_csv(csv_path, delta_records)
-            (delivery_dir / f"{site_name}.keys.txt").write_text("\n".join(current_keys), encoding="utf-8")
-
+            (delivery_dir / f"{site_name}.keys.txt").write_text(
+                "\n".join(current_keys),
+                encoding="utf-8",
+            )
             site_stats[site_name] = {
                 "qualified_current": len(qualified),
                 "delta": len(delta_records),
@@ -127,15 +152,17 @@ def _load_xlsximport_data(site_dir: Path) -> list[dict[str, str]]:
     ).fetchall()
     conn.close()
 
-    return [
-        {
-            "company_name": str(row["company_name"] or "").strip(),
-            "representative": str(row["representative"] or "").strip(),
-            "website": str(row["website"] or "").strip(),
-            "emails": str(row["email"] or "").strip(),
-        }
-        for row in rows
-    ]
+    records: list[dict[str, str]] = []
+    for row in rows:
+        records.append(
+            {
+                "company_name": str(row["company_name"] or "").strip(),
+                "representative": str(row["representative"] or "").strip(),
+                "website": str(row["website"] or "").strip(),
+                "emails": str(row["email"] or "").strip(),
+            }
+        )
+    return records
 
 
 def _load_hellowork_data(site_dir: Path) -> list[dict[str, str]]:
@@ -184,10 +211,10 @@ def _load_bizmaps_data(site_dir: Path) -> list[dict[str, str]]:
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     col_info = conn.execute("PRAGMA table_info(companies)").fetchall()
-    existing_cols = {col["name"] for col in col_info}
+    existing_cols = {column["name"] for column in col_info}
     base_cols = ["company_name", "representative", "website", "address", "industry", "detail_url"]
     optional_cols = ["phone", "founded_year", "capital", "emails"]
-    select_cols = base_cols + [col for col in optional_cols if col in existing_cols]
+    select_cols = base_cols + [column for column in optional_cols if column in existing_cols]
     rows = conn.execute(
         f"SELECT {', '.join(select_cols)} FROM companies WHERE company_name != '' ORDER BY id"
     ).fetchall()
@@ -240,7 +267,6 @@ def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_da
     if baseline_day <= 0:
         return set()
     baseline_dir = delivery_root / f"Japan_day{baseline_day:03d}"
-
     key_path = baseline_dir / f"{site_name}.keys.txt"
     if key_path.exists():
         return {
@@ -248,7 +274,6 @@ def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_da
             for line in key_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         }
-
     csv_path = baseline_dir / f"{site_name}.csv"
     if csv_path.exists():
         with csv_path.open(encoding="utf-8-sig", newline="") as fp:
@@ -257,7 +282,6 @@ def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_da
                 for row in csv.DictReader(fp)
                 if row.get("company_name", "").strip()
             }
-
     legacy_country_keys = baseline_dir / "keys.txt"
     if legacy_country_keys.exists():
         return {
@@ -265,7 +289,6 @@ def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_da
             for line in legacy_country_keys.read_text(encoding="utf-8").splitlines()
             if line.strip()
         }
-
     legacy_country_csv = baseline_dir / "companies.csv"
     if not legacy_country_csv.exists():
         return set()
@@ -279,8 +302,16 @@ def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_da
 
 def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
     fieldnames = [
-        "company_name", "representative", "website", "emails",
-        "phone", "address", "industry", "founded_year", "capital", "detail_url",
+        "company_name",
+        "representative",
+        "website",
+        "emails",
+        "phone",
+        "address",
+        "industry",
+        "founded_year",
+        "capital",
+        "detail_url",
     ]
     with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")

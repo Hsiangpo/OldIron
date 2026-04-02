@@ -57,8 +57,9 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
 
             csv_path = delivery_dir / f"{site_name}.csv"
             _write_site_csv(csv_path, delta_records)
-            (delivery_dir / f"{site_name}.keys.txt").write_text("\n".join(current_keys), encoding="utf-8")
-
+            (delivery_dir / f"{site_name}.keys.txt").write_text(
+                "\n".join(current_keys), encoding="utf-8"
+            )
             site_stats[site_name] = {
                 "qualified_current": len(qualified),
                 "delta": len(delta_records),
@@ -78,8 +79,7 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
         "sites": site_stats,
     }
     (delivery_dir / "summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return summary
 
@@ -94,7 +94,6 @@ def _load_dnb_data(site_dir: Path) -> list[dict[str, str]]:
     db_path = site_dir / "dnb_store.db"
     if not db_path.exists():
         return []
-
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
