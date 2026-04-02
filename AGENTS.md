@@ -29,12 +29,13 @@
 - Do not commit `.env`, cookies, API keys, or anything under `output/`.
 - Cross-machine sync rule:
   - Code, docs, tests, and normal source changes must be synced by Git only.
-  - `.env` files and SQLite databases may be synced by SSH/scp because they are untracked, large, or sensitive.
+  - `.env` files, SQLite databases, checkpoint/state files, and delivery outputs may be synced by SSH/scp because they are untracked, large, sensitive, or are core runtime/delivery assets.
   - Do not use SSH/scp to sync normal code files, test files, docs, `tmp/`, cache directories, smoke-test artifacts, one-off debug scripts, or ad hoc full-sync packages as the default workflow.
-  - Do not wholesale sync `output/` to another machine. If cross-machine runtime state transfer is required, transfer only the explicitly needed database/checkpoint files, not the whole output tree.
+  - Do not blindly wholesale sync `output/` to another machine. Sync the explicitly needed runtime databases, checkpoint/state files, and delivery outputs; do not treat the whole output tree as disposable.
   - `output/` is not a one-rule directory:
     - resumable runtime databases may be synced when needed
-    - delivery outputs, caches, and debug artifacts must not be blindly synced or overwritten
+    - delivery outputs are core assets and should be synced when cross-machine continuity or archive completeness requires them
+    - caches and debug artifacts must not be blindly synced or overwritten
 
 ## Runtime Model
 
@@ -193,6 +194,7 @@ There is no single root build step. Work inside the target country directory for
 - Only the following untracked or special data may be synced by SSH/scp when needed:
   - `.env`
   - SQLite databases / checkpoint databases
+  - delivery outputs under `output/delivery/`
   - other explicitly approved large or sensitive runtime state files
 - Never use SSH/scp full-project overwrite as the routine sync mechanism.
 - Never sync temporary files, cache files, smoke-test artifacts, or debug helper scripts to another machine as part of code deployment.
