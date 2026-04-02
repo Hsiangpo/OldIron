@@ -6,6 +6,8 @@
 - Give the conclusion, the action taken, and the result directly.
 - Explain things in plain language because the user is not highly technical. When technical terms are necessary, add a short plain explanation.
 - Before doing substantial implementation, align on the desired effect when the requirement is ambiguous enough to cause rework.
+- Do not assume one country's delivery policy, email policy, or data-quality policy applies to another country.
+- For any new country, or any country whose strategy is not already explicitly written in `AGENTS.md`, confirm the country-specific strategy with the user before implementation.
 
 ## Code Limits & CI Gates (protocol-crawler 门禁)
 
@@ -49,9 +51,18 @@
 
 - Daily delivery files use a unified entry at the project root. Do not use `<Country>/product.py` directly for execution.
 - Run command example: `python product.py England dayN` (root script delegates to the respective country module).
-- 核心交付规范：单个国家，所有站点，通过 `product.py` 打包落盘的时候，**必须**将所有站点的输出数据进行归并，按公司名严格**去重后才落盘生成最终交付文档**。
+- 默认交付规范：单个国家，所有站点，通过 `product.py` 打包落盘的时候，**默认**将所有站点的输出数据进行归并，按公司名严格**去重后才落盘生成最终交付文档**。
 - 文件存放规范：生成的最终交付文档必须放在各个国家内部的 `output/delivery/<国家英文名>_dayN(从001开始)` 文件夹下。例如：`SouthKorea/output/delivery/SouthKorea_day001/`。
-- Never package delivery site by site when multiple sites belong to the same country.
+- Country-specific overrides always win over the default delivery rule.
+- Do not extrapolate these overrides to future countries by yourself.
+- For future countries, if delivery mode or email policy is not explicitly recorded here, ask the user first and write the confirmed strategy into `AGENTS.md` before implementing.
+- Country-specific delivery overrides:
+  - `Japan`: per-site day delivery. Write one CSV + one keys file per site under `Japan/output/delivery/Japan_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+  - `Brazil`: per-site day delivery. Write one CSV + one keys file per site under `Brazil/output/delivery/Brazil_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+  - `UnitedStates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedStates/output/delivery/UnitedStates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+- Country-specific email delivery overrides:
+  - `Japan`: delivery-time email policy is personal-email-only. Filter out enterprise/company-domain emails and keep only personal mailbox domains.
+- Never package delivery site by site when multiple sites belong to the same country, unless that country is explicitly listed in the country-specific overrides above.
 - If the same country is being run on multiple machines, the split must be by site or by whole pipeline, not by shard.
 
 ### England DayN Flow

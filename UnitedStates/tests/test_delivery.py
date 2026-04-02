@@ -49,8 +49,8 @@ class DeliveryTests(unittest.TestCase):
 
             summary = build_delivery_bundle(root / "output", root / "delivery", "day1")
             self.assertEqual(1, summary["delta_companies"])
-            self.assertTrue((root / "delivery" / "UnitedStates_day001" / "companies.csv").exists())
-            self.assertTrue((root / "delivery" / "UnitedStates_day001" / "keys.txt").exists())
+            self.assertTrue((root / "delivery" / "UnitedStates_day001" / "dnb.csv").exists())
+            self.assertTrue((root / "delivery" / "UnitedStates_day001" / "dnb.keys.txt").exists())
 
     def test_day1_keeps_same_name_with_different_representative_as_two_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -80,7 +80,7 @@ class DeliveryTests(unittest.TestCase):
 
             summary = build_delivery_bundle(root / "output", root / "delivery", "day1")
             self.assertEqual(2, summary["delta_companies"])
-            self.assertFalse((root / "delivery" / "UnitedStates_day001" / "dnb.csv").exists())
+            self.assertTrue((root / "delivery" / "UnitedStates_day001" / "dnb.csv").exists())
 
 
 if __name__ == "__main__":

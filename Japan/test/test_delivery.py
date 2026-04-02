@@ -1,4 +1,4 @@
-"""Japan 国家级交付测试。"""
+"""Japan 交付测试。"""
 
 from __future__ import annotations
 
@@ -25,12 +25,10 @@ from japan_crawler.delivery import build_delivery_bundle
 
 
 class JapanDeliveryTests(unittest.TestCase):
-    def test_day2_outputs_country_delta_and_deduplicates_across_sites(self) -> None:
+    def test_day2_outputs_only_site_delta(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             output_root = root / "output"
-            delivery_root = output_root / "delivery"
-
             bizmaps_dir = output_root / "bizmaps"
             bizmaps_dir.mkdir(parents=True)
             conn = sqlite3.connect(str(bizmaps_dir / "bizmaps_store.db"))
@@ -41,58 +39,41 @@ class JapanDeliveryTests(unittest.TestCase):
                     company_name TEXT,
                     representative TEXT,
                     website TEXT,
+                    address TEXT,
+                    industry TEXT,
+                    phone TEXT,
+                    founded_year TEXT,
+                    capital TEXT,
                     detail_url TEXT,
                     emails TEXT
                 );
-                INSERT INTO companies (company_name, representative, website, detail_url, emails) VALUES
-                    ('Alpha', 'Jane', 'https://alpha.example', 'https://alpha.example/about', 'a@gmail.com');
+                INSERT INTO companies (company_name, representative, website, address, emails) VALUES
+                    ('Alpha', 'Jane', 'https://alpha.example', 'Tokyo', 'a@gmail.com'),
+                    ('Beta', 'John', 'https://beta.example', 'Osaka', 'corp@beta.co.jp');
                 """
             )
             conn.commit()
             conn.close()
 
-            xlsximport_dir = output_root / "xlsximport"
-            xlsximport_dir.mkdir(parents=True)
-            conn = sqlite3.connect(str(xlsximport_dir / "xlsximport_store.db"))
-            conn.executescript(
-                """
-                CREATE TABLE companies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    website TEXT,
-                    email TEXT,
-                    company_name TEXT,
-                    representative TEXT
-                );
-                INSERT INTO companies (website, email, company_name, representative) VALUES
-                    ('https://alpha.example', 'alpha@gmail.com', 'Alpha', 'Jane'),
-                    ('https://beta.example', 'beta@gmail.com', 'Beta', 'John');
-                """
-            )
-            conn.commit()
-            conn.close()
-
+            delivery_root = output_root / "delivery"
             day1 = build_delivery_bundle(output_root, delivery_root, "day1")
-            self.assertEqual(2, day1["total_current_companies"])
-            self.assertEqual(2, day1["delta_companies"])
+            self.assertEqual(1, day1["delta_companies"])
+            self.assertEqual(1, day1["sites"]["bizmaps"]["qualified_current"])
 
             conn = sqlite3.connect(str(bizmaps_dir / "bizmaps_store.db"))
             conn.execute(
-                "INSERT INTO companies (company_name, representative, website, detail_url, emails) VALUES (?, ?, ?, ?, ?)",
-                ("Gamma", "Mary", "https://gamma.example", "https://gamma.example/about", "gamma@gmail.com"),
+                "INSERT INTO companies (company_name, representative, website, address, emails) VALUES (?, ?, ?, ?, ?)",
+                ("Gamma", "Mary", "https://gamma.example", "Nagoya", "g@gmail.com"),
             )
             conn.commit()
             conn.close()
 
             day2 = build_delivery_bundle(output_root, delivery_root, "day2")
-            self.assertEqual(3, day2["total_current_companies"])
             self.assertEqual(1, day2["delta_companies"])
+            self.assertEqual(2, day2["sites"]["bizmaps"]["qualified_current"])
 
-            csv_path = delivery_root / "Japan_day002" / "companies.csv"
+            csv_path = delivery_root / "Japan_day002" / "bizmaps.csv"
             with csv_path.open(encoding="utf-8-sig", newline="") as fp:
                 rows = list(csv.DictReader(fp))
             self.assertEqual(1, len(rows))
             self.assertEqual("Gamma", rows[0]["company_name"])
-
-
-if __name__ == "__main__":
-    unittest.main()

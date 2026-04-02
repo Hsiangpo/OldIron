@@ -1,4 +1,4 @@
-"""Brazil 国家级交付。"""
+"""Brazil 交付包装。"""
 
 from __future__ import annotations
 
@@ -18,61 +18,80 @@ if str(SHARED_ROOT) not in sys.path:
 from oldiron_core.delivery.engine import validate_day_sequence
 
 
-_CSV_FIELDS = [
-    "company_name",
-    "representative",
-    "emails",
-    "website",
-    "phone",
-    "address",
-    "evidence_url",
-]
-
-
 def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) -> dict[str, object]:
-    """构建 Brazil 国家级日交付包。"""
+    """构建 Brazil 日交付包，各站点独立落盘。"""
     day, _latest = validate_day_sequence(Path(delivery_root), "Brazil", day_label)
-    baseline_day = max(day - 1, 0)
     delivery_dir = Path(delivery_root) / f"Brazil_day{day:03d}"
+    baseline_day = max(day - 1, 0)
 
     if delivery_dir.exists():
         shutil.rmtree(delivery_dir)
     delivery_dir.mkdir(parents=True, exist_ok=True)
 
-    current_records = _load_records(Path(data_root))
-    baseline_keys = _load_baseline_keys(Path(delivery_root), baseline_day)
-    delta_records = [record for record in current_records if _record_key(record) not in baseline_keys]
+    total_current_companies = 0
+    total_delta_companies = 0
+    site_stats: dict[str, dict[str, int]] = {}
 
-    csv_path = delivery_dir / "companies.csv"
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=_CSV_FIELDS, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(delta_records)
+    if data_root.exists():
+        for site_dir in sorted(data_root.iterdir()):
+            if not site_dir.is_dir() or site_dir.name == "delivery":
+                continue
+            site_name = site_dir.name
+            records = _load_site_records(site_name, site_dir)
+            if not records:
+                continue
+            raw_count = len(records)
+            qualified = [
+                record for record in records
+                if record.get("company_name", "").strip()
+                and record.get("representative", "").strip()
+                and record.get("emails", "").strip()
+            ]
+            baseline_keys = _load_site_baseline_keys(
+                delivery_root=Path(delivery_root),
+                site_name=site_name,
+                baseline_day=baseline_day,
+            )
+            delta_records = [record for record in qualified if _record_key(record) not in baseline_keys]
+            current_keys = sorted(baseline_keys | {_record_key(record) for record in qualified})
 
-    (delivery_dir / "keys.txt").write_text(
-        "\n".join(_record_key(record) for record in current_records),
-        encoding="utf-8",
-    )
+            csv_path = delivery_dir / f"{site_name}.csv"
+            _write_site_csv(csv_path, delta_records)
+            (delivery_dir / f"{site_name}.keys.txt").write_text("\n".join(current_keys), encoding="utf-8")
+
+            site_stats[site_name] = {
+                "qualified_current": len(qualified),
+                "delta": len(delta_records),
+            }
+            total_current_companies += len(qualified)
+            total_delta_companies += len(delta_records)
+            print(
+                f"  {site_name}: DB 总计 {raw_count} → 当前合格 {len(qualified)} 家公司 → 当日新增 {len(delta_records)} 家公司"
+            )
 
     summary = {
         "country": "Brazil",
         "day": day,
         "baseline_day": baseline_day,
-        "delta_companies": len(delta_records),
-        "total_current_companies": len(current_records),
+        "delta_companies": total_delta_companies,
+        "total_current_companies": total_current_companies,
+        "sites": site_stats,
     }
     (delivery_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    print(
-        f"  dnb: DB 总计 {len(current_records)} → 当前合格 {len(current_records)} 家公司 → 当日新增 {len(delta_records)} 家公司"
-    )
     return summary
 
 
-def _load_records(data_root: Path) -> list[dict[str, str]]:
-    db_path = Path(data_root) / "dnb" / "dnb_store.db"
+def _load_site_records(site_name: str, site_dir: Path) -> list[dict[str, str]]:
+    if site_name == "dnb":
+        return _load_dnb_data(site_dir)
+    return []
+
+
+def _load_dnb_data(site_dir: Path) -> list[dict[str, str]]:
+    db_path = site_dir / "dnb_store.db"
     if not db_path.exists():
         return []
 
@@ -105,12 +124,6 @@ def _load_records(data_root: Path) -> list[dict[str, str]]:
         group.sort(key=_row_score, reverse=True)
         best = group[0]
         emails = _merge_group_emails(group)
-        if not (
-            str(best["company_name"] or "").strip()
-            and str(best["representative"] or "").strip()
-            and emails
-        ):
-            continue
         records.append(
             {
                 "company_name": str(best["company_name"] or "").strip(),
@@ -155,42 +168,23 @@ def _record_key(record: dict[str, str]) -> str:
     return " | ".join(parts)
 
 
-def _load_baseline_keys(delivery_root: Path, baseline_day: int) -> set[str]:
+def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_day: int) -> set[str]:
     if baseline_day <= 0:
         return set()
-    baseline_dir = Path(delivery_root) / f"Brazil_day{baseline_day:03d}"
-
-    keys_path = baseline_dir / "keys.txt"
-    if keys_path.exists():
+    baseline_dir = delivery_root / f"Brazil_day{baseline_day:03d}"
+    key_path = baseline_dir / f"{site_name}.keys.txt"
+    if key_path.exists():
         return {
             line.strip()
-            for line in keys_path.read_text(encoding="utf-8").splitlines()
+            for line in key_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         }
+    return set()
 
-    legacy_keys_path = baseline_dir / "dnb.keys.txt"
-    if legacy_keys_path.exists():
-        return {
-            line.strip()
-            for line in legacy_keys_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        }
 
-    csv_path = baseline_dir / "companies.csv"
-    if csv_path.exists():
-        with csv_path.open(encoding="utf-8-sig", newline="") as fp:
-            return {
-                _record_key(row)
-                for row in csv.DictReader(fp)
-                if str(row.get("company_name", "")).strip()
-            }
-
-    legacy_csv = baseline_dir / "dnb.csv"
-    if not legacy_csv.exists():
-        return set()
-    with legacy_csv.open(encoding="utf-8-sig", newline="") as fp:
-        return {
-            _record_key(row)
-            for row in csv.DictReader(fp)
-            if str(row.get("company_name", "")).strip()
-        }
+def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
+    fieldnames = ["company_name", "representative", "emails", "website", "phone", "address", "evidence_url"]
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(records)

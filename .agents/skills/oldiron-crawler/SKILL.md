@@ -33,7 +33,12 @@ When this skill is activated, state clearly:
 
 ## 2. Before implementation: required alignment questions
 
+Before writing delivery code, do not assume another country's strategy applies here.
+If the current country's delivery mode or email policy is not already explicitly recorded in `AGENTS.md` or the user message, you must ask the user first before implementation.
+
 Before writing delivery code, ask the user these two questions if the answers are not already explicit:
+
+Before applying any generic delivery/email rule, check `AGENTS.md` for country-specific overrides. Country-specific overrides always beat the generic default.
 
 1. **Delivery mode**
    - Merge mode: all site outputs merge into one deduplicated `companies.csv` + `keys.txt`
@@ -47,6 +52,12 @@ Before writing delivery code, ask the user these two questions if the answers ar
 Also confirm where the code should run:
 - local machine
 - or the other machine registered in `AGENTS.md`
+
+Current country overrides already fixed by repository rule:
+- `Japan`: per-site delivery + personal-email-only delivery policy
+- `Brazil`: per-site delivery
+- `UnitedStates`: per-site delivery
+- For future countries, never infer strategy from Japan/Brazil/UnitedStates/Denmark/England/Finland. Ask first, then record the confirmed override in `AGENTS.md`.
 
 ## 3. Environment self-check
 
@@ -155,14 +166,15 @@ company_name, representative, emails, website, phone, evidence_url
 Rules:
 - `emails` should use semicolon separation when multiple values exist
 - do not add extra columns to delivery CSV
-- deduplicate by normalized company name at delivery time
+- default delivery mode deduplicates by normalized company name at delivery time
 - daily delivery output must stay under `output/delivery/<Country>_dayNNN/`
 - use root `product.py` for delivery entry, not a country-local replacement flow
+- if `AGENTS.md` declares a country-specific per-site delivery override, follow that override instead of the default merge+dedup rule
 
 ## 8. Email handling rules
 
 - During crawling/storage: save all discovered emails to SQLite
-- During delivery: apply the user-selected filter policy
+- During delivery: apply the user-selected filter policy or the country-specific override from `AGENTS.md`
 - Never silently hardcode a new email filtering rule
 
 ## 9. HTML -> Markdown -> LLM flow
