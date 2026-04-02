@@ -725,10 +725,12 @@ class DnbBrStore:
             ).fetchone()
             if rows is None:
                 return None
-            conn.execute(
-                "UPDATE detail_queue SET status = 'running', updated_at = ? WHERE duns = ?",
+            updated = conn.execute(
+                "UPDATE detail_queue SET status = 'running', updated_at = ? WHERE duns = ? AND status = 'pending'",
                 (now_text, rows["duns"]),
-            )
+            ).rowcount
+            if updated != 1:
+                return None
             return DnbDetailTask(**dict(rows))
 
         return self._run_write(_action)
@@ -812,10 +814,12 @@ class DnbBrStore:
                 ),
             )
             row = ranked[0]
-            conn.execute(
-                "UPDATE gmap_queue SET status = 'running', updated_at = ? WHERE duns = ?",
+            updated = conn.execute(
+                "UPDATE gmap_queue SET status = 'running', updated_at = ? WHERE duns = ? AND status = 'pending'",
                 (now_text, row["duns"]),
-            )
+            ).rowcount
+            if updated != 1:
+                return None
             payload = dict(row)
             payload.pop("rep_priority", None)
             return DnbGMapTask(**payload)
@@ -873,7 +877,12 @@ class DnbBrStore:
             ).fetchone()
             if row is None:
                 return None
-            conn.execute("UPDATE site_queue SET status = 'running', updated_at = ? WHERE duns = ?", (now_text, row["duns"]))
+            updated = conn.execute(
+                "UPDATE site_queue SET status = 'running', updated_at = ? WHERE duns = ? AND status = 'pending'",
+                (now_text, row["duns"]),
+            ).rowcount
+            if updated != 1:
+                return None
             return DnbSiteTask(**dict(row))
 
         return self._run_write(_action)

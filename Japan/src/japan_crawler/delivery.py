@@ -19,15 +19,6 @@ from oldiron_core.delivery.engine import validate_day_sequence
 from oldiron_core.delivery.sanitize import sanitize_record
 
 
-ALLOWED_EMAIL_DOMAINS = {
-    "gmail.com",
-    "icloud.com",
-    "outlook.com",
-    "hotmail.com",
-    "live.com",
-    "msn.com",
-}
-
 _CSV_FIELDS = [
     "company_name",
     "representative",
@@ -242,13 +233,7 @@ def _split_emails(emails_str: str) -> list[str]:
 def _filter_emails(emails_str: str) -> str:
     if not emails_str:
         return ""
-    filtered: list[str] = []
-    for email in _split_emails(emails_str):
-        if "@" not in email:
-            continue
-        if email.split("@", 1)[1] in ALLOWED_EMAIL_DOMAINS:
-            filtered.append(email)
-    return "; ".join(filtered)
+    return "; ".join(_split_emails(emails_str))
 
 
 def _record_key(record: dict[str, str]) -> str:
@@ -267,11 +252,34 @@ def _load_baseline_keys(delivery_root: Path, baseline_day: int) -> set[str]:
             if line.strip()
         }
     csv_path = day_dir / "companies.csv"
-    if not csv_path.exists():
-        return set()
-    with csv_path.open(encoding="utf-8-sig", newline="") as fp:
-        return {
-            _record_key(row)
-            for row in csv.DictReader(fp)
-            if str(row.get("company_name", "")).strip()
-        }
+    if csv_path.exists():
+        with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+            return {
+                _record_key(row)
+                for row in csv.DictReader(fp)
+                if str(row.get("company_name", "")).strip()
+            }
+
+    legacy_keys: set[str] = set()
+    for legacy_csv in sorted(day_dir.glob("*.csv")):
+        if legacy_csv.name == "companies.csv":
+            continue
+        with legacy_csv.open(encoding="utf-8-sig", newline="") as fp:
+            for row in csv.DictReader(fp):
+                company_name = str(row.get("company_name", "")).strip()
+                if company_name:
+                    legacy_keys.add(company_name.lower())
+    if legacy_keys:
+        return legacy_keys
+
+    for legacy_key_file in sorted(day_dir.glob("*.keys.txt")):
+        if legacy_key_file.name == "keys.txt":
+            continue
+        for raw in legacy_key_file.read_text(encoding="utf-8").splitlines():
+            line = str(raw or "").strip()
+            if not line:
+                continue
+            company_name = line.split(" | ", 1)[0].strip() if " | " in line else line
+            if company_name:
+                legacy_keys.add(company_name.lower())
+    return legacy_keys
