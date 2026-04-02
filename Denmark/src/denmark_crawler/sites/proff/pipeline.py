@@ -8,13 +8,13 @@ import threading
 import time
 from pathlib import Path
 
-from denmark_crawler.fc_email.client import FirecrawlError
-from denmark_crawler.fc_email.domain_cache import FirecrawlDomainCache
-from denmark_crawler.fc_email.email_service import FirecrawlEmailService
-from denmark_crawler.fc_email.email_service import FirecrawlEmailSettings
-from denmark_crawler.google_maps import GoogleMapsClient
-from denmark_crawler.google_maps import GoogleMapsConfig
-from denmark_crawler.google_maps import GoogleMapsPlaceResult
+from oldiron_core.fc_email.client import FirecrawlError
+from oldiron_core.fc_email.domain_cache import FirecrawlDomainCache
+from oldiron_core.fc_email.email_service import FirecrawlEmailService
+from oldiron_core.fc_email.email_service import FirecrawlEmailSettings
+from oldiron_core.google_maps import GoogleMapsClient
+from oldiron_core.google_maps import GoogleMapsConfig
+from oldiron_core.google_maps import GoogleMapsPlaceResult
 from denmark_crawler.sites.proff.backend_clients import GoFirecrawlService
 from denmark_crawler.sites.proff.backend_clients import GoGMapClient
 from denmark_crawler.sites.proff.client import ProffClient

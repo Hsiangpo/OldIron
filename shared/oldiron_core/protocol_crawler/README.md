@@ -64,7 +64,7 @@ protocol_crawler/
 
 ```bash
 cd /path/to/OldIron
-PYTHONPATH=shared:$PYTHONPATH python -m unittest shared.oldiron_core.protocol_crawler.tests.test_client -v
+PYTHONPATH=shared:$PYTHONPATH python -m unittest oldiron_core.protocol_crawler.tests.test_client -v
 ```
 
 ## 在 Denmark 管线中使用

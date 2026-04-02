@@ -27,6 +27,14 @@
 
 - For non-China outbound access, use proxy port `7897` by default. If that port is unavailable, probe the actual working outbound proxy port first.
 - Do not commit `.env`, cookies, API keys, or anything under `output/`.
+- Cross-machine sync rule:
+  - Code, docs, tests, and normal source changes must be synced by Git only.
+  - `.env` files and SQLite databases may be synced by SSH/scp because they are untracked, large, or sensitive.
+  - Do not use SSH/scp to sync normal code files, test files, docs, `tmp/`, cache directories, smoke-test artifacts, one-off debug scripts, or ad hoc full-sync packages as the default workflow.
+  - Do not wholesale sync `output/` to another machine. If cross-machine runtime state transfer is required, transfer only the explicitly needed database/checkpoint files, not the whole output tree.
+  - `output/` is not a one-rule directory:
+    - resumable runtime databases may be synced when needed
+    - delivery outputs, caches, and debug artifacts must not be blindly synced or overwritten
 
 ## Runtime Model
 
@@ -74,6 +82,7 @@
 - **注意文件规范，绝不能随意堆放文件**。产生的任何调试请求响应、DevTools 截图、冒烟测试结果只能专门放在各目录的 `tmp/` 下，绝不允许散落在项目根目录。
 - 必须做到**主动清理**：冒烟测试（Smoke-test）、一次性单元测试结束后，必须主动删除 `tmp_*`, `*_smoke*` 或其他生成的调试缓存物。
 - Never delete active run directories, live checkpoint databases, or logs still needed for resume. (处于续跑状态的状态库、运行日志禁止删除)。
+- Temporary artifacts are local-only by default. Do not distribute `tmp/`, cache directories, transient archives, or one-off debug files to other machines as part of normal sync.
 
 ## Project Structure And Module Organization
 
@@ -141,6 +150,12 @@ There is no single root build step. Work inside the target country directory for
   - If a module is shared only by multiple sites inside the same country, it must live under `<Country>/shared/`.
   - Never place reusable modules inside one country's site tree and then import/symlink/copy them into other countries.
   - Never create ad hoc cross-country imports or cross-site imports from one site's source tree into another site's source tree.
+  - Never use symlinks as a shortcut for cross-country or cross-site sharing in active code.
+  - If a shared-module cleanup claims to have removed cross-country/cross-site reuse, do not trust the first pass. Run independent audit passes first:
+    - scan formal imports
+    - scan `sys.path` injection and packaging entrypoints
+    - scan symlinks and wrapper modules for reverse dependency
+  - Only after those audit passes are clean may the cleanup be considered complete.
 - `shared/oldiron_core/protocol_crawler/` is the shared protocol crawler module (curl_cffi-based site link discovery + HTML scraping). It replaces Firecrawl when `CRAWL_BACKEND=protocol` is set in a country's `.env`.
 - New active work for rewritten countries/sites must target the new framework only. Do not extend archived code under `bak/`.
 
@@ -171,11 +186,36 @@ There is no single root build step. Work inside the target country directory for
 
 - Every code change must be committed and pushed to GitHub immediately after verification.
 - Every time code changes are deployed or verified against a running site process, stop the old process first, then restart it on the new code. Never leave an old process running on stale code after a code change.
+- Normal machine-to-machine code sync must use Git:
+  - Mac pushes verified code to GitHub.
+  - Other machines receive code changes via `git pull`.
+  - Do not use SSH/scp to push normal code files, test files, temp scripts, or cache files to another machine as the default workflow.
+- Only the following untracked or special data may be synced by SSH/scp when needed:
+  - `.env`
+  - SQLite databases / checkpoint databases
+  - other explicitly approved large or sensitive runtime state files
+- Never use SSH/scp full-project overwrite as the routine sync mechanism.
+- Never sync temporary files, cache files, smoke-test artifacts, or debug helper scripts to another machine as part of code deployment.
+- When syncing non-git runtime files to another machine:
+  1. stop the affected process first
+  2. sync only the required files
+  3. verify file size / timestamp / openability on the target machine
+  4. restart on the target machine only after verification
+- England exception rule:
+  - if Windows is the active England runtime machine, do not overwrite the Windows England database or England output tree from another machine unless the task explicitly says to do so
 - After pushing, **all machines** must be updated to the latest code before restarting any process.
   - Machine 2 (Mac): `git pull`
   - Machine 1 (Windows): `git pull` on the E: drive project.
 - Never run a process on stale code. If in doubt, `git pull` first.
 - The `.env` files are not tracked by git. When `.env` changes, manually sync to all machines.
+
+### Import Path Rule
+
+- `run.py` and tests may adjust `sys.path` locally so Python can import `src/` and `shared/`.
+- This is a local runtime/import rule only.
+- It does not change the sync rule:
+  - code distribution still uses Git
+  - `.env` and resume databases still use SSH/scp when manual sync is required
 
 ## Machines
 

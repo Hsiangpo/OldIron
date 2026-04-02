@@ -8,14 +8,17 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+SHARED_DIR = ROOT.parent / "shared"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
 
 
-from denmark_crawler.fc_email.client import HtmlPageResult  # noqa: E402
-from denmark_crawler.fc_email.email_service import FirecrawlEmailService  # noqa: E402
-from denmark_crawler.fc_email.email_service import FirecrawlEmailSettings  # noqa: E402
-from denmark_crawler.fc_email.llm_client import EmailUrlLlmClient  # noqa: E402
+from oldiron_core.fc_email.client import HtmlPageResult  # noqa: E402
+from oldiron_core.fc_email.email_service import FirecrawlEmailService  # noqa: E402
+from oldiron_core.fc_email.email_service import FirecrawlEmailSettings  # noqa: E402
+from oldiron_core.fc_email.llm_client import EmailUrlLlmClient  # noqa: E402
 
 
 class _FakeCrawler:
@@ -82,7 +85,7 @@ class _SuccessLlm:
         return [kwargs["candidate_urls"][0]]
 
     def extract_contacts_from_html(self, **kwargs):
-        from denmark_crawler.fc_email.llm_client import HtmlContactExtraction
+        from oldiron_core.fc_email.llm_client import HtmlContactExtraction
 
         return HtmlContactExtraction(
             company_name="Example Co",
@@ -101,7 +104,7 @@ class _RepresentativeOnlyLlm:
         return [kwargs["candidate_urls"][0]]
 
     def extract_contacts_from_html(self, **kwargs):
-        from denmark_crawler.fc_email.llm_client import HtmlContactExtraction
+        from oldiron_core.fc_email.llm_client import HtmlContactExtraction
 
         self.last_need_emails = kwargs.get("need_emails")
         return HtmlContactExtraction(
@@ -121,7 +124,7 @@ class _EmailFallbackLlm:
         return [kwargs["candidate_urls"][0]]
 
     def extract_contacts_from_html(self, **kwargs):
-        from denmark_crawler.fc_email.llm_client import HtmlContactExtraction
+        from oldiron_core.fc_email.llm_client import HtmlContactExtraction
 
         self.last_need_emails = kwargs.get("need_emails")
         return HtmlContactExtraction(

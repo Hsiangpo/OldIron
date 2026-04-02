@@ -8,12 +8,12 @@ import threading
 import time
 from pathlib import Path
 
-from denmark_crawler.fc_email.domain_cache import FirecrawlDomainCache
-from denmark_crawler.fc_email.email_service import (
+from oldiron_core.fc_email.domain_cache import FirecrawlDomainCache
+from oldiron_core.fc_email.email_service import (
     FirecrawlEmailService, FirecrawlEmailSettings, EmailDiscoveryResult,
 )
-from denmark_crawler.fc_email.client import FirecrawlError
-from denmark_crawler.google_maps import GoogleMapsClient, GoogleMapsConfig, GoogleMapsPlaceResult
+from oldiron_core.fc_email.client import FirecrawlError
+from oldiron_core.google_maps import GoogleMapsClient, GoogleMapsConfig, GoogleMapsPlaceResult
 from denmark_crawler.sites.virk.client import VirkClient
 from denmark_crawler.sites.virk.config import VirkConfig
 from denmark_crawler.sites.virk.store import (
@@ -22,7 +22,7 @@ from denmark_crawler.sites.virk.store import (
 
 # 协议爬虫（protocol_crawler）——可选依赖
 try:
-    from shared.oldiron_core.protocol_crawler.client import SiteCrawlClient, SiteCrawlConfig
+    from oldiron_core.protocol_crawler.client import SiteCrawlClient, SiteCrawlConfig
 except ImportError:
     SiteCrawlClient = None  # type: ignore[assignment,misc]
     SiteCrawlConfig = None  # type: ignore[assignment,misc]

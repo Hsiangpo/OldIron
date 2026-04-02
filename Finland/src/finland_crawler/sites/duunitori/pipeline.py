@@ -8,12 +8,12 @@ import threading
 import time
 from pathlib import Path
 
-from finland_crawler.fc_email.domain_cache import FirecrawlDomainCache
-from finland_crawler.fc_email.email_service import (
+from oldiron_core.fc_email.domain_cache import FirecrawlDomainCache
+from oldiron_core.fc_email.email_service import (
     FirecrawlEmailService, FirecrawlEmailSettings, EmailDiscoveryResult,
 )
-from finland_crawler.fc_email.client import FirecrawlError
-from finland_crawler.google_maps import GoogleMapsClient, GoogleMapsConfig, GoogleMapsPlaceResult
+from oldiron_core.fc_email.client import FirecrawlError
+from oldiron_core.google_maps import GoogleMapsClient, GoogleMapsConfig, GoogleMapsPlaceResult
 from finland_crawler.sites.duunitori.client import DuunitoriClient
 from finland_crawler.sites.duunitori.config import DuunitoriConfig
 from finland_crawler.sites.duunitori.store import (
@@ -21,7 +21,7 @@ from finland_crawler.sites.duunitori.store import (
 )
 
 try:
-    from shared.oldiron_core.protocol_crawler.client import SiteCrawlClient, SiteCrawlConfig
+    from oldiron_core.protocol_crawler.client import SiteCrawlClient, SiteCrawlConfig
 except ImportError:
     SiteCrawlClient = None  # type: ignore[assignment,misc]
     SiteCrawlConfig = None  # type: ignore[assignment,misc]

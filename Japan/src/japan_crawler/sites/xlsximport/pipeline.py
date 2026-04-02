@@ -97,14 +97,14 @@ def _run_extraction(
 ) -> dict[str, int]:
     """并发运行 Protocol+LLM 提取。"""
     # 初始化协议爬虫客户端
-    from shared.oldiron_core.protocol_crawler import SiteCrawlClient, SiteCrawlConfig
+    from oldiron_core.protocol_crawler import SiteCrawlClient, SiteCrawlConfig
     crawler = SiteCrawlClient(SiteCrawlConfig(
         proxy_url=os.getenv("HTTP_PROXY", "http://127.0.0.1:7897"),
         timeout_seconds=20.0,
     ))
 
     # 初始化 LLM 服务（复用 bizmaps 的 fc_email 模块做 LLM 调用）
-    from japan_crawler.fc_email.email_service import (
+    from oldiron_core.fc_email.email_service import (
         FirecrawlEmailService,
         FirecrawlEmailSettings,
     )

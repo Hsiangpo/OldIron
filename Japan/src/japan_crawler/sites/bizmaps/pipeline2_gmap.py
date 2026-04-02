@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
-from japan_crawler.google_maps import GoogleMapsClient, GoogleMapsConfig
+from oldiron_core.google_maps import GoogleMapsClient, GoogleMapsConfig
 from .store import BizmapsStore
 
 logger = logging.getLogger("bizmaps.pipeline2")

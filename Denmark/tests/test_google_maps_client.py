@@ -10,15 +10,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 PROJECT_ROOT = ROOT.parent
+SHARED_DIR = PROJECT_ROOT / "shared"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
 
-from denmark_crawler.google_maps.client import _candidate_score
-from denmark_crawler.google_maps.client import _is_blocked_host
-from denmark_crawler.google_maps.client import _looks_like_query_artifact_name
-from denmark_crawler.google_maps.client import _normalize_url
+from oldiron_core.google_maps.client import _candidate_score
+from oldiron_core.google_maps.client import _is_blocked_host
+from oldiron_core.google_maps.client import _looks_like_query_artifact_name
+from oldiron_core.google_maps.client import _normalize_url
 
 
 class GoogleMapsClientTests(unittest.TestCase):

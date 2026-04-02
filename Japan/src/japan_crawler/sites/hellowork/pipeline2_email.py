@@ -12,7 +12,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from japan_crawler.fc_email.email_service import (
+from oldiron_core.fc_email.email_service import (
     FirecrawlEmailService,
     FirecrawlEmailSettings,
 )
@@ -54,7 +54,7 @@ def run_pipeline_email(
     settings = _build_settings(output_dir)
     settings.validate()
 
-    from shared.oldiron_core.protocol_crawler import SiteCrawlClient, SiteCrawlConfig
+    from oldiron_core.protocol_crawler import SiteCrawlClient, SiteCrawlConfig
     crawler = SiteCrawlClient(SiteCrawlConfig(
         proxy_url=os.getenv("HTTP_PROXY", "http://127.0.0.1:7897"),
         timeout_seconds=20.0,

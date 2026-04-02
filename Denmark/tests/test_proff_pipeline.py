@@ -9,12 +9,15 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+SHARED_DIR = ROOT.parent / "shared"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
 
 
-from denmark_crawler.fc_email.email_service import EmailDiscoveryResult  # noqa: E402
-from denmark_crawler.google_maps import GoogleMapsPlaceResult  # noqa: E402
+from oldiron_core.fc_email.email_service import EmailDiscoveryResult  # noqa: E402
+from oldiron_core.google_maps import GoogleMapsPlaceResult  # noqa: E402
 from denmark_crawler.sites.proff.config import ProffDenmarkConfig  # noqa: E402
 from denmark_crawler.sites.proff.models import ProffCompany  # noqa: E402
 from denmark_crawler.sites.proff.pipeline import ProffPipelineRunner  # noqa: E402

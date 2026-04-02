@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import requests
 
-from denmark_crawler.fc_email.client import HtmlPageResult
-from denmark_crawler.google_maps import GoogleMapsPlaceResult
+from oldiron_core.fc_email.client import HtmlPageResult
+from oldiron_core.google_maps import GoogleMapsPlaceResult
 
 
 @dataclass(slots=True)

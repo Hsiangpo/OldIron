@@ -10,10 +10,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 PROJECT_ROOT = ROOT.parent
+SHARED_DIR = PROJECT_ROOT / "shared"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
 
 from unitedstates_crawler.sites.dnb.client import parse_companyinformation_payload
 from unitedstates_crawler.sites.dnb.client import parse_companyprofile_payload
