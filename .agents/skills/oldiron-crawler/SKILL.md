@@ -35,6 +35,8 @@ When this skill is activated, state clearly:
 
 Before writing delivery code, do not assume another country's strategy applies here.
 If the current country's delivery mode or email policy is not already explicitly recorded in `AGENTS.md` or the user message, you must ask the user first before implementation.
+Do not run `product.py` delivery packaging unless the user has explicitly asked for or approved that delivery run in the current task.
+Do not delete existing delivery files unless the user has explicitly asked for that deletion.
 
 Before writing delivery code, ask the user these two questions if the answers are not already explicit:
 
@@ -170,12 +172,19 @@ Rules:
 - daily delivery output must stay under `output/delivery/<Country>_dayNNN/`
 - use root `product.py` for delivery entry, not a country-local replacement flow
 - if `AGENTS.md` declares a country-specific per-site delivery override, follow that override instead of the default merge+dedup rule
+- if `AGENTS.md` declares a country-specific email delivery override, follow that override instead of the default/no-filter assumption
 
 ## 8. Email handling rules
 
 - During crawling/storage: save all discovered emails to SQLite
 - During delivery: apply the user-selected filter policy or the country-specific override from `AGENTS.md`
 - Never silently hardcode a new email filtering rule
+
+## 8A. Real validation requirement
+
+- For crawler, pipeline, queue/resume, and delivery changes, mock tests are supplementary only.
+- Before claiming success, run at least one real validation using actual crawler tasks, actual runtime databases/checkpoints, or an actual delivery run approved by the user.
+- Do not treat pure mock-data tests as final validation for crawler correctness.
 
 ## 9. HTML -> Markdown -> LLM flow
 

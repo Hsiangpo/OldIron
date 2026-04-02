@@ -56,6 +56,8 @@
 - Country-specific overrides always win over the default delivery rule.
 - Do not extrapolate these overrides to future countries by yourself.
 - For future countries, if delivery mode or email policy is not explicitly recorded here, ask the user first and write the confirmed strategy into `AGENTS.md` before implementing.
+- Do not run `python product.py <Country> dayN` unless the user has explicitly requested or approved that delivery run in the current task.
+- Do not delete existing delivery files or delivery directories unless the user has explicitly requested that deletion.
 - Country-specific delivery overrides:
   - `Japan`: per-site day delivery. Write one CSV + one keys file per site under `Japan/output/delivery/Japan_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `Brazil`: per-site day delivery. Write one CSV + one keys file per site under `Brazil/output/delivery/Brazil_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
@@ -187,6 +189,9 @@ There is no single root build step. Work inside the target country directory for
 - Name tests `test_*.py`.
 - Add or update tests whenever parsing, deduplication, checkpoint, delivery, or email extraction logic changes.
 - Run the relevant country suite before claiming completion.
+- For crawler, queue/resume, and delivery changes, mock/unit tests are only supplementary evidence.
+- Before claiming completion, you must also run at least one real validation using actual crawler tasks, actual runtime databases/checkpoints, or an actual delivery run approved by the user.
+- Do not treat pure mock-data tests as final proof that a crawler or delivery change is safe.
 
 ## Documentation Rules
 
