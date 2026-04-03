@@ -124,47 +124,72 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
 
 
 def _load_site_records(site_name: str, site_dir: Path) -> list[dict[str, str]]:
-    if site_name == "bizmaps":
-        return _load_bizmaps_data(site_dir)
-    if site_name == "xlsximport":
-        return _load_xlsximport_data(site_dir)
-    if site_name == "hellowork":
-        return _load_hellowork_data(site_dir)
-    return []
-
-
-def _load_xlsximport_data(site_dir: Path) -> list[dict[str, str]]:
-    db_path = site_dir / "xlsximport_store.db"
+    db_path = _detect_site_db_path(site_name, site_dir)
     if not db_path.exists():
         return []
-
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
+    try:
+        return _load_company_records(conn)
+    finally:
+        conn.close()
+
+
+def _detect_site_db_path(site_name: str, site_dir: Path) -> Path:
+    primary = site_dir / f"{site_name}_store.db"
+    if primary.exists():
+        return primary
+    matches = sorted(site_dir.glob("*_store.db"))
+    if len(matches) == 1:
+        return matches[0]
+    return primary
+
+
+def _load_company_records(conn: sqlite3.Connection) -> list[dict[str, str]]:
+    try:
+        col_info = conn.execute("PRAGMA table_info(companies)").fetchall()
+    except sqlite3.OperationalError:
+        return []
+    existing_cols = {column["name"] for column in col_info}
+    if "company_name" not in existing_cols:
+        return []
+    select_cols = _build_select_columns(existing_cols)
+    order_by = "id" if "id" in existing_cols else "company_name"
     rows = conn.execute(
-        """
-        SELECT website, email, company_name, representative
-        FROM companies
-        WHERE company_name != '' AND company_name IS NOT NULL
-        ORDER BY id
-        """
+        f"SELECT {', '.join(select_cols)} FROM companies WHERE company_name != '' AND company_name IS NOT NULL ORDER BY {order_by}"
     ).fetchall()
-    conn.close()
-
-    records: list[dict[str, str]] = []
-    for row in rows:
-        records.append(
-            {
-                "company_name": str(row["company_name"] or "").strip(),
-                "representative": str(row["representative"] or "").strip(),
-                "website": str(row["website"] or "").strip(),
-                "emails": str(row["email"] or "").strip(),
-            }
-        )
-    return records
+    return [_normalize_company_record(row, existing_cols) for row in rows]
 
 
-def _load_hellowork_data(site_dir: Path) -> list[dict[str, str]]:
-    db_path = site_dir / "hellowork_store.db"
+def _build_select_columns(existing_cols: set[str]) -> list[str]:
+    base_cols = ["company_name", "representative", "website", "address", "industry", "detail_url"]
+    optional_cols = ["phone", "founded_year", "capital", "emails", "email", "source_job_url"]
+    return [column for column in [*base_cols, *optional_cols] if column in existing_cols]
+
+
+def _normalize_company_record(row: sqlite3.Row, existing_cols: set[str]) -> dict[str, str]:
+    emails_value = ""
+    if "emails" in existing_cols:
+        emails_value = str(row["emails"] or "").strip()
+    elif "email" in existing_cols:
+        emails_value = str(row["email"] or "").strip()
+    return {
+        "company_name": str(row["company_name"] or "").strip(),
+        "representative": str(row["representative"] or "").strip() if "representative" in existing_cols else "",
+        "website": str(row["website"] or "").strip() if "website" in existing_cols else "",
+        "address": str(row["address"] or "").strip() if "address" in existing_cols else "",
+        "industry": str(row["industry"] or "").strip() if "industry" in existing_cols else "",
+        "phone": str(row["phone"] or "").strip() if "phone" in existing_cols else "",
+        "founded_year": str(row["founded_year"] or "").strip() if "founded_year" in existing_cols else "",
+        "capital": str(row["capital"] or "").strip() if "capital" in existing_cols else "",
+        "detail_url": str(row["detail_url"] or "").strip() if "detail_url" in existing_cols else "",
+        "emails": emails_value,
+        "source_job_url": str(row["source_job_url"] or "").strip() if "source_job_url" in existing_cols else "",
+    }
+
+
+def _load_openwork_data(site_dir: Path) -> list[dict[str, str]]:
+    db_path = site_dir / "openwork_store.db"
     if not db_path.exists():
         return []
 
@@ -172,12 +197,10 @@ def _load_hellowork_data(site_dir: Path) -> list[dict[str, str]]:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
-        SELECT company_name, representative, website, address,
-               industry, phone, employees, capital, founded_year,
-               corp_number, detail_url, emails
+        SELECT company_name, representative, website, address, industry, detail_url, emails
         FROM companies
         WHERE company_name != '' AND company_name IS NOT NULL
-        ORDER BY id
+        ORDER BY company_id
         """
     ).fetchall()
     conn.close()
@@ -191,47 +214,8 @@ def _load_hellowork_data(site_dir: Path) -> list[dict[str, str]]:
                 "website": str(row["website"] or "").strip(),
                 "address": str(row["address"] or "").strip(),
                 "industry": str(row["industry"] or "").strip(),
-                "phone": str(row["phone"] or "").strip(),
-                "founded_year": str(row["founded_year"] or "").strip(),
-                "capital": str(row["capital"] or "").strip(),
                 "detail_url": str(row["detail_url"] or "").strip(),
                 "emails": str(row["emails"] or "").strip(),
-            }
-        )
-    return records
-
-
-def _load_bizmaps_data(site_dir: Path) -> list[dict[str, str]]:
-    db_path = site_dir / "bizmaps_store.db"
-    if not db_path.exists():
-        return []
-
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    col_info = conn.execute("PRAGMA table_info(companies)").fetchall()
-    existing_cols = {column["name"] for column in col_info}
-    base_cols = ["company_name", "representative", "website", "address", "industry", "detail_url"]
-    optional_cols = ["phone", "founded_year", "capital", "emails"]
-    select_cols = base_cols + [column for column in optional_cols if column in existing_cols]
-    rows = conn.execute(
-        f"SELECT {', '.join(select_cols)} FROM companies WHERE company_name != '' ORDER BY id"
-    ).fetchall()
-    conn.close()
-
-    records: list[dict[str, str]] = []
-    for row in rows:
-        records.append(
-            {
-                "company_name": str(row["company_name"] or "").strip(),
-                "representative": str(row["representative"] or "").strip(),
-                "website": str(row["website"] or "").strip(),
-                "address": str(row["address"] or "").strip(),
-                "industry": str(row["industry"] or "").strip(),
-                "phone": str(row["phone"] or "").strip() if "phone" in existing_cols else "",
-                "founded_year": str(row["founded_year"] or "").strip() if "founded_year" in existing_cols else "",
-                "capital": str(row["capital"] or "").strip() if "capital" in existing_cols else "",
-                "detail_url": str(row["detail_url"] or "").strip(),
-                "emails": str(row["emails"] or "").strip() if "emails" in existing_cols else "",
             }
         )
     return records
@@ -310,6 +294,7 @@ def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
         "founded_year",
         "capital",
         "detail_url",
+        "source_job_url",
     ]
     with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")

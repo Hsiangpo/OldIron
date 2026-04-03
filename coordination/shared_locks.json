@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T04:43:44Z",
+  "updated_at": "2026-04-03T05:04:16Z",
   "locks": [
     {
       "lock_id": "lock-mac-japan-four-sites-20260402-1",
@@ -11,8 +11,8 @@
       "task_id": "mac-japan-four-sites-20260402",
       "github_ref": "not-created",
       "locked_at": "2026-04-03T04:43:44Z",
-      "heartbeat_at": "2026-04-03T04:43:44Z",
-      "expires_at": "2026-04-03T05:03:44Z",
+      "heartbeat_at": "2026-04-03T05:04:16Z",
+      "expires_at": "2026-04-03T05:24:16Z",
       "notes": "Add Japan mynavi/pasonacareer/openwork/onecareer with per-site delivery integration."
     }
   ]
