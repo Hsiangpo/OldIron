@@ -142,14 +142,26 @@ class OpenworkPersistentBrowser:
             launch_kwargs["proxy"] = {"server": self._proxy_url}
         self._context = self._playwright.chromium.launch_persistent_context(**launch_kwargs)
         self._started_headless = headless
+        self._reset_pages()
         LOGGER.info("OpenWork 启动浏览器 profile：%s | headless=%s", self._user_data_dir, headless)
 
     def _page_handle(self):
         if self._context is None:
             raise OpenworkBrowserBlocked("OpenWork 浏览器上下文未初始化。")
         if self._page is None or self._page.is_closed():
-            self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+            self._reset_pages()
         return self._page
+
+    def _reset_pages(self) -> None:
+        if self._context is None:
+            return
+        for page in list(self._context.pages):
+            try:
+                if not page.is_closed():
+                    page.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._page = self._context.new_page()
 
     def _close_no_lock(self) -> None:
         if self._page is not None and not self._page.is_closed():

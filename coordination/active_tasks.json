@@ -1,5 +1,27 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T11:58:01Z",
-  "tasks": []
+  "updated_at": "2026-04-03T12:07:11Z",
+  "tasks": [
+    {
+      "task_id": "mac-openwork-stale-tab-fix-20260403",
+      "status": "in_progress",
+      "machine": "macbook-air",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Japan:openwork"
+      ],
+      "planned_files": [
+        "Japan/src/japan_crawler/sites/openwork/browser_profile.py",
+        "coordination/active_tasks.json"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-04-03T12:07:11Z",
+      "last_heartbeat_at": "2026-04-03T12:07:11Z",
+      "notes": "Ensure OpenWork persistent browser always uses a fresh page instead of stale restored tabs."
+    }
+  ]
 }
