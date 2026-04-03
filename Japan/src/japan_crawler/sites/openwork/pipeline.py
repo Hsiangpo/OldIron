@@ -109,7 +109,7 @@ def _load_company_details(
         for index, card in enumerate(cards, start=1):
             results.append(_fetch_company_detail(client, card))
             if index == 1 or index == total or index % 5 == 0:
-                LOGGER.info("OpenWork 浏览器详情进度：%d/%d", index, total)
+                LOGGER.info("OpenWork 详情进度：%d/%d", index, total)
         return results
     results: list[dict[str, str]] = []
     with ThreadPoolExecutor(max_workers=detail_workers, thread_name_prefix="openwork-detail") as executor:
