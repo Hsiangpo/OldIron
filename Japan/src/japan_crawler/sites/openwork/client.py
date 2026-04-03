@@ -7,10 +7,14 @@ import os
 import random
 import threading
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
 from curl_cffi.requests import Session
+
+from .browser_profile import DETAIL_READY_SELECTOR, LIST_READY_SELECTOR, OpenworkPersistentBrowser
 
 
 LOGGER = logging.getLogger("openwork.client")
@@ -36,6 +40,14 @@ _PROXY_FALLBACK_RESPONSE_HINTS = (
 )
 
 
+@dataclass(slots=True)
+class _HtmlResponse:
+    """统一协议页与浏览器页的返回形态。"""
+
+    status_code: int
+    text: str
+
+
 class OpenworkClient:
     """OpenWork 列表页与公司详情页抓取客户端。"""
 
@@ -45,12 +57,21 @@ class OpenworkClient:
         request_delay: float = 1.2,
         max_retries: int = 3,
         proxy: str | None = None,
+        browser_profile_dir: str | Path | None = None,
     ) -> None:
         self._delay = request_delay
         self._max_retries = max_retries
         self._proxy_url = str(proxy or os.getenv("HTTP_PROXY", "")).strip()
         self._local = threading.local()
         self._proxy_cooldown_until = 0.0
+        self._browser_lock = threading.Lock()
+        self._browser_mode = os.getenv("OPENWORK_FORCE_BROWSER", "").strip() == "1"
+        self._browser_client = None
+        if browser_profile_dir is not None:
+            self._browser_client = OpenworkPersistentBrowser(
+                user_data_dir=Path(browser_profile_dir),
+                proxy_url=self._proxy_url,
+            )
         if self._proxy_url:
             LOGGER.info("使用代理: %s", self._proxy_url)
         self._base_headers = {
@@ -81,6 +102,8 @@ class OpenworkClient:
         return response.text if response is not None else None
 
     def _get_with_retry(self, url: str, params: dict[str, str] | None = None) -> Any:
+        if self._browser_mode:
+            return self._browser_response(url)
         for attempt in range(self._max_retries):
             for use_proxy in self._request_modes():
                 try:
@@ -92,8 +115,7 @@ class OpenworkClient:
                             self._disable_proxy_temporarily(f"挑战页: {url}")
                             LOGGER.warning("代理路径触发挑战页/异常状态，回退直连：%s", url)
                             continue
-                        self._sleep_backoff(attempt, 4.0, 8.0, "命中挑战页")
-                        break
+                        return self._browser_response(url)
                     if response.status_code == 200:
                         return response
                     if response.status_code == 429:
@@ -101,8 +123,8 @@ class OpenworkClient:
                         break
                     if response.status_code == 403:
                         self._error_count += 1
-                        LOGGER.error("403 禁止访问: %s", url)
-                        return None
+                        LOGGER.warning("403 禁止访问，切换浏览器复用：%s", url)
+                        return self._browser_response(url)
                     if response.status_code >= 500:
                         self._sleep_backoff(attempt, 2.0, 5.0, f"{response.status_code} 服务端错误")
                         break
@@ -119,6 +141,21 @@ class OpenworkClient:
                     break
         LOGGER.error("重试耗尽: %s", url)
         return None
+
+    def _browser_response(self, url: str) -> _HtmlResponse:
+        if self._browser_client is None:
+            raise RuntimeError("OpenWork 浏览器 profile 未配置。")
+        with self._browser_lock:
+            self._browser_mode = True
+            LOGGER.warning("OpenWork 协议请求不可用，切换到浏览器 profile 复用：%s", url)
+            html_text = self._browser_client.fetch_html(url=url, ready_selector=self._ready_selector(url))
+            self._request_count += 1
+            return _HtmlResponse(status_code=200, text=html_text)
+
+    def _ready_selector(self, url: str) -> str:
+        if "/company_list" in url:
+            return LIST_READY_SELECTOR
+        return DETAIL_READY_SELECTOR
 
     def _request_modes(self) -> list[bool]:
         if not self._proxy_url:
@@ -173,3 +210,7 @@ class OpenworkClient:
     @property
     def stats(self) -> dict[str, int]:
         return {"requests": self._request_count, "errors": self._error_count}
+
+    @property
+    def browser_primary(self) -> bool:
+        return self._browser_client is not None and self._browser_mode

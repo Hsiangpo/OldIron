@@ -26,7 +26,11 @@ def run_pipeline_list(
     """执行 Pipeline 1。"""
     output_dir.mkdir(parents=True, exist_ok=True)
     store = OpenworkStore(output_dir / "openwork_store.db")
-    client = OpenworkClient(request_delay=request_delay, proxy=proxy)
+    client = OpenworkClient(
+        request_delay=request_delay,
+        proxy=proxy,
+        browser_profile_dir=output_dir / "browser_profile",
+    )
 
     checkpoint = store.get_checkpoint(_CHECKPOINT_SCOPE)
     start_page = checkpoint["last_page"] + 1 if checkpoint and checkpoint["status"] == "running" else 1
@@ -99,7 +103,7 @@ def _load_company_details(
     cards: list[dict[str, str]],
     detail_workers: int,
 ) -> list[dict[str, str]]:
-    if detail_workers <= 1:
+    if detail_workers <= 1 or client.browser_primary:
         return [_fetch_company_detail(client, card) for card in cards]
     results: list[dict[str, str]] = []
     with ThreadPoolExecutor(max_workers=detail_workers, thread_name_prefix="openwork-detail") as executor:
@@ -111,6 +115,17 @@ def _load_company_details(
 
 def _fetch_company_detail(client: OpenworkClient, card: dict[str, str]) -> dict[str, str]:
     html_text = client.fetch_detail_page(card["detail_url"])
+    if not html_text:
+        LOGGER.warning("OpenWork 详情页抓取失败，先保留列表页信息：%s", card["detail_url"])
+        return {
+            "company_id": card["company_id"],
+            "company_name": card["company_name"],
+            "representative": "",
+            "website": "",
+            "address": "",
+            "industry": card["industry"],
+            "detail_url": card["detail_url"],
+        }
     detail = parse_company_detail(html_text or "")
     return {
         "company_id": card["company_id"],

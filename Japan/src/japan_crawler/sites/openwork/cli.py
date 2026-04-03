@@ -39,7 +39,7 @@ def _wait_for_next_round(stop_event: threading.Event, p1_failed: threading.Event
 
 def run_openwork(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="OpenWork 日本企业信息采集")
-    parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email"])
+    parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email", "auth"])
     parser.add_argument("--delay", type=float, default=1.2, help="P1 列表请求间隔秒数")
     parser.add_argument("--proxy", type=str, default="", help="HTTP 代理地址")
     parser.add_argument("--max-pages", type=int, default=0, help="P1 最大采集页数（0=全部）")
@@ -47,6 +47,7 @@ def run_openwork(argv: list[str]) -> int:
     parser.add_argument("--detail-workers", type=int, default=12, help="P1 详情页并发数")
     parser.add_argument("--gmap-workers", type=int, default=16, help="P2 GMap 并发数")
     parser.add_argument("--email-workers", type=int, default=128, help="P3 邮箱提取并发数")
+    parser.add_argument("--manual-wait-seconds", type=int, default=600, help="auth 模式人工验证码等待秒数")
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args(argv)
 
@@ -58,6 +59,8 @@ def run_openwork(argv: list[str]) -> int:
     output_dir = SITE_ROOT / "output" / "openwork"
     proxy = args.proxy or os.getenv("HTTP_PROXY", "") or "http://127.0.0.1:7897"
     try:
+        if args.mode == "auth":
+            return _run_auth(output_dir, proxy, args.manual_wait_seconds)
         if args.mode == "all":
             return _run_all_concurrent(output_dir, proxy, args)
         if args.mode == "list":
@@ -88,6 +91,19 @@ def run_openwork(argv: list[str]) -> int:
     except Exception as exc:  # noqa: BLE001
         LOGGER.error("执行失败: %s", exc, exc_info=True)
         return 1
+
+
+def _run_auth(output_dir: Path, proxy: str, manual_wait_seconds: int) -> int:
+    from .browser_profile import OpenworkPersistentBrowser
+
+    browser = OpenworkPersistentBrowser(
+        user_data_dir=output_dir / "browser_profile",
+        proxy_url=proxy,
+        manual_wait_seconds=manual_wait_seconds,
+    )
+    browser.prepare_manual_auth()
+    print(f"OpenWork 浏览器 profile 已就绪：{output_dir / 'browser_profile'}")
+    return 0
 
 
 def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
@@ -170,7 +186,3 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
         print(f"错误: {errors}")
         return 1
     return 0
-
-
-def _p1_zero_progress(stats: dict[str, int]) -> bool:
-    return int(stats.get("pages_done", 0) or 0) <= 0
