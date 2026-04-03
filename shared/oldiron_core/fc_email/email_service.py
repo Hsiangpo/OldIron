@@ -206,12 +206,15 @@ class FirecrawlEmailService:
     ) -> None:
         self._settings = settings
         self._learned_keywords = self._load_learned_keywords()
+        self._owns_key_pool = False
+        self._owns_firecrawl = False
         # 如果外部已注入 client（如协议爬虫），跳过 key_pool 构建
         if firecrawl_client is not None:
             self._key_pool = key_pool
             self._firecrawl = firecrawl_client
         else:
             self._key_pool = key_pool or self.build_key_pool(settings)
+            self._owns_key_pool = key_pool is None
             self._firecrawl = FirecrawlClient(
                 key_pool=self._key_pool,
                 config=FirecrawlClientConfig(
@@ -220,6 +223,7 @@ class FirecrawlEmailService:
                     max_retries=settings.max_retries,
                 ),
             )
+            self._owns_firecrawl = True
         self._llm = EmailUrlLlmClient(
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
@@ -230,9 +234,9 @@ class FirecrawlEmailService:
         )
 
     def close(self) -> None:
-        if self._key_pool is not None:
+        if self._owns_key_pool and self._key_pool is not None:
             self._key_pool.close()
-        if hasattr(self._firecrawl, "close"):
+        if self._owns_firecrawl and hasattr(self._firecrawl, "close"):
             try:
                 self._firecrawl.close()
             except Exception:  # noqa: BLE001
