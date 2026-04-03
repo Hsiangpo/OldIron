@@ -1,4 +1,4 @@
-"""mynavi Pipeline 2 — GMap 补官网。"""
+"""Mynavi Pipeline 2 — GMap 补官网。"""
 
 from __future__ import annotations
 
@@ -22,12 +22,12 @@ def run_pipeline_gmap(
     max_items: int = 0,
     concurrency: int = 16,
 ) -> dict[str, int]:
-    """对空官网公司进行 GMap 补全。"""
     store = MynaviStore(output_dir / "mynavi_store.db")
     pending = store.get_gmap_pending(max_items)
     if not pending:
         LOGGER.info("没有需要 GMap 补官网的公司")
         return {"processed": 0, "found": 0}
+    LOGGER.info("Mynavi GMap：待处理 %d 家，并发=%d", len(pending), concurrency)
 
     thread_local = threading.local()
 
@@ -40,24 +40,24 @@ def run_pipeline_gmap(
         query = _build_query(company["company_name"], company.get("address", ""))
         try:
             result = _get_client().search_company_profile(query, company["company_name"])
-            return company["company_key"], result.website if result else ""
+            return company["company_id"], result.website if result else ""
         except Exception as exc:  # noqa: BLE001
             LOGGER.debug("GMap 查询失败: %s", exc)
-            return company["company_key"], ""
+            return company["company_id"], ""
 
     processed = 0
     found = 0
     with ThreadPoolExecutor(max_workers=max(int(concurrency or 1), 1)) as executor:
         futures = {executor.submit(_worker, item): item for item in pending}
         for future in as_completed(futures):
-            company_key, website = future.result()
+            company_id, website = future.result()
             processed += 1
             if website:
-                store.update_website(company_key, website)
+                store.update_website(company_id, website)
                 found += 1
             else:
-                store.mark_gmap_done(company_key)
-    return {"processed": processed, "found": found}
+                store.mark_gmap_done(company_id)
+    return {"processed": processed, "found": found, "total": store.get_company_count()}
 
 
 def _build_query(company_name: str, address: str) -> str:

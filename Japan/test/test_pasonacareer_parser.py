@@ -39,6 +39,12 @@ LIST_HTML = """
 </body></html>
 """
 
+RESULTS_SUMMARY_HTML = """
+<html><body>
+  <div class="p results-summary">該当求人数<span class="count js-hit-num">50873</span>件</div>
+</body></html>
+"""
+
 DETAIL_HTML = """
 <html><body>
   <h1>東急建設株式会社 【海外駐在・管理部門※MGR】数十億～数百円規模ODA案件</h1>
@@ -55,6 +61,9 @@ class PasonacareerParserTests(unittest.TestCase):
     def test_parse_total_results_and_pages(self) -> None:
         self.assertEqual(50873, parse_total_results(LIST_HTML))
         self.assertEqual(998, parse_total_pages(LIST_HTML))
+
+    def test_parse_total_results_from_summary_block(self) -> None:
+        self.assertEqual(50873, parse_total_results(RESULTS_SUMMARY_HTML))
 
     def test_parse_job_cards(self) -> None:
         cards = parse_job_cards(LIST_HTML)

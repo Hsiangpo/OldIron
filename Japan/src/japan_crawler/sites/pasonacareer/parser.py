@@ -8,14 +8,21 @@ from urllib.parse import urlparse
 from lxml import html
 
 
-_TOTAL_RE = re.compile(r"検索結果一覧\s*([\d,]+)\s*件")
+_TOTAL_PATTERNS = (
+    re.compile(r"検索結果一覧\s*<span>\s*([\d,]+)\s*</span>\s*件"),
+    re.compile(r"検索結果一覧\s*([\d,]+)\s*件"),
+    re.compile(r"該当求人数\s*<span[^>]*>\s*([\d,]+)\s*</span>\s*件"),
+    re.compile(r"該当求人数\s*([\d,]+)\s*件"),
+)
 
 
 def parse_total_results(page_html: str) -> int:
-    matched = _TOTAL_RE.search(str(page_html or ""))
-    if matched is None:
-        return 0
-    return int(str(matched.group(1) or "0").replace(",", ""))
+    text = str(page_html or "")
+    for pattern in _TOTAL_PATTERNS:
+        matched = pattern.search(text)
+        if matched is not None:
+            return int(str(matched.group(1) or "0").replace(",", ""))
+    return 0
 
 
 def parse_total_pages(page_html: str, per_page: int = 51) -> int:
@@ -94,4 +101,3 @@ def _normalize_website(value: str) -> str:
 
 def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
-

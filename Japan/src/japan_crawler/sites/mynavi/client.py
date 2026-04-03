@@ -1,4 +1,4 @@
-"""mynavi HTTP 客户端。"""
+"""Mynavi HTTP 客户端。"""
 
 from __future__ import annotations
 
@@ -14,64 +14,16 @@ from curl_cffi.requests import Session
 
 LOGGER = logging.getLogger("mynavi.client")
 BASE_URL = "https://tenshoku.mynavi.jp"
-PREF_ROUTE_GROUPS = {
-    "01": "hokkaido",
-    "02": "tohoku",
-    "03": "tohoku",
-    "04": "tohoku",
-    "05": "tohoku",
-    "06": "tohoku",
-    "07": "tohoku",
-    "08": "kitakanto",
-    "09": "kitakanto",
-    "10": "kitakanto",
-    "11": "shutoken",
-    "12": "shutoken",
-    "13": "shutoken",
-    "14": "shutoken",
-    "15": "koshinetsu",
-    "16": "hokuriku",
-    "17": "hokuriku",
-    "18": "hokuriku",
-    "19": "koshinetsu",
-    "20": "koshinetsu",
-    "21": "tokai",
-    "22": "tokai",
-    "23": "tokai",
-    "24": "tokai",
-    "25": "kansai",
-    "26": "kansai",
-    "27": "kansai",
-    "28": "kansai",
-    "29": "kansai",
-    "30": "kansai",
-    "31": "chugoku",
-    "32": "chugoku",
-    "33": "chugoku",
-    "34": "chugoku",
-    "35": "chugoku",
-    "36": "shikoku",
-    "37": "shikoku",
-    "38": "shikoku",
-    "39": "shikoku",
-    "40": "kyushu",
-    "41": "kyushu",
-    "42": "kyushu",
-    "43": "kyushu",
-    "44": "kyushu",
-    "45": "kyushu",
-    "46": "kyushu",
-    "47": "kyushu",
-}
+INDEX_URL = f"{BASE_URL}/company/"
 
 
 class MynaviClient:
-    """mynavi 列表页和职位详情页客户端。"""
+    """Mynavi 公司入口、列表页和公司详情页抓取客户端。"""
 
     def __init__(
         self,
         *,
-        request_delay: float = 1.2,
+        request_delay: float = 1.0,
         max_retries: int = 3,
         proxy: str | None = None,
     ) -> None:
@@ -86,25 +38,24 @@ class MynaviClient:
             {
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Referer": f"{BASE_URL}/search/",
+                "Referer": INDEX_URL,
             }
         )
         self._request_count = 0
         self._error_count = 0
 
-    def fetch_list_page(self, pref_code: str, page: int = 1) -> str | None:
-        """抓取某个都道府県的新着职位列表页。"""
-        route_group = PREF_ROUTE_GROUPS.get(pref_code)
-        if not route_group:
-            return None
-        path = f"/{route_group}/list/p{pref_code}/new/"
+    def fetch_index_page(self) -> str | None:
+        response = self._get_with_retry(INDEX_URL)
+        return response.text if response is not None else None
+
+    def fetch_list_page(self, group_code: str, page: int = 1) -> str | None:
+        suffix = f"/company/list/{group_code}/"
         if page > 1:
-            path += f"pg{page}/"
-        response = self._get_with_retry(f"{BASE_URL}{path}")
+            suffix = f"/company/list/{group_code}/pg{page}/"
+        response = self._get_with_retry(urljoin(BASE_URL, suffix))
         return response.text if response is not None else None
 
     def fetch_detail_page(self, detail_url: str) -> str | None:
-        """抓取职位详情页。"""
         response = self._get_with_retry(urljoin(BASE_URL, detail_url))
         return response.text if response is not None else None
 

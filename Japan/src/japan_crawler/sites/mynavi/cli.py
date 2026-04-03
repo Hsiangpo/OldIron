@@ -1,4 +1,4 @@
-"""mynavi CLI 入口。"""
+"""Mynavi CLI 入口。"""
 
 from __future__ import annotations
 
@@ -23,13 +23,14 @@ _MAX_IDLE_ROUNDS = 3
 
 
 def run_mynavi(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="マイナビ転職 日本职位转公司采集")
+    parser = argparse.ArgumentParser(description="Mynavi 日本企业信息采集")
     parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email"])
-    parser.add_argument("--delay", type=float, default=1.2, help="P1 列表请求间隔秒数")
+    parser.add_argument("--delay", type=float, default=1.0, help="P1 列表请求间隔秒数")
     parser.add_argument("--proxy", type=str, default="", help="HTTP 代理地址")
-    parser.add_argument("--max-prefs", type=int, default=0, help="P1 最大采集都道府県数（0=全部）")
+    parser.add_argument("--max-groups", type=int, default=0, help="P1 最大采集五十音分组数（0=全部）")
+    parser.add_argument("--max-pages", type=int, default=0, help="P1 每个分组最大页数（0=全部）")
     parser.add_argument("--max-items", type=int, default=0, help="P2/P3 最大处理公司数（0=全部）")
-    parser.add_argument("--detail-workers", type=int, default=10, help="P1 详情页并发数")
+    parser.add_argument("--detail-workers", type=int, default=12, help="P1 详情页并发数")
     parser.add_argument("--gmap-workers", type=int, default=16, help="P2 GMap 并发数")
     parser.add_argument("--email-workers", type=int, default=128, help="P3 邮箱提取并发数")
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -53,7 +54,8 @@ def run_mynavi(argv: list[str]) -> int:
                     output_dir=output_dir,
                     request_delay=args.delay,
                     proxy=proxy,
-                    max_prefs=args.max_prefs,
+                    max_groups=args.max_groups,
+                    max_pages=args.max_pages,
                     detail_workers=args.detail_workers,
                 )
             )
@@ -88,7 +90,8 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
                 output_dir=output_dir,
                 request_delay=args.delay,
                 proxy=proxy,
-                max_prefs=args.max_prefs,
+                max_groups=args.max_groups,
+                max_pages=args.max_pages,
                 detail_workers=args.detail_workers,
             )
         except Exception as exc:  # noqa: BLE001
@@ -102,10 +105,7 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
             total_processed = 0
             total_found = 0
             idle_rounds = 0
-            round_no = 0
             while True:
-                round_no += 1
-                LOGGER.info("[%s] 第 %d 轮扫描...", name, round_no)
                 stats = runner(output_dir=output_dir, max_items=args.max_items, concurrency=workers)
                 processed = int(stats.get("processed", 0))
                 total_processed += processed

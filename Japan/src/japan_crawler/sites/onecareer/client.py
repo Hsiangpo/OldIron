@@ -50,8 +50,9 @@ class OnecareerClient:
         return response.text if response is not None else None
 
     def fetch_category_page(self, category_id: str, page: int = 1) -> str | None:
+        category_path = _normalize_category_path(category_id)
         response = self._get_with_retry(
-            f"{BASE_URL}{CATEGORY_PATH}/{category_id}",
+            f"{BASE_URL}{category_path}",
             params={"page": str(page)},
         )
         return response.text if response is not None else None
@@ -99,3 +100,13 @@ class OnecareerClient:
     def stats(self) -> dict[str, int]:
         return {"requests": self._request_count, "errors": self._error_count}
 
+
+def _normalize_category_path(category_id: str) -> str:
+    text = str(category_id or "").strip()
+    if not text:
+        return CATEGORY_PATH
+    if text.startswith("/companies/business_categories/"):
+        return text
+    if text.startswith("/"):
+        return f"{CATEGORY_PATH}{text}"
+    return f"{CATEGORY_PATH}/{text}"

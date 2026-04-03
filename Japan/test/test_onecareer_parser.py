@@ -64,8 +64,8 @@ class OnecareerParserTests(unittest.TestCase):
         categories = parse_business_categories(INDEX_HTML)
         self.assertEqual(
             [
-                {"category_id": "5", "category_name": "IT・通信の企業"},
-                {"category_id": "8", "category_name": "メーカーの企業"},
+                {"category_id": "5", "category_name": "5"},
+                {"category_id": "8", "category_name": "8"},
             ],
             categories,
         )

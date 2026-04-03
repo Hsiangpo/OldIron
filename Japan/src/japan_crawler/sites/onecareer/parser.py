@@ -16,22 +16,14 @@ _TOTAL_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
 
 def parse_business_categories(page_html: str) -> list[dict[str, str]]:
     """解析行业分类入口。"""
-    tree = html.fromstring(page_html)
     categories: list[dict[str, str]] = []
     seen: set[str] = set()
-    for link in tree.cssselect(f'a[href^="{"/companies/business_categories/"}"]'):
-        href = str(link.get("href", "") or "").strip()
-        matched = _CATEGORY_RE.search(href)
-        if matched is None:
-            continue
-        category_id = str(matched.group(1) or "").strip()
+    for category_id in re.findall(_CATEGORY_RE, str(page_html or "")):
+        category_id = str(category_id or "").strip()
         if not category_id or category_id in seen:
             continue
-        name = _clean_text(link.text_content())
-        if not name:
-            continue
         seen.add(category_id)
-        categories.append({"category_id": category_id, "category_name": name})
+        categories.append({"category_id": category_id, "category_name": category_id})
     return categories
 
 
@@ -119,4 +111,3 @@ def _normalize_website(value: str) -> str:
 
 def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
-

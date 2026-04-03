@@ -1,4 +1,4 @@
-"""mynavi Pipeline 3 — 官网补邮箱与法人。"""
+"""Mynavi Pipeline 3 — 官网补邮箱与法人。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ def run_pipeline_email(
     max_items: int = 0,
     concurrency: int = 128,
 ) -> dict[str, int]:
-    """对有官网的公司补邮箱与法人。"""
     store = MynaviStore(output_dir / "mynavi_store.db")
     pending = store.get_email_pending(max_items)
     if not pending:
@@ -37,6 +36,7 @@ def run_pipeline_email(
             timeout_seconds=20.0,
         )
     )
+    LOGGER.info("Mynavi 邮箱提取：待处理 %d 家，并发=%d", len(pending), concurrency)
 
     def _worker(company: dict[str, str]) -> tuple[str, list[str], str]:
         service = FirecrawlEmailService(settings, firecrawl_client=crawler)
@@ -46,7 +46,7 @@ def run_pipeline_email(
                 homepage=company["website"],
                 existing_representative=company.get("representative", ""),
             )
-            return company["company_key"], list(result.emails or []), str(result.representative or "").strip()
+            return company["company_id"], list(result.emails or []), str(result.representative or "").strip()
         finally:
             service.close()
 
@@ -57,11 +57,11 @@ def run_pipeline_email(
         for future in as_completed(futures):
             company = futures[future]
             try:
-                company_key, emails, representative = future.result()
+                company_id, emails, representative = future.result()
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("邮箱提取失败：%s | %s", company["company_name"], exc)
-                company_key, emails, representative = company["company_key"], [], ""
-            store.save_email_result(company_key, emails, representative)
+                company_id, emails, representative = company["company_id"], [], ""
+            store.save_email_result(company_id, emails, representative)
             processed += 1
             if emails:
                 found += 1
