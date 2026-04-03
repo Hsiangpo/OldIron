@@ -109,12 +109,18 @@ class OpenworkPersistentBrowser:
             self._start(headless=self._headless)
             page = self._page_handle()
             page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
-            if not self._wait_ready(page, ready_selector):
-                raise OpenworkBrowserBlocked(self._build_blocker_message(url))
+            if self._wait_ready(page, ready_selector) and self._looks_like_real_page(page.content()):
+                return page.content()
+            if not self._started_headless:
+                self._ensure_page_ready(
+                    page,
+                    ready_selector=ready_selector,
+                    target_url=url,
+                    stage_label="运行页",
+                )
+                return page.content()
             html_text = page.content()
-            if not self._looks_like_real_page(html_text):
-                raise OpenworkBrowserBlocked(self._build_blocker_message(url))
-            return html_text
+            raise OpenworkBrowserBlocked(self._build_blocker_message(url))
 
     def close(self) -> None:
         with self._lock:
