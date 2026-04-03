@@ -62,7 +62,7 @@ class CompanyNameConfig:
     # LLM
     llm_api_key: str = ""
     llm_base_url: str = "https://api.gpteamservices.com/v1"
-    llm_model: str = "gpt-5.1-codex-mini"
+    llm_model: str = "gpt-5.4-mini"
     llm_reasoning_effort: str = "medium"
     llm_api_style: str = "auto"
     llm_timeout_seconds: float = 120.0
@@ -117,7 +117,7 @@ class CompanyNameConfig:
             firecrawl_contact_form_retry_seconds=_env_float("FIRECRAWL_CONTACT_FORM_RETRY_SECONDS", 259200.0),
             llm_api_key=_env_str("LLM_API_KEY"),
             llm_base_url=_env_str("LLM_BASE_URL", "https://api.gpteamservices.com/v1"),
-            llm_model=_env_str("LLM_MODEL", "gpt-5.1-codex-mini"),
+            llm_model=_env_str("LLM_MODEL", "gpt-5.4-mini"),
             llm_reasoning_effort=_env_str("LLM_REASONING_EFFORT", "medium"),
             llm_api_style=_env_str("LLM_API_STYLE", "auto"),
             llm_timeout_seconds=_env_float("LLM_TIMEOUT_SECONDS", 120.0),

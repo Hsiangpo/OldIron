@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T13:29:21Z",
+  "updated_at": "2026-04-03T14:55:54Z",
   "tasks": [
     {
       "task_id": "mac-openwork-all-deadlock-fix-20260403",
@@ -26,32 +26,6 @@
       "started_at": "2026-04-03T13:28:15Z",
       "last_heartbeat_at": "2026-04-03T13:28:15Z",
       "notes": "Diagnose and fix openwork all-mode stall under concurrent P1/P2/P3 load."
-    },
-    {
-      "task_id": "mac-openwork-all-batch-fix-20260403",
-      "status": "in_progress",
-      "machine": "macbook-air",
-      "agent": "codex",
-      "change_class": "shared_zone",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "shared:fc_email"
-      ],
-      "planned_files": [
-        "Japan/src/japan_crawler/sites/openwork/cli.py",
-        "Japan/src/japan_crawler/sites/openwork/pipeline3_email.py",
-        "shared/oldiron_core/fc_email/llm_client.py",
-        "coordination/active_tasks.json",
-        "coordination/shared_locks.json"
-      ],
-      "shared_lock_ids": [
-        "lock-mac-openwork-all-batch-fix-20260403-1"
-      ],
-      "github_ref": "not-created",
-      "started_at": "2026-04-03T13:29:21Z",
-      "last_heartbeat_at": "2026-04-03T13:29:21Z",
-      "notes": "Batch openwork P3 work and suppress repeated TLS verify warnings; keep all-mode concurrent but non-starving."
     }
   ]
 }

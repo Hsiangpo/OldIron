@@ -45,6 +45,19 @@ def _parse_json_text(raw: str) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+def _is_model_not_found_error(error_text: str) -> bool:
+    lowered = str(error_text or "").strip().lower()
+    if not lowered:
+        return False
+    needles = (
+        "model_not_found",
+        "no available channel for model",
+        "model not found",
+        "unsupported model",
+    )
+    return any(needle in lowered for needle in needles)
+
+
 @dataclass(slots=True)
 class HtmlContactExtraction:
     company_name: str
@@ -66,7 +79,7 @@ class EmailUrlLlmClient:
         reasoning_effort: str,
         api_style: str,
         timeout_seconds: float,
-        fallback_model: str = "gpt-5.1-codex-mini",
+        fallback_model: str = "",
     ) -> None:
         from openai import OpenAI
         import httpx
@@ -84,7 +97,7 @@ class EmailUrlLlmClient:
             http_client=self._http_client,
         )
         self._model = model
-        self._fallback_model = fallback_model
+        self._fallback_model = str(fallback_model or "").strip()
         self._reasoning_effort = reasoning_effort
         self._api_style = str(api_style or "auto").strip().lower() or "auto"
 
@@ -144,8 +157,8 @@ class EmailUrlLlmClient:
                 picked.append(value)
         return picked[: max(int(target_count), 1)]
 
-    # 单页 Markdown 最大字符数（gpt-5.1-codex-mini 输入上限 272k token ≈ 816k 字符，
-    # 按最多 8 页计算：8×80k=640k + prompt 模板 ≈ 700k，留安全余量）
+    # 单页 Markdown 最大字符数。
+    # 这里按最多 8 页估算：8×80k=640k，再给提示词模板预留足够安全余量。
     _MAX_PAGE_CHARS = 80_000
 
     def _convert_pages_to_markdown(self, pages: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -402,6 +415,9 @@ class EmailUrlLlmClient:
                 raise
             except Exception as exc:  # noqa: BLE001
                 err_str = str(exc)
+                if _is_model_not_found_error(err_str):
+                    LOGGER.error("LLM 模型不可用，停止重试：%s", err_str)
+                    raise
                 # 429 限流：无限排队等待，不计入重试次数
                 is_429 = any(kw in err_str for kw in ("429", "rate_limit", "Rate limit"))
                 if is_429:

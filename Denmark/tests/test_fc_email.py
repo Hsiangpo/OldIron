@@ -345,6 +345,40 @@ class FcEmailTests(unittest.TestCase):
         self.assertEqual('{"ok": true}', result)
         self.assertEqual(3, fake_responses.calls)
 
+    def test_model_not_found_does_not_enter_5xx_retry_loop(self) -> None:
+        client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
+
+        class _FakeResponses:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **kwargs):
+                _ = kwargs
+                self.calls += 1
+                raise RuntimeError(
+                    "503 - {'error': {'code': 'model_not_found', "
+                    "'message': 'No available channel for model gpt-5.1-codex-mini'}}"
+                )
+
+        fake_responses = _FakeResponses()
+        client._client = type("FakeClient", (), {"responses": fake_responses})()
+        client._extract_chat_output_text = lambda response: ""  # type: ignore[method-assign]
+
+        with patch("time.sleep", return_value=None) as sleep_mock:
+            with self.assertRaises(RuntimeError):
+                client._call_api_with_retry(
+                    channel="responses",
+                    kwargs={"model": "x", "input": "y"},
+                )
+        self.assertEqual(1, fake_responses.calls)
+        sleep_mock.assert_not_called()
+
+    def test_candidate_models_skips_empty_fallback(self) -> None:
+        client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
+        client._model = "claude-sonnet-4-6"
+        client._fallback_model = ""
+        self.assertEqual(["claude-sonnet-4-6"], client._candidate_models())
+
     def test_prompt_is_truncated_to_250k_chars(self) -> None:
         client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
         seen: dict[str, str] = {}

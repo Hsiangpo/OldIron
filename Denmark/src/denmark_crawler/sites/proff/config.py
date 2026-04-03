@@ -196,7 +196,7 @@ class ProffDenmarkConfig:
             firecrawl_key_failure_threshold=_env_int("FIRECRAWL_KEY_FAILURE_THRESHOLD", 5),
             llm_api_key=_env_str("LLM_API_KEY"),
             llm_base_url=_env_str("LLM_BASE_URL", "https://api.gpteamservices.com/v1"),
-            llm_model=_env_str("LLM_MODEL", "gpt-5.1-codex-mini"),
+            llm_model=_env_str("LLM_MODEL", "gpt-5.4-mini"),
             llm_reasoning_effort=_env_str("LLM_REASONING_EFFORT", "medium"),
             llm_api_style=_env_str("LLM_API_STYLE", "auto"),
             llm_timeout_seconds=_env_float("LLM_TIMEOUT_SECONDS", 120.0),
