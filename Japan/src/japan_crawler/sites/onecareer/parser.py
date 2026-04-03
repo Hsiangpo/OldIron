@@ -11,9 +11,6 @@ from lxml import html
 _CATEGORY_RE = re.compile(r"/companies/business_categories/(\d+)")
 _COMPANY_RE = re.compile(r"^/companies/(\d+)$")
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
-_TOTAL_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
-
-
 def parse_business_categories(page_html: str) -> list[dict[str, str]]:
     """解析行业分类入口。"""
     categories: list[dict[str, str]] = []
@@ -36,9 +33,6 @@ def parse_total_pages(page_html: str) -> int:
         matched = _PAGE_RE.search(href)
         if matched is not None:
             max_page = max(max_page, int(matched.group(1)))
-    matched = _TOTAL_RE.search(_clean_text(page_html))
-    if matched is not None:
-        max_page = max(max_page, int(matched.group(2)))
     return max_page
 
 
