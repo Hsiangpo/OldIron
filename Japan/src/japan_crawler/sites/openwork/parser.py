@@ -29,9 +29,6 @@ def parse_total_pages(page_html: str, per_page: int = 50) -> int:
         matched = _PAGE_RE.search(href)
         if matched is not None:
             max_page = max(max_page, int(matched.group(1)))
-    total = parse_total_results(page_html)
-    if total > 0:
-        max_page = max(max_page, (total + per_page - 1) // per_page)
     return max_page
 
 
@@ -117,4 +114,3 @@ def _normalize_website(value: str) -> str:
 
 def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
-

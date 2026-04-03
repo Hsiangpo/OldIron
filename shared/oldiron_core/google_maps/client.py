@@ -281,16 +281,18 @@ class GoogleMapsClient:
     def __init__(self, config: GoogleMapsConfig | None = None) -> None:
         self.config = config or GoogleMapsConfig()
         self._request_count = 0
-        self.session = self._build_session()
+        self._proxy_url = str(self.config.proxy_url or "").strip()
+        self._using_proxy = bool(self._proxy_url)
+        self.session = self._build_session(use_proxy=self._using_proxy)
         self._warm_up()
 
-    def _build_session(self) -> cffi_requests.Session:
+    def _build_session(self, use_proxy: bool | None = None) -> cffi_requests.Session:
         # Windows 上 impersonate="chrome" 的 UA 是 macOS 但 TLS 是 Windows → 不匹配被 429
         # chrome110 的 UA 是 Windows NT 10.0，和 Windows TLS 指纹一致
         imp = "chrome110" if _platform.system() == "Windows" else "chrome"
         session = cffi_requests.Session(impersonate=imp)
         session.trust_env = False
-        proxy = str(self.config.proxy_url or "").strip()
+        proxy = self._proxy_url if (use_proxy if use_proxy is not None else self._using_proxy) else ""
         if proxy:
             session.proxies = {"http": proxy, "https": proxy}
         return session
@@ -320,13 +322,22 @@ class GoogleMapsClient:
         except Exception:
             pass  # warm up 失败不影响后续
 
-    def _reset_session(self) -> None:
+    def _reset_session(self, use_proxy: bool | None = None) -> None:
         try:
             self.session.close()
         except Exception:
             pass
-        self.session = self._build_session()
+        if use_proxy is not None:
+            self._using_proxy = use_proxy
+        self.session = self._build_session(use_proxy=self._using_proxy)
         self._warm_up()
+
+    def _fallback_to_direct(self, reason: str) -> bool:
+        if not self._proxy_url or not self._using_proxy:
+            return False
+        logger.warning("Google Maps 代理路径不可用，回退直连：%s", reason)
+        self._reset_session(use_proxy=False)
+        return True
 
     def _sleep(self) -> None:
         delay = random.uniform(self.config.min_delay, self.config.max_delay)
@@ -361,6 +372,9 @@ class GoogleMapsClient:
             except Exception as exc:
                 err_text = str(exc)
                 logger.warning("Google Maps 请求异常 (第%d次): %s — %s", attempt, query, err_text)
+                if any(hint in err_text.lower() for hint in ("curl: (35)", "tls connect error", "invalid library", "curl: (7)")):
+                    if self._fallback_to_direct(err_text):
+                        continue
                 if re.search(r"curl: \((28|35|56)\)", err_text):
                     self._reset_session()
                 if attempt == max_retries:
@@ -368,6 +382,13 @@ class GoogleMapsClient:
                 time.sleep(min(2**attempt + random.uniform(0, 1.0), 20))
                 continue
 
+            if resp.status_code in {202, 403} and any(
+                hint in (resp.text or "").lower()
+                for hint in ("awswaf", "challenge.js", "verify that you're not a robot", "javascript is disabled")
+            ):
+                if self._fallback_to_direct(f"HTTP {resp.status_code} {query}"):
+                    continue
+                raise RuntimeError(f"Google Maps HTTP {resp.status_code}: {query}")
             if resp.status_code == 429:
                 wait = 2**attempt * 10 + random.uniform(5, 15)
                 logger.warning("Google Maps 429 限流，等待 %.0fs (第%d次)", wait, attempt)

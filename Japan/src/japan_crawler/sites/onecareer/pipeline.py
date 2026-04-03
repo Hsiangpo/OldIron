@@ -43,6 +43,9 @@ def run_pipeline_list(
         scope = f"business_category:{category_id}"
         checkpoint = store.get_checkpoint(scope)
         start_page = checkpoint["last_page"] + 1 if checkpoint and checkpoint["status"] == "running" else 1
+        if max_pages > 0 and start_page > max_pages:
+            LOGGER.warning("OneCareer 分类 %s 的断点页 %d 超出测试页上限 %d，回退到第 1 页", category_id, start_page, max_pages)
+            start_page = 1
         first_html = client.fetch_category_page(category_id, start_page)
         if first_html is None:
             continue
@@ -103,4 +106,3 @@ def _fetch_company_detail(client: OnecareerClient, card: dict[str, str]) -> dict
         "industry": card["industry"],
         "detail_url": card["detail_url"],
     }
-

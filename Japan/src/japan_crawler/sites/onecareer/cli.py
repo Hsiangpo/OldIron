@@ -22,6 +22,21 @@ _POLL_INTERVAL = 60
 _MAX_IDLE_ROUNDS = 3
 
 
+def _p1_zero_progress(stats: dict[str, int]) -> bool:
+    return int(stats.get("categories_done", 0)) <= 0 and int(stats.get("new_companies", 0)) <= 0
+
+
+def _wait_for_next_round(stop_event: threading.Event, p1_failed: threading.Event) -> bool:
+    deadline = time.monotonic() + _POLL_INTERVAL
+    while time.monotonic() < deadline:
+        if p1_failed.is_set():
+            return False
+        remaining = max(0.0, deadline - time.monotonic())
+        if stop_event.wait(min(1.0, remaining)):
+            return False
+    return True
+
+
 def run_onecareer(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="OneCareer 日本企业信息采集")
     parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email"])
@@ -79,6 +94,8 @@ def run_onecareer(argv: list[str]) -> int:
 
 def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
     p1_done = threading.Event()
+    p1_failed = threading.Event()
+    stop_event = threading.Event()
     results: dict[str, dict] = {}
     errors: list[str] = []
 
@@ -86,7 +103,7 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
         try:
             from .pipeline import run_pipeline_list
 
-            results["pipeline1_list"] = run_pipeline_list(
+            stats = run_pipeline_list(
                 output_dir=output_dir,
                 request_delay=args.delay,
                 proxy=proxy,
@@ -94,9 +111,17 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
                 max_pages=args.max_pages,
                 detail_workers=args.detail_workers,
             )
+            results["pipeline1_list"] = stats
+            if _p1_zero_progress(stats):
+                p1_failed.set()
+                stop_event.set()
+                message = "P1 启动失败或零进展，停止空轮询。"
+                LOGGER.error(message)
+                errors.append(f"P1: {message}")
         except Exception as exc:  # noqa: BLE001
             LOGGER.error("P1 异常: %s", exc, exc_info=True)
             errors.append(f"P1: {exc}")
+            stop_event.set()
         finally:
             p1_done.set()
 
@@ -105,23 +130,31 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
             total_processed = 0
             total_found = 0
             idle_rounds = 0
-            while True:
+            round_no = 0
+            while not stop_event.is_set():
+                round_no += 1
+                LOGGER.info("[%s] 第 %d 轮扫描...", name, round_no)
                 stats = runner(output_dir=output_dir, max_items=args.max_items, concurrency=workers)
                 processed = int(stats.get("processed", 0))
                 total_processed += processed
                 total_found += int(stats.get("found", 0))
                 if processed == 0:
+                    if p1_failed.is_set():
+                        LOGGER.error("[%s] P1 零进展，停止轮询。", name)
+                        break
                     if p1_done.is_set():
                         idle_rounds += 1
                         if idle_rounds >= _MAX_IDLE_ROUNDS:
                             break
-                    time.sleep(_POLL_INTERVAL)
+                    if not _wait_for_next_round(stop_event, p1_failed):
+                        break
                     continue
                 idle_rounds = 0
             results[name] = {"processed": total_processed, "found": total_found}
         except Exception as exc:  # noqa: BLE001
             LOGGER.error("%s 异常: %s", name, exc, exc_info=True)
             errors.append(f"{name}: {exc}")
+            stop_event.set()
 
     from .pipeline2_gmap import run_pipeline_gmap
     from .pipeline3_email import run_pipeline_email
@@ -141,3 +174,6 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
         return 1
     return 0
 
+
+def _p1_zero_progress(stats: dict[str, int]) -> bool:
+    return int(stats.get("categories_done", 0) or 0) <= 0

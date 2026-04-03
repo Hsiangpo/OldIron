@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import warnings
 from dataclasses import dataclass
@@ -15,6 +16,14 @@ from bs4 import XMLParsedAsHTMLWarning
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 LOGGER = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+
+
+def _should_disable_tls_verify(*, base_url: str, verify_mode: str) -> bool:
+    if verify_mode in {"0", "false", "no", "off"}:
+        return True
+    if verify_mode in {"1", "true", "yes", "on"}:
+        return False
+    return "gpt-agent.cc" in str(base_url or "").lower()
 
 
 def _parse_json_text(raw: str) -> dict[str, object]:
@@ -60,16 +69,38 @@ class EmailUrlLlmClient:
         fallback_model: str = "gpt-5.1-codex-mini",
     ) -> None:
         from openai import OpenAI
+        import httpx
 
+        timeout = max(timeout_seconds, 20.0)
+        self._http_client = self._build_http_client(
+            base_url=base_url,
+            timeout_seconds=timeout,
+            httpx_module=httpx,
+        )
         self._client = OpenAI(
             api_key=api_key,
             base_url=base_url or None,
-            timeout=max(timeout_seconds, 20.0),
+            timeout=timeout,
+            http_client=self._http_client,
         )
         self._model = model
         self._fallback_model = fallback_model
         self._reasoning_effort = reasoning_effort
         self._api_style = str(api_style or "auto").strip().lower() or "auto"
+
+    def _build_http_client(self, *, base_url: str, timeout_seconds: float, httpx_module) -> Any:
+        proxy_url = str(os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "").strip()
+        verify_mode = str(os.getenv("LLM_TLS_VERIFY", "auto") or "auto").strip().lower()
+        client_kwargs: dict[str, Any] = {
+            "timeout": timeout_seconds,
+            "follow_redirects": True,
+        }
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+        if _should_disable_tls_verify(base_url=base_url, verify_mode=verify_mode):
+            LOGGER.warning("LLM 客户端已关闭 TLS 严格校验：base_url=%s", base_url or "default")
+            client_kwargs["verify"] = False
+        return httpx_module.Client(**client_kwargs)
 
     def pick_candidate_urls(
         self,

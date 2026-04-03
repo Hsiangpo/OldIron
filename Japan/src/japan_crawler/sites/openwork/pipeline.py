@@ -30,7 +30,14 @@ def run_pipeline_list(
 
     checkpoint = store.get_checkpoint(_CHECKPOINT_SCOPE)
     start_page = checkpoint["last_page"] + 1 if checkpoint and checkpoint["status"] == "running" else 1
+    if max_pages > 0 and start_page > max_pages:
+        LOGGER.warning("OpenWork 断点页 %d 超出测试页上限 %d，回退到第 1 页", start_page, max_pages)
+        start_page = 1
     first_html = client.fetch_list_page(start_page)
+    if first_html is None and start_page > 1:
+        LOGGER.warning("OpenWork 断点页 %d 获取失败，回退到第 1 页重建断点", start_page)
+        start_page = 1
+        first_html = client.fetch_list_page(start_page)
     if first_html is None:
         return {"pages_done": 0, "new_companies": 0, "total_companies": store.get_company_count(), **client.stats}
     total_pages = parse_total_pages(first_html, DEFAULT_PER_PAGE)
@@ -47,6 +54,7 @@ def run_pipeline_list(
         cards = parse_company_cards(current_html)
         new_total += _fetch_and_store_details(store, client, cards, detail_workers)
         pages_done += 1
+        total_pages = _expand_total_pages(current_html, total_pages, max_pages)
         store.update_checkpoint(_CHECKPOINT_SCOPE, current_page, total_pages, "running")
         if pages_done <= 3 or current_page % 20 == 0 or current_page == total_pages:
             LOGGER.info("第 %d/%d 页：解析 %d 家", current_page, total_pages, len(cards))
@@ -65,6 +73,13 @@ def run_pipeline_list(
         "total_companies": store.get_company_count(),
         **client.stats,
     }
+
+
+def _expand_total_pages(page_html: str, current_total: int, max_pages: int) -> int:
+    total_pages = max(current_total, parse_total_pages(page_html, DEFAULT_PER_PAGE))
+    if max_pages > 0:
+        return min(total_pages, max_pages)
+    return total_pages
 
 
 def _fetch_and_store_details(
@@ -106,4 +121,3 @@ def _fetch_company_detail(client: OpenworkClient, card: dict[str, str]) -> dict[
         "industry": detail["industry"] or card["industry"],
         "detail_url": card["detail_url"],
     }
-

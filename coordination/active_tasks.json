@@ -1,44 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T06:36:57Z",
-  "tasks": [
-    {
-      "task_id": "mac-japan-interface-first-20260402",
-      "status": "in_progress",
-      "machine": "macbook-air",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "Japan:sites"
-      ],
-      "planned_files": [],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-04-03T06:15:42Z",
-      "last_heartbeat_at": "2026-04-03T06:15:42Z",
-      "notes": "Switch Japan new sites to interface-first extraction using Chrome DevTools MCP where possible."
-    },
-    {
-      "task_id": "mac-japan-proxy-fallback-20260402",
-      "status": "in_progress",
-      "machine": "macbook-air",
-      "agent": "codex",
-      "change_class": "shared_zone",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "shared:google_maps"
-      ],
-      "planned_files": [],
-      "shared_lock_ids": [
-        "lock-mac-japan-proxy-fallback-20260402-1"
-      ],
-      "github_ref": "not-created",
-      "started_at": "2026-04-03T06:36:57Z",
-      "last_heartbeat_at": "2026-04-03T06:36:57Z",
-      "notes": "Add proxy-first/direct-fallback for shared Google Maps and align Japan site clients/all-mode failure exit."
-    }
-  ]
+  "updated_at": "2026-04-03T07:26:34Z",
+  "tasks": []
 }

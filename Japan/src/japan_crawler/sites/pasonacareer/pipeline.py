@@ -24,10 +24,17 @@ def run_pipeline_list(
 ) -> dict[str, int]:
     output_dir.mkdir(parents=True, exist_ok=True)
     store = PasonacareerStore(output_dir / "pasonacareer_store.db")
-    client = PasonacareerClient(request_delay=request_delay, proxy=proxy)
+    client = PasonacareerClient(
+        request_delay=request_delay,
+        proxy=proxy,
+        browser_profile_dir=output_dir / "browser_profile",
+    )
 
     checkpoint = store.get_checkpoint("job_list")
     start_page = checkpoint["last_page"] + 1 if checkpoint and checkpoint["status"] == "running" else 1
+    if max_pages > 0 and start_page > max_pages:
+        LOGGER.warning("PasonaCareer 断点页 %d 超出测试页上限 %d，回退到第 1 页", start_page, max_pages)
+        start_page = 1
     first_html = client.fetch_search_page(start_page)
     if first_html is None:
         return {"pages_done": 0, "new_companies": 0, "total_companies": store.get_company_count(), **client.stats}
@@ -74,7 +81,7 @@ def _fetch_and_store_details(store: PasonacareerStore, client: PasonacareerClien
 
 
 def _load_job_details(client: PasonacareerClient, cards: list[dict[str, str]], detail_workers: int) -> list[dict[str, str]]:
-    if detail_workers <= 1:
+    if detail_workers <= 1 or client.browser_primary:
         return [_fetch_job_detail(client, card) for card in cards]
     results: list[dict[str, str]] = []
     with ThreadPoolExecutor(max_workers=detail_workers, thread_name_prefix="pasona-detail") as executor:
@@ -95,4 +102,3 @@ def _fetch_job_detail(client: PasonacareerClient, card: dict[str, str]) -> dict[
         "detail_url": card["detail_url"],
         "source_job_url": card["detail_url"],
     }
-

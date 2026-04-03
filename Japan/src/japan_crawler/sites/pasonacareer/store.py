@@ -84,7 +84,15 @@ class PasonacareerStore:
                 address = str(company.get("address", "") or "").strip()
                 if not company_name:
                     continue
-                before = conn.total_changes
+                existed = conn.execute(
+                    """
+                    SELECT 1
+                    FROM companies
+                    WHERE company_name = ? AND address = ?
+                    LIMIT 1
+                    """,
+                    (company_name, address),
+                ).fetchone()
                 conn.execute(
                     """
                     INSERT INTO companies (
@@ -112,7 +120,7 @@ class PasonacareerStore:
                         _now_text(),
                     ),
                 )
-                inserted += int(conn.total_changes > before)
+                inserted += int(existed is None)
             return inserted
 
         return int(self._run_write(_action) or 0)
