@@ -1,5 +1,28 @@
 {
   "version": 1,
-  "updated_at": "2026-04-02T17:55:00Z",
-  "tasks": []
+  "updated_at": "2026-04-02T18:05:00Z",
+  "tasks": [
+    {
+      "task_id": "coord-2026-04-02-us-br-dnb-concurrency-defaults",
+      "status": "in_progress",
+      "machine": "Machine 2",
+      "agent": "codex-mac",
+      "branch": "main",
+      "scope": [
+        "Brazil/sites/dnb",
+        "UnitedStates/sites/dnb"
+      ],
+      "planned_files": [
+        "Brazil/src/brazil_crawler/sites/dnb/config.py",
+        "Brazil/src/brazil_crawler/sites/dnb/cli.py",
+        "UnitedStates/src/unitedstates_crawler/sites/dnb/config.py",
+        "UnitedStates/src/unitedstates_crawler/sites/dnb/cli.py"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "",
+      "started_at": "2026-04-02T18:05:00Z",
+      "last_heartbeat_at": "2026-04-02T18:05:00Z",
+      "notes": "Raise default gmap/email concurrency from 4 to 128 for Brazil and UnitedStates DNB."
+    }
+  ]
 }
