@@ -76,10 +76,10 @@
 - Default ownership rule:
   - one active Codex owns one country/site scope at a time
   - do not let two active Codex agents edit the same site scope simultaneously
-- Task branch rule:
-  - code changes should normally be made on a task branch, not directly on `main`
-  - recommended branch format: `<machine>/<country-or-scope>/<short-task>`
-  - site-local work should push its task branch early so the other machine can see the branch exists
+- Git push rule:
+  - verified code changes should be committed and pushed directly to `main` by default
+  - do not create or use a task branch unless the user explicitly asks for a branch, PR, or branch-based review flow
+  - coordination still uses `coordination/active_tasks.json` and `coordination/shared_locks.json`; direct-to-`main` does not remove the lock/task requirements
 - High-risk shared zone rule:
   - the following paths are high-risk shared zones:
     - `shared/`
@@ -100,8 +100,8 @@
 - Site-local changes outside the high-risk shared zone still require an active task entry, but do not require a shared lock.
 - For site-local work:
   - update `coordination/active_tasks.json`
-  - create a task branch
-  - push that branch early so the remote machine can see the work has started
+  - work directly on `main` by default
+  - after verification, commit and push directly to `main`
   - a separate shared lock is not required
 - If a planned path is already locked by another active task, do not edit it. Stop, sync the latest state, and ask the user to reassign or sequence the work.
 - Keep lock scope small. Lock exact files or narrow directories; do not lock an entire country unless the whole country truly needs exclusive ownership.

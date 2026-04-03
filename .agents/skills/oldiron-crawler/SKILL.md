@@ -78,7 +78,7 @@ At the start of substantial work:
 6. Classify the task first:
    - `site_local` if it stays inside one country/site-local scope
    - `shared_zone` if it touches any high-risk shared zone in `AGENTS.md`
-7. If the task is `site_local`, register the task and push the task branch early so the remote machine can see the work started.
+7. If the task is `site_local`, register the task and, unless the user explicitly asked for branch/PR flow, plan to commit and push the verified change directly to `main`.
 8. If the task is `shared_zone`, register the task, claim a shared lease lock, set `expires_at` + `heartbeat_at`, and push the lock to the remote before editing the shared-zone files.
 9. If another active task already owns or locks the same scope, stop and report the conflict instead of editing through it.
 10. Prefer `python coordination/coord_cli.py ...` for begin / heartbeat / finish / takeover / render instead of hand-editing coordination JSON.
@@ -347,7 +347,7 @@ When the user has explicitly asked for git actions in the current session:
 - do not stop after local edits or local verification
 - do not report the task as complete while verified tracked changes are still only local
 - for `shared_zone` tasks, push the lease lock first, then edit the shared files, then release the lock in the completion push
-- for `site_local` tasks, push the task branch early for visibility even though a shared lock is not required
+- for `site_local` tasks, direct-to-`main` is the default workflow; only use a task branch when the user explicitly asked for branch/PR flow
 
 If the task includes deployment to the remote Windows machine, use the machine record in `AGENTS.md` as the source of truth.
 
