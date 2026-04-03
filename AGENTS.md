@@ -38,6 +38,17 @@
     - resumable runtime databases may be synced when needed
     - delivery outputs are core assets and should be synced when cross-machine continuity or archive completeness requires them
     - caches and debug artifacts must not be blindly synced or overwritten
+  - SQLite transfer checklist:
+    - stop the source site process before copying the database
+    - copy the full SQLite state as one consistent set: main db + matching `-wal` + matching `-shm` when they exist
+    - do not copy only the main `.db` file when a live WAL pair exists
+    - after transfer, verify file size / timestamp / openability on the target machine before resume or delivery
+    - if the database is delivery-critical or resume-critical, run at least `PRAGMA quick_check` or `PRAGMA integrity_check`
+  - Root-cause rule for malformed SQLite after transfer:
+    - do not assume SSH/scp itself is the default root cause
+    - first check whether the source process was still writing
+    - then check whether `.db`, `-wal`, and `-shm` were copied as a matching snapshot
+    - then check whether the source database was already damaged before transfer
 
 ## Runtime Model
 
@@ -97,6 +108,7 @@
 - Do not run `python product.py <Country> dayN` unless the user has explicitly requested or approved that delivery run in the current task.
 - Do not delete existing delivery files or delivery directories unless the user has explicitly requested that deletion.
 - When re-running the same day delivery and replacing an existing day directory, do not hard-delete it. Move the old day directory to the OS recycle bin / trash first, then build the new delivery directory.
+- The same recycle-bin rule also applies to manual operator actions. When replacing an existing day package, move the old day directory to recycle bin / trash instead of physical deletion.
 - Country-specific delivery overrides:
   - `Japan`: per-site day delivery. Write one CSV + one keys file per site under `Japan/output/delivery/Japan_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `Brazil`: per-site day delivery. Write one CSV + one keys file per site under `Brazil/output/delivery/Brazil_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
@@ -267,8 +279,10 @@ There is no single root build step. Work inside the target country directory for
 - When syncing non-git runtime files to another machine:
   1. stop the affected process first
   2. sync only the required files
-  3. verify file size / timestamp / openability on the target machine
-  4. restart on the target machine only after verification
+  3. for SQLite, sync the complete snapshot set (`.db`, `-wal`, `-shm`) when those sidecar files exist
+  4. verify file size / timestamp / openability on the target machine
+  5. if the DB is critical for resume or delivery, run `PRAGMA quick_check` or `PRAGMA integrity_check`
+  6. restart on the target machine only after verification
 - Before editing a high-risk shared zone, sync the latest Git state first and then re-check `coordination/shared_locks.json`.
 - England exception rule:
   - if Windows is the active England runtime machine, do not overwrite the Windows England database or England output tree from another machine unless the task explicitly says to do so

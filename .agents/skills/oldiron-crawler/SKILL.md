@@ -77,6 +77,12 @@ At the start of substantial work:
 5. Read `coordination/active_tasks.json` and `coordination/shared_locks.json` before substantial edits.
 6. If the planned work touches a high-risk shared zone recorded in `AGENTS.md`, register the task and claim the shared lock before editing.
 7. If another active task already owns or locks the same scope, stop and report the conflict instead of editing through it.
+8. If SQLite databases are being moved across machines:
+   - stop the source process first
+   - sync `.db`, `-wal`, and `-shm` together when the sidecar files exist
+   - verify file size / timestamp / openability on the target machine
+   - for resume-critical or delivery-critical DBs, run at least `PRAGMA quick_check` or `PRAGMA integrity_check`
+   - if the target DB shows `database disk image is malformed`, do not blame SSH/scp first; check live-copy timing, WAL completeness, and whether the source DB was already broken
 
 ## 4. Trigger routing
 
@@ -176,6 +182,7 @@ Rules:
 - use root `product.py` for delivery entry, not a country-local replacement flow
 - if `AGENTS.md` declares a country-specific per-site delivery override, follow that override instead of the default merge+dedup rule
 - if `AGENTS.md` declares a country-specific email delivery override, follow that override instead of the default/no-filter assumption
+- if re-running the same day and replacing an existing day package, move the old day directory to recycle bin / trash first; do not hard-delete it
 
 ## 8. Email handling rules
 
