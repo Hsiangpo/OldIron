@@ -1,29 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T11:46:27Z",
-  "tasks": [
-    {
-      "task_id": "mac-openwork-auth-fix-20260403",
-      "status": "in_progress",
-      "machine": "macbook-air",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "Japan:openwork"
-      ],
-      "planned_files": [
-        "Japan/src/japan_crawler/sites/openwork/browser_profile.py",
-        "Japan/src/japan_crawler/sites/openwork/client.py",
-        "Japan/src/japan_crawler/sites/openwork/pipeline.py",
-        "Japan/src/japan_crawler/sites/openwork/cli.py"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-04-03T11:46:27Z",
-      "last_heartbeat_at": "2026-04-03T11:46:27Z",
-      "notes": "Fix OpenWork auth to verify detail page too and remove Playwright cross-thread usage."
-    }
-  ]
+  "updated_at": "2026-04-03T11:50:46Z",
+  "tasks": []
 }
