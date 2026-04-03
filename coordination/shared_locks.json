@@ -1,5 +1,19 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T05:43:16Z",
-  "locks": []
+  "updated_at": "2026-04-03T06:00:49Z",
+  "locks": [
+    {
+      "lock_id": "lock-mac-fc-email-shared-close-fix-20260402-1",
+      "status": "locked",
+      "path": "shared/oldiron_core/fc_email/email_service.py",
+      "machine": "macbook-air",
+      "agent": "codex",
+      "task_id": "mac-fc-email-shared-close-fix-20260402",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-03T06:00:49Z",
+      "heartbeat_at": "2026-04-03T06:00:49Z",
+      "expires_at": "2026-04-03T06:20:49Z",
+      "notes": "Fix shared injected crawler lifecycle: do not close borrowed protocol crawler/session in FirecrawlEmailService.close()."
+    }
+  ]
 }
