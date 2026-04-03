@@ -231,7 +231,11 @@ class TestSiteCrawlClient(unittest.TestCase):
     def test_fetch_html_falls_back_to_http_on_tls_error(self) -> None:
         client = SiteCrawlClient(SiteCrawlConfig(max_retries=0))
         https_error = RuntimeError("curl: (60) SSL certificate problem")
-        http_response = MagicMock(status_code=200, text="<html>ok</html>")
+        http_response = MagicMock(
+            status_code=200,
+            text="<html>ok</html>",
+            headers={"Content-Type": "text/html; charset=utf-8"},
+        )
         client._session.get = MagicMock(side_effect=[https_error, http_response])
 
         html = client._fetch_html("https://example.com")
@@ -240,6 +244,34 @@ class TestSiteCrawlClient(unittest.TestCase):
         self.assertEqual(2, client._session.get.call_count)
         self.assertEqual("https://example.com", client._session.get.call_args_list[0].args[0])
         self.assertEqual("http://example.com", client._session.get.call_args_list[1].args[0])
+
+    def test_fetch_html_skips_pdf_response(self) -> None:
+        client = SiteCrawlClient(SiteCrawlConfig(max_retries=0))
+        pdf_response = MagicMock(
+            status_code=200,
+            text="%PDF-1.4 ...",
+            headers={"Content-Type": "application/pdf"},
+        )
+        client._session.get = MagicMock(return_value=pdf_response)
+
+        html = client._fetch_html("https://example.com/profile.pdf")
+
+        self.assertEqual("", html)
+
+    def test_fetch_html_truncates_large_html(self) -> None:
+        client = SiteCrawlClient(SiteCrawlConfig(max_retries=0, max_html_chars=20))
+        long_html = "<html>" + ("a" * 60) + "</html>"
+        response = MagicMock(
+            status_code=200,
+            text=long_html,
+            headers={"Content-Type": "text/html"},
+        )
+        client._session.get = MagicMock(return_value=response)
+
+        html = client._fetch_html("https://example.com/page")
+
+        self.assertIn("内容过长已截断", html)
+        self.assertLess(len(html), len(long_html))
 
     def test_html_page_result_fields(self) -> None:
         result = HtmlPageResult(url="https://test.com", html="<p>hi</p>")
