@@ -40,7 +40,8 @@ def _load_project_env() -> bool:
         from dotenv import load_dotenv
     except ModuleNotFoundError:
         return False
-    load_dotenv(ROOT / ".env")
+    # 国家目录下的 .env 必须覆盖宿主机残留环境变量，避免错用别国或测试 key。
+    load_dotenv(ROOT / ".env", override=True)
     return True
 
 
