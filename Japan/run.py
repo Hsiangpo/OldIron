@@ -25,6 +25,7 @@ USAGE_TEXT = """用法：
   bizmaps     — biz-maps.com 日本企业信息列表
   hellowork   — ハローワーク 日本企业信息（求人検索）
   openwork    — OpenWork 日本企业信息列表
+  onecareer   — One Career 日本企业信息列表
   xlsximport  — xlsx 导入官网+邮箱，Protocol+LLM 补全公司名和代表人
 """
 
@@ -87,6 +88,11 @@ def _dispatch(argv: list[str]) -> int:
         from japan_crawler.sites.openwork.cli import run_openwork
 
         return run_openwork(rest)
+
+    if site == "onecareer":
+        from japan_crawler.sites.onecareer.cli import run_onecareer
+
+        return run_onecareer(rest)
 
     if site == "xlsximport":
         from japan_crawler.sites.xlsximport.cli import run_xlsximport
