@@ -572,6 +572,40 @@ class DnbBrStore:
 
         return self._run_write(_action)
 
+    def enqueue_site_for_ready_websites(self) -> int:
+        def _action(conn: sqlite3.Connection) -> int:
+            rows = conn.execute(
+                """
+                SELECT duns, company_name, website
+                FROM companies
+                WHERE website != ''
+                  AND site_status = 'pending'
+                """
+            ).fetchall()
+            count = 0
+            for row in rows:
+                website = _clean_website_candidate(row["website"])
+                if not website:
+                    continue
+                before = conn.total_changes
+                conn.execute(
+                    """
+                    INSERT INTO site_queue (duns, company_name, website, status, retries, updated_at)
+                    VALUES (?, ?, ?, 'pending', 0, ?)
+                    ON CONFLICT(duns) DO UPDATE SET
+                        company_name = excluded.company_name,
+                        website = excluded.website,
+                        status = 'pending',
+                        retries = 0,
+                        updated_at = excluded.updated_at
+                    """,
+                    (row["duns"], row["company_name"], website, _now_text()),
+                )
+                count += conn.total_changes - before
+            return count
+
+        return int(self._run_write(_action) or 0)
+
     def purge_bad_websites(self) -> int:
         def _action(conn: sqlite3.Connection) -> int:
             rows = conn.execute(
@@ -708,30 +742,40 @@ class DnbBrStore:
     def claim_detail_task(self) -> DnbDetailTask | None:
         def _action(conn: sqlite3.Connection) -> DnbDetailTask | None:
             now_text = _now_text()
-            rows = conn.execute(
+            row = conn.execute(
                 """
                 SELECT q.*
                 FROM detail_queue q
                 JOIN companies c ON c.duns = q.duns
                 WHERE q.status = 'pending'
                   AND q.updated_at <= ?
-                ORDER BY
-                    CASE WHEN c.website != '' THEN 0 ELSE 1 END,
-                    q.updated_at,
-                    q.duns
+                  AND c.website != ''
+                ORDER BY q.updated_at, q.duns
                 LIMIT 1
                 """,
                 (now_text,),
             ).fetchone()
-            if rows is None:
-                return None
+            if row is None:
+                row = conn.execute(
+                    """
+                    SELECT q.*
+                    FROM detail_queue q
+                    WHERE q.status = 'pending'
+                      AND q.updated_at <= ?
+                    ORDER BY q.updated_at, q.duns
+                    LIMIT 1
+                    """,
+                    (now_text,),
+                ).fetchone()
+                if row is None:
+                    return None
             updated = conn.execute(
                 "UPDATE detail_queue SET status = 'running', updated_at = ? WHERE duns = ? AND status = 'pending'",
-                (now_text, rows["duns"]),
+                (now_text, row["duns"]),
             ).rowcount
             if updated != 1:
                 return None
-            return DnbDetailTask(**dict(rows))
+            return DnbDetailTask(**dict(row))
 
         return self._run_write(_action)
 

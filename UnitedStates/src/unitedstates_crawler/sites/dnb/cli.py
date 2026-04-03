@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import threading
+import time
 from pathlib import Path
 
 from oldiron_core.fc_email import FirecrawlEmailSettings
@@ -67,6 +68,9 @@ def run_dnb(argv: list[str]) -> int:
     cleaned = store.purge_bad_websites()
     if cleaned:
         logging.getLogger("unitedstates_crawler.sites.dnb.cli").info("DNB 启动清理脏官网：%d", cleaned)
+    seeded = store.enqueue_site_for_ready_websites()
+    if seeded:
+        logging.getLogger("unitedstates_crawler.sites.dnb.cli").info("DNB 启动补种官网任务：%d", seeded)
 
     if args.mode == "gmap":
         _run_gmap_only(store=store, config=config)
@@ -105,6 +109,7 @@ def _run_all_mode(*, store: DnbUsStore, config: DnbUsConfig) -> dict[str, int]:
     p1_done = threading.Event()
     list_results: dict[str, int] = {}
     logger = logging.getLogger("unitedstates_crawler.sites.dnb.cli")
+    last_stale_recovery = 0.0
 
     def _p1_runner() -> None:
         try:
@@ -147,6 +152,12 @@ def _run_all_mode(*, store: DnbUsStore, config: DnbUsConfig) -> dict[str, int]:
     for thread in threads:
         thread.start()
     while True:
+        last_stale_recovery = _recover_stale_tasks_if_needed(
+            store=store,
+            config=config,
+            logger=logger,
+            last_stale_recovery=last_stale_recovery,
+        )
         progress = store.progress()
         if p1_done.is_set() and _pipelines_drained(progress):
             stop_event.set()
@@ -179,6 +190,7 @@ def _run_gmap_only(*, store: DnbUsStore, config: DnbUsConfig) -> None:
     store.requeue_running_tasks()
     store.enqueue_gmap_for_missing_websites()
     stop_event = threading.Event()
+    last_stale_recovery = 0.0
     thread = threading.Thread(
         target=run_pipeline_gmap,
         kwargs={
@@ -192,6 +204,12 @@ def _run_gmap_only(*, store: DnbUsStore, config: DnbUsConfig) -> None:
     )
     thread.start()
     while True:
+        last_stale_recovery = _recover_stale_tasks_if_needed(
+            store=store,
+            config=config,
+            logger=logger,
+            last_stale_recovery=last_stale_recovery,
+        )
         progress = store.progress()
         if progress.gmap_pending == 0 and progress.gmap_running == 0:
             stop_event.set()
@@ -205,6 +223,7 @@ def _run_email_only(*, store: DnbUsStore, settings: FirecrawlEmailSettings, conf
     logger = logging.getLogger("unitedstates_crawler.sites.dnb.cli")
     store.requeue_running_tasks()
     stop_event = threading.Event()
+    last_stale_recovery = 0.0
     thread = threading.Thread(
         target=run_pipeline_email,
         kwargs={
@@ -218,6 +237,12 @@ def _run_email_only(*, store: DnbUsStore, settings: FirecrawlEmailSettings, conf
     )
     thread.start()
     while True:
+        last_stale_recovery = _recover_stale_tasks_if_needed(
+            store=store,
+            config=config,
+            logger=logger,
+            last_stale_recovery=last_stale_recovery,
+        )
         progress = store.progress()
         if progress.site_pending == 0 and progress.site_running == 0:
             stop_event.set()
@@ -238,3 +263,14 @@ def _pipelines_drained(progress) -> bool:
         and progress.site_pending == 0
         and progress.site_running == 0
     )
+
+
+def _recover_stale_tasks_if_needed(*, store: DnbUsStore, config: DnbUsConfig, logger: logging.Logger, last_stale_recovery: float) -> float:
+    now = time.monotonic()
+    interval = min(max(config.stale_running_requeue_seconds / 3, 60.0), 300.0)
+    if now - last_stale_recovery < interval:
+        return last_stale_recovery
+    recovered = store.requeue_stale_running_tasks(config.stale_running_requeue_seconds)
+    if recovered:
+        logger.warning("DNB 运行中回收僵住任务：%d", recovered)
+    return now

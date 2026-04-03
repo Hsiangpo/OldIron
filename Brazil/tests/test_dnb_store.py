@@ -60,6 +60,45 @@ class DnbStoreTests(unittest.TestCase):
             self.assertEqual("failed", row[0])
             self.assertEqual(3, row[1])
 
+    def test_claim_detail_task_prioritizes_rows_with_existing_website(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DnbBrStore(Path(tmpdir) / "store.db")
+            store.upsert_companies(
+                [
+                    {
+                        "duns": "1",
+                        "company_name": "No Site",
+                        "detail_url": "https://example.com/detail/1",
+                        "address": "x",
+                        "region": "y",
+                        "city": "z",
+                        "postal_code": "",
+                        "industry_path": "construction",
+                    },
+                    {
+                        "duns": "2",
+                        "company_name": "Has Site",
+                        "website": "https://has-site.example",
+                        "detail_url": "https://example.com/detail/2",
+                        "address": "x",
+                        "region": "y",
+                        "city": "z",
+                        "postal_code": "",
+                        "industry_path": "construction",
+                    },
+                ]
+            )
+            store.enqueue_detail_tasks(
+                [
+                    {"duns": "1", "company_name": "No Site", "detail_url": "https://example.com/detail/1"},
+                    {"duns": "2", "company_name": "Has Site", "detail_url": "https://example.com/detail/2"},
+                ]
+            )
+            task = store.claim_detail_task()
+            self.assertIsNotNone(task)
+            assert task is not None
+            self.assertEqual("2", task.duns)
+
     def test_site_result_keeps_p1_representative_when_names_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = DnbBrStore(Path(tmpdir) / "store.db")
