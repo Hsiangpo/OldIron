@@ -47,7 +47,9 @@ RESULTS_SUMMARY_HTML = """
 
 DETAIL_HTML = """
 <html><body>
+  <script type="application/ld+json">{"@context":"https://schema.org/","@type":"JobPosting","hiringOrganization":{"@type":"Organization","name":"東急建設株式会社","sameAs":"https://www.tokyu-cnst.co.jp/"}}</script>
   <h1>東急建設株式会社 【海外駐在・管理部門※MGR】数十億～数百円規模ODA案件</h1>
+  <a href="/company/search/">企業を探す</a>
   <a href="/company/80224721/">東急建設株式会社</a>
   <table>
     <tr><th><h3>本社所在地</h3></th><td>東京都 渋谷区渋谷１丁目１６－１４渋谷地下鉄ビル</td></tr>

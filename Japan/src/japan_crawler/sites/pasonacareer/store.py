@@ -122,6 +122,19 @@ class PasonacareerStore:
         row = conn.execute("SELECT COUNT(*) AS cnt FROM companies").fetchone()
         return int(row["cnt"] if row else 0)
 
+    def purge_placeholder_companies(self) -> int:
+        def _action(conn: sqlite3.Connection) -> int:
+            before = conn.total_changes
+            conn.execute(
+                """
+                DELETE FROM companies
+                WHERE company_name IN ('企業を探す')
+                """
+            )
+            return conn.total_changes - before
+
+        return int(self._run_write(_action) or 0)
+
     def get_checkpoint(self, scope: str = "job_list") -> dict[str, Any] | None:
         conn = self._conn()
         row = conn.execute(
@@ -229,4 +242,3 @@ def _dedupe_emails(emails: list[str]) -> list[str]:
         if clean and clean not in result:
             result.append(clean)
     return result
-

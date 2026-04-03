@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urlparse
 
@@ -59,11 +60,11 @@ def parse_job_cards(page_html: str) -> list[dict[str, str]]:
 
 def parse_job_detail(page_html: str) -> dict[str, str]:
     tree = html.fromstring(page_html)
+    job_posting = _extract_job_posting_json(tree)
     title = _clean_text(tree.xpath("string(//h1)") or "")
-    company_link = tree.cssselect('a[href^="/company/"]')
-    company_name = _clean_text(company_link[0].text_content()) if company_link else _extract_company_name_from_title(title)
+    company_name = _extract_company_name(job_posting, tree, title)
     address = _extract_labeled_value(tree, "本社所在地")
-    website = _normalize_website(_extract_website(tree))
+    website = _normalize_website(_extract_website(job_posting, tree))
     return {
         "company_name": company_name,
         "representative": "",
@@ -79,14 +80,46 @@ def _extract_labeled_value(tree, label: str) -> str:
     return _clean_text(rows[0].text_content())
 
 
-def _extract_website(tree) -> str:
+def _extract_website(job_posting: dict[str, object], tree) -> str:
+    hiring_org = job_posting.get("hiringOrganization")
+    if isinstance(hiring_org, dict):
+        same_as = str(hiring_org.get("sameAs") or "").strip()
+        if same_as:
+            return same_as
     links = tree.xpath('//th[h3[contains(normalize-space(.), "企業URL")]]/following-sibling::td[1]//a/@href')
     return str(links[0] or "").strip() if links else ""
+
+
+def _extract_company_name(job_posting: dict[str, object], tree, title: str) -> str:
+    hiring_org = job_posting.get("hiringOrganization")
+    if isinstance(hiring_org, dict):
+        name = _clean_text(str(hiring_org.get("name") or ""))
+        if name:
+            return name
+    for link in tree.cssselect('a[href^="/company/"]'):
+        text = _clean_text(link.text_content())
+        if text and text != "企業を探す":
+            return text
+    return _extract_company_name_from_title(title)
 
 
 def _extract_company_name_from_title(title: str) -> str:
     matched = re.match(r"(.+?)\s+の【", title)
     return _clean_text(matched.group(1)) if matched is not None else title
+
+
+def _extract_job_posting_json(tree) -> dict[str, object]:
+    for raw in tree.xpath('//script[@type="application/ld+json"]/text()'):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(payload, dict) and str(payload.get("@type") or "") == "JobPosting":
+            return payload
+    return {}
 
 
 def _normalize_website(value: str) -> str:

@@ -42,6 +42,12 @@ def run_pasonacareer(argv: list[str]) -> int:
     )
     output_dir = SITE_ROOT / "output" / "pasonacareer"
     proxy = args.proxy or os.getenv("HTTP_PROXY", "") or "http://127.0.0.1:7897"
+    from .store import PasonacareerStore
+
+    store = PasonacareerStore(output_dir / "pasonacareer_store.db")
+    purged = store.purge_placeholder_companies()
+    if purged:
+        LOGGER.warning("PasonaCareer 启动清理脏公司名记录：%d", purged)
     try:
         if args.mode == "all":
             return _run_all_concurrent(output_dir, proxy, args)
@@ -137,4 +143,3 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
         print(f"错误: {errors}")
         return 1
     return 0
-
