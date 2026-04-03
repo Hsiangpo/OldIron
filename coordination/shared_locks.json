@@ -1,5 +1,19 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T12:56:30Z",
-  "locks": []
+  "updated_at": "2026-04-03T13:29:21Z",
+  "locks": [
+    {
+      "lock_id": "lock-mac-openwork-all-batch-fix-20260403-1",
+      "status": "locked",
+      "path": "shared/oldiron_core/fc_email/llm_client.py",
+      "machine": "macbook-air",
+      "agent": "codex",
+      "task_id": "mac-openwork-all-batch-fix-20260403",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-03T13:29:21Z",
+      "heartbeat_at": "2026-04-03T13:29:21Z",
+      "expires_at": "2026-04-03T13:59:21Z",
+      "notes": "Batch openwork P3 work and suppress repeated TLS verify warnings; keep all-mode concurrent but non-starving."
+    }
+  ]
 }
