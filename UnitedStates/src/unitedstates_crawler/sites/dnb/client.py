@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -20,6 +21,7 @@ from curl_cffi import requests as cffi_requests
 from playwright.sync_api import sync_playwright
 
 
+LOGGER = logging.getLogger(__name__)
 LIST_API_URL = "https://www.dnb.com/business-directory/api/companyinformation"
 DETAIL_API_URL = "https://www.dnb.com/business-directory/api/companyprofile"
 DETAIL_URL_TEMPLATE = (
@@ -222,13 +224,17 @@ class DnbBrowserCookieProvider:
             ):
                 return list(self._snapshot_cookies), self._snapshot_headers
             if self._cookie_source == "cdp":
+                LOGGER.info("DNB 获取 cookie 快照：source=cdp force=%s", force)
                 cookies, headers = self._fetch_snapshot_via_cdp(domain_keyword)
             elif self._cookie_source == "launch":
                 try:
+                    LOGGER.info("DNB 获取 cookie 快照：source=launch force=%s", force)
                     cookies, headers = self._fetch_snapshot_via_launch(domain_keyword)
                 except Exception:
+                    LOGGER.warning("DNB 浏览器抓 cookie 失败，回退到 HTTP 种子")
                     cookies, headers = self._fetch_snapshot_via_http(domain_keyword)
             else:
+                LOGGER.info("DNB 获取 cookie 快照：source=http force=%s", force)
                 cookies, headers = self._fetch_snapshot_via_http(domain_keyword)
             self._snapshot_cookies = list(cookies)
             self._snapshot_headers = headers
@@ -390,10 +396,23 @@ class DnbCompanyInformationClient:
         self._cookie_lock = threading.Lock()
         self._cookies: list[dict[str, str]] = []
         self._browser_headers: DnbBrowserHeaders | None = None
+        self._forced_refresh_cooldown_seconds = max(
+            float(os.getenv("DNB_COOKIE_REFRESH_MIN_SECONDS", "120") or "120"),
+            0.0,
+        )
+        self._last_forced_refresh_at = 0.0
 
-    def refresh_cookies(self) -> None:
+    def refresh_cookies(self, *, force: bool = True) -> bool:
         with self._cookie_lock:
-            self._cookies, self._browser_headers = self._cookie_provider.fetch_snapshot(force=True)
+            now = time.monotonic()
+            if self._should_skip_forced_refresh(now=now, force=force):
+                return False
+            if force:
+                LOGGER.warning("DNB 触发强制刷新 cookie，将重新获取浏览器快照")
+            self._cookies, self._browser_headers = self._cookie_provider.fetch_snapshot(force=force)
+            if force:
+                self._last_forced_refresh_at = now
+            return True
 
     def _get_cookies(self) -> list[dict[str, str]]:
         with self._cookie_lock:
@@ -423,6 +442,20 @@ class DnbCompanyInformationClient:
         text = str(exc or "").lower()
         return any(hint in text for hint in _RETRYABLE_CURL_HINTS)
 
+    def _should_skip_forced_refresh(self, *, now: float, force: bool) -> bool:
+        if not force:
+            return False
+        if self._forced_refresh_cooldown_seconds <= 0:
+            return False
+        if not self._cookies or self._browser_headers is None:
+            return False
+        elapsed = now - self._last_forced_refresh_at
+        if elapsed >= self._forced_refresh_cooldown_seconds:
+            return False
+        remaining = self._forced_refresh_cooldown_seconds - elapsed
+        LOGGER.info("DNB cookie 强制刷新仍在冷却期，跳过本次浏览器重取：remaining=%.1fs", remaining)
+        return True
+
     def _request_json_with_retries(
         self,
         *,
@@ -446,7 +479,8 @@ class DnbCompanyInformationClient:
                     kwargs["json"] = json_payload
                 response = request(url, **kwargs)
                 if response.status_code == 403 and attempt < _DNB_REQUEST_RETRIES - 1:
-                    self.refresh_cookies()
+                    self.refresh_cookies(force=True)
+                    time.sleep(min(0.5 * (attempt + 1), 2.0))
                     continue
                 response.raise_for_status()
                 payload = response.json()

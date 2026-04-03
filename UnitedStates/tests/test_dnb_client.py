@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -18,6 +19,8 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
+from unitedstates_crawler.sites.dnb.client import DnbBrowserHeaders
+from unitedstates_crawler.sites.dnb.client import DnbCompanyInformationClient
 from unitedstates_crawler.sites.dnb.client import parse_companyinformation_payload
 from unitedstates_crawler.sites.dnb.client import parse_companyprofile_payload
 
@@ -103,7 +106,42 @@ SAMPLE_DETAIL_PAYLOAD = {
 }
 
 
+class _FakeCookieProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.headers = DnbBrowserHeaders(
+            user_agent="ua",
+            sec_ch_ua='"Chromium";v="146"',
+            sec_ch_ua_platform='"macOS"',
+            accept_language="en-US,en;q=0.9",
+        )
+
+    def fetch_snapshot(self, domain_keyword: str = "dnb.com", *, force: bool = False):
+        self.calls += 1
+        return (
+            [{"name": "sid", "value": str(self.calls), "domain": "www.dnb.com", "path": "/"}],
+            self.headers,
+        )
+
+    def fetch_cookies(self, domain_keyword: str = "dnb.com"):
+        cookies, _headers = self.fetch_snapshot(domain_keyword=domain_keyword, force=False)
+        return cookies
+
+    def fetch_browser_headers(self):
+        return self.headers
+
+
 class DnbClientTests(unittest.TestCase):
+    def test_refresh_cookies_debounces_forced_browser_snapshot(self) -> None:
+        provider = _FakeCookieProvider()
+        client = DnbCompanyInformationClient(cookie_provider=provider)
+        client._forced_refresh_cooldown_seconds = 60.0
+        with mock.patch("unitedstates_crawler.sites.dnb.client.time.monotonic", side_effect=[100.0, 110.0, 170.0]):
+            self.assertTrue(client.refresh_cookies(force=True))
+            self.assertFalse(client.refresh_cookies(force=True))
+            self.assertTrue(client.refresh_cookies(force=True))
+        self.assertEqual(2, provider.calls)
+
     def test_parse_companyinformation_payload(self) -> None:
         parsed = parse_companyinformation_payload(SAMPLE_PAYLOAD, "beverage_manufacturing")
         self.assertEqual(1, parsed.current_page)
