@@ -51,8 +51,12 @@ def extract_same_site_links(
             continue
 
         # 解析为绝对 URL
-        absolute = urljoin(page_url, href)
-        parsed = urlparse(absolute)
+        try:
+            absolute = urljoin(page_url, href)
+            parsed = urlparse(absolute)
+        except ValueError:
+            LOGGER.debug("跳过异常 href：page=%s href=%s", page_url, href)
+            continue
 
         # 只保留同站链接
         link_host = parsed.netloc.lower()

@@ -78,6 +78,11 @@ class TestLinkExtractor(unittest.TestCase):
         )
         self.assertEqual(["https://blog.example.com/post"], links)
 
+    def test_skips_invalid_bracketed_host_href(self) -> None:
+        html = '<a href="https://[HTTP_HOST]/broken">坏链接</a><a href="/ok">OK</a>'
+        links = extract_same_site_links(html, "https://example.com/")
+        self.assertEqual(["https://example.com/ok"], links)
+
 
 # ──────────────────────────────────────────────────────
 # sitemap 测试
