@@ -187,40 +187,6 @@ def _normalize_company_record(row: sqlite3.Row, existing_cols: set[str]) -> dict
         "source_job_url": str(row["source_job_url"] or "").strip() if "source_job_url" in existing_cols else "",
     }
 
-
-def _load_openwork_data(site_dir: Path) -> list[dict[str, str]]:
-    db_path = site_dir / "openwork_store.db"
-    if not db_path.exists():
-        return []
-
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        """
-        SELECT company_name, representative, website, address, industry, detail_url, emails
-        FROM companies
-        WHERE company_name != '' AND company_name IS NOT NULL
-        ORDER BY company_id
-        """
-    ).fetchall()
-    conn.close()
-
-    records: list[dict[str, str]] = []
-    for row in rows:
-        records.append(
-            {
-                "company_name": str(row["company_name"] or "").strip(),
-                "representative": str(row["representative"] or "").strip(),
-                "website": str(row["website"] or "").strip(),
-                "address": str(row["address"] or "").strip(),
-                "industry": str(row["industry"] or "").strip(),
-                "detail_url": str(row["detail_url"] or "").strip(),
-                "emails": str(row["emails"] or "").strip(),
-            }
-        )
-    return records
-
-
 def _filter_emails(emails_str: str) -> str:
     if not emails_str:
         return ""
