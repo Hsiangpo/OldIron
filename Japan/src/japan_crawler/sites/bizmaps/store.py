@@ -98,8 +98,31 @@ class BizmapsStore:
             FROM prefs p
             LEFT JOIN checkpoints cp ON cp.pref_code = p.pref_code
             WHERE COALESCE(cp.status, 'pending') != 'done'
-            ORDER BY p.pref_code
+            ORDER BY
+                CASE COALESCE(cp.status, 'pending')
+                    WHEN 'error' THEN 0
+                    WHEN 'running' THEN 1
+                    ELSE 2
+                END,
+                p.pref_code
         """).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_prefs_by_status(self, status: str) -> list[dict[str, Any]]:
+        conn = self._conn()
+        rows = conn.execute(
+            """
+            SELECT p.pref_code, p.name, p.total,
+                   COALESCE(cp.last_page, 0) AS last_page,
+                   COALESCE(cp.total_pages, 0) AS total_pages,
+                   COALESCE(cp.status, 'pending') AS status
+            FROM prefs p
+            LEFT JOIN checkpoints cp ON cp.pref_code = p.pref_code
+            WHERE COALESCE(cp.status, 'pending') = ?
+            ORDER BY p.pref_code
+            """,
+            (status,),
+        ).fetchall()
         return [dict(r) for r in rows]
 
     def get_all_prefs(self) -> list[dict[str, Any]]:

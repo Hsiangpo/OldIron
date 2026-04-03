@@ -37,6 +37,7 @@ PERSONAL_EMAIL_DOMAINS = {
 
 DEFAULT_CONCURRENCY = 64
 DEFAULT_COMMIT_INTERVAL = 20
+DEFAULT_BATCH_SIZE = 512
 
 
 def run_pipeline_email(
@@ -100,35 +101,82 @@ def run_pipeline_email(
             logger.debug("邮箱提取失败: %s — %s", name, exc)
             return name, addr, [], ""
 
+    batch_size = _resolve_batch_size(concurrency)
+    local = threading.local()
+    created_services: list[FirecrawlEmailService] = []
+    service_lock = threading.Lock()
+
+    def _get_service() -> FirecrawlEmailService:
+        svc = getattr(local, "service", None)
+        if svc is None:
+            svc = FirecrawlEmailService(settings, firecrawl_client=crawler)
+            local.service = svc
+            with service_lock:
+                created_services.append(svc)
+        return svc
+
+    def _worker(company: dict) -> tuple[str, str, list[str], str]:
+        name = company["company_name"]
+        addr = company.get("address", "")
+        website = company["website"]
+        svc = _get_service()
+        try:
+            result = svc.discover_emails(
+                company_name=name,
+                homepage=website,
+                existing_representative=company.get("representative", ""),
+            )
+            emails = [e.strip().lower() for e in result.emails if e.strip()]
+            rep = result.representative or ""
+            return name, addr, emails, rep
+        except Exception as exc:
+            logger.debug("邮箱提取失败: %s — %s", name, exc)
+            return name, addr, [], ""
+
     try:
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            futures = {executor.submit(_worker, c): c for c in all_companies}
-            for future in as_completed(futures):
-                company = futures[future]
-                try:
-                    name, addr, emails, rep = future.result()
-                    with lock:
-                        processed += 1
-                        _save_email_result(store, name, addr, emails, rep)
-                        if emails:
-                            found += 1
-                        if processed <= 5 or processed % 20 == 0:
-                            logger.info(
-                                "[Email %d/%d] %.1f%% %s → %s",
-                                processed, len(all_companies),
-                                processed / len(all_companies) * 100,
-                                name[:30],
-                                ", ".join(emails[:2]) if emails else "-",
-                            )
-                except Exception as exc:
-                    with lock:
-                        processed += 1
-                    logger.warning("邮箱工作线程异常: %s", exc)
+            for batch_index, batch in enumerate(_iter_batches(all_companies, batch_size), start=1):
+                logger.info("Email 批次 %d：大小 %d", batch_index, len(batch))
+                futures = {executor.submit(_worker, c): c for c in batch}
+                for future in as_completed(futures):
+                    company = futures[future]
+                    try:
+                        name, addr, emails, rep = future.result()
+                        with lock:
+                            processed += 1
+                            _save_email_result(store, name, addr, emails, rep)
+                            if emails:
+                                found += 1
+                            if processed <= 5 or processed % 20 == 0:
+                                logger.info(
+                                    "[Email %d/%d] %.1f%% %s → %s",
+                                    processed, len(all_companies),
+                                    processed / len(all_companies) * 100,
+                                    name[:30],
+                                    ", ".join(emails[:2]) if emails else "-",
+                                )
+                    except Exception as exc:
+                        with lock:
+                            processed += 1
+                        logger.warning("邮箱工作线程异常: %s", exc)
     except KeyboardInterrupt:
         logger.info("邮箱提取用户中断")
+    finally:
+        for svc in created_services:
+            svc.close()
 
     logger.info("Pipeline 3 完成：处理 %d 家, 找到邮箱 %d 家", processed, found)
     return {"processed": processed, "found": found}
+
+
+def _resolve_batch_size(concurrency: int) -> int:
+    return max(int(concurrency or 1) * 4, DEFAULT_BATCH_SIZE)
+
+
+def _iter_batches(items: list[dict], batch_size: int):
+    size = max(int(batch_size or 1), 1)
+    for index in range(0, len(items), size):
+        yield items[index:index + size]
 
 
 def _build_settings(output_dir: Path) -> FirecrawlEmailSettings:

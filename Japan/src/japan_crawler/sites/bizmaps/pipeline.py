@@ -58,7 +58,6 @@ def run_pipeline_list(
     else:
         logger.info("已有 %d 个都道府県在库中", len(existing))
 
-    # 第二步：逐都道府県逐页采集
     pending = store.get_pending_prefs()
     if max_prefs > 0:
         pending = pending[:max_prefs]
@@ -67,55 +66,21 @@ def run_pipeline_list(
     total_done = 0
 
     for pref in pending:
-        pref_code = pref["pref_code"]
-        pref_name = pref["name"]
-        last_page = pref.get("last_page", 0)
-        start_page = last_page + 1 if last_page > 0 else 1
-
-        logger.info("━━ [%s] %s (预计 %d 家) ━━", pref_code, pref_name, pref["total"])
-
-        # 获取首页确定总页数
-        next_ph = ""  # 下一页的 ph 签名 token
-        if start_page == 1:
-            result = _process_first_page(client, store, pref_code, pref_name)
-            if result["count"] < 0:
-                continue  # 首页获取失败，跳过该都道府県
-            total_new += result["count"]
-            next_ph = result["next_ph"]
-            start_page = 2
-        else:
-            # 续跑：从 checkpoint 恢复上次保存的 ph
-            cp = store.get_checkpoint(pref_code)
-            if cp:
-                next_ph = cp.get("last_ph", "")
-                if next_ph:
-                    logger.info("  续跑 page=%d，从 checkpoint 恢复 ph", start_page)
-                else:
-                    # ph 丢失（旧库或首次升级），重置为 page=1 重新开始
-                    # UNIQUE(company_name, address) 约束保证已入库数据不会重复
-                    logger.warning("  ph 缺失，重置 %s 从 page=1 重新开始（已有数据受 UNIQUE 约束保护）", pref_name)
-                    start_page = 1
-                    result = _process_first_page(client, store, pref_code, pref_name)
-                    if result["count"] < 0:
-                        continue
-                    total_new += result["count"]
-                    next_ph = result["next_ph"]
-                    start_page = 2
-
-        cp = store.get_checkpoint(pref_code)
-        total_pages = cp["total_pages"] if cp else 1
-
-        # 翻页采集
-        page_ok = _crawl_remaining_pages(
-            client, store, pref_code, pref_name,
-            start_page, total_pages, next_ph,
-        )
-        total_new += page_ok["new"]
-
-        if page_ok["completed"]:
-            store.update_checkpoint(pref_code, total_pages, total_pages, "done")
+        result = _run_prefecture(client, store, pref, force_restart=False)
+        total_new += result["new"]
+        if result["completed"]:
             total_done += 1
-            logger.info("  ✓ %s 完成 (%d 页)", pref_name, total_pages)
+
+    retryable_errors = store.get_prefs_by_status("error")
+    if max_prefs > 0:
+        retryable_errors = retryable_errors[:max_prefs]
+    if retryable_errors:
+        logger.info("检测到 %d 个 error 都道府県，重置后自动补跑一次", len(retryable_errors))
+    for pref in retryable_errors:
+        result = _run_prefecture(client, store, pref, force_restart=True)
+        total_new += result["new"]
+        if result["completed"]:
+            total_done += 1
 
     total_companies = store.get_company_count()
     stats = client.stats
@@ -129,6 +94,57 @@ def run_pipeline_list(
         "total_companies": total_companies,
         **stats,
     }
+
+
+def _run_prefecture(
+    client: BizmapsClient,
+    store: BizmapsStore,
+    pref: dict[str, object],
+    *,
+    force_restart: bool,
+) -> dict[str, object]:
+    """执行单个都道府県采集，可选强制从 page=1 补跑。"""
+    pref_code = str(pref["pref_code"])
+    pref_name = str(pref["name"])
+    logger.info("━━ [%s] %s (预计 %d 家) ━━", pref_code, pref_name, int(pref.get("total", 0) or 0))
+
+    last_page = int(pref.get("last_page", 0) or 0)
+    start_page = 1 if force_restart else (last_page + 1 if last_page > 0 else 1)
+    next_ph = ""
+    new_total = 0
+
+    if start_page == 1:
+        if force_restart:
+            logger.warning("  %s 进入 error，自动从 page=1 补跑一次（UNIQUE 约束保护已入库数据）", pref_name)
+        result = _process_first_page(client, store, pref_code, pref_name)
+        if result["count"] < 0:
+            return {"new": 0, "completed": False}
+        new_total = result["count"]
+        next_ph = result["next_ph"]
+        start_page = 2
+    else:
+        cp = store.get_checkpoint(pref_code)
+        if cp:
+            next_ph = cp.get("last_ph", "")
+            if next_ph:
+                logger.info("  续跑 page=%d，从 checkpoint 恢复 ph", start_page)
+            else:
+                logger.warning("  ph 缺失，重置 %s 从 page=1 重新开始（已有数据受 UNIQUE 约束保护）", pref_name)
+                result = _process_first_page(client, store, pref_code, pref_name)
+                if result["count"] < 0:
+                    return {"new": 0, "completed": False}
+                new_total = result["count"]
+                next_ph = result["next_ph"]
+                start_page = 2
+    cp = store.get_checkpoint(pref_code)
+    total_pages = cp["total_pages"] if cp else 1
+
+    page_ok = _crawl_remaining_pages(client, store, pref_code, pref_name, start_page, total_pages, next_ph)
+    new_total += page_ok["new"]
+    if page_ok["completed"]:
+        store.update_checkpoint(pref_code, total_pages, total_pages, "done")
+        logger.info("  ✓ %s 完成 (%d 页)", pref_name, total_pages)
+    return {"new": new_total, "completed": page_ok["completed"]}
 
 
 def _process_first_page(client: BizmapsClient, store: BizmapsStore, pref_code: str, pref_name: str) -> dict:
