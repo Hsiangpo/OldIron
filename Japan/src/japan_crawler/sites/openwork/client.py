@@ -87,12 +87,12 @@ class OpenworkClient:
             os.getenv("TWOCAPTCHA_API_KEY", "") or os.getenv("CAPTCHA_API_KEY", "")
         ).strip()
         self._captcha_notice_logged = False
-        self._manual_captcha_fallback_allowed = not self._captcha_api_key
         self._browser_client = None
         if browser_profile_dir is not None:
             self._browser_client = OpenworkPersistentBrowser(
                 user_data_dir=Path(browser_profile_dir),
                 proxy_url=self._proxy_url,
+                headless_default=False,
             )
         if self._proxy_url:
             LOGGER.info("使用代理: %s", self._proxy_url)
@@ -141,6 +141,9 @@ class OpenworkClient:
                         if solved is not None:
                             return solved
                         if self._captcha_api_key:
+                            if self._browser_client is not None:
+                                LOGGER.info("OpenWork 2cc 未解开验证码，自动回退到浏览器 profile 抓取：%s", url)
+                                return self._browser_response(url)
                             if use_proxy:
                                 self._disable_proxy_temporarily(f"挑战页: {url}")
                                 self._log_protocol_fallback_once()
@@ -159,6 +162,9 @@ class OpenworkClient:
                     if response.status_code == 403:
                         self._error_count += 1
                         if self._captcha_api_key:
+                            if self._browser_client is not None:
+                                LOGGER.info("OpenWork 403 且 2cc 未解开验证码，自动回退到浏览器 profile 抓取：%s", url)
+                                return self._browser_response(url)
                             raise RuntimeError(f"OpenWork 403 且 2cc 未解开验证码：{url}")
                         LOGGER.warning("403 禁止访问，切换浏览器复用：%s", url)
                         return self._browser_response(url)
@@ -180,8 +186,6 @@ class OpenworkClient:
         return None
 
     def _browser_response(self, url: str) -> _HtmlResponse:
-        if not self._manual_captcha_fallback_allowed:
-            raise RuntimeError(f"OpenWork 已禁用人工/浏览器验证码回退：{url}")
         if self._browser_client is None:
             raise RuntimeError("OpenWork 浏览器 profile 未配置。")
         with self._browser_lock:
@@ -397,4 +401,4 @@ class OpenworkClient:
 
     @property
     def browser_enabled(self) -> bool:
-        return self._browser_client is not None and self._manual_captcha_fallback_allowed
+        return self._browser_client is not None

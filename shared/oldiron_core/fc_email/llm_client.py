@@ -16,6 +16,7 @@ from bs4 import XMLParsedAsHTMLWarning
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 LOGGER = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+_TLS_VERIFY_NOTICE_BASE_URLS: set[str] = set()
 
 
 def _should_disable_tls_verify(*, base_url: str, verify_mode: str) -> bool:
@@ -111,7 +112,10 @@ class EmailUrlLlmClient:
         if proxy_url:
             client_kwargs["proxy"] = proxy_url
         if _should_disable_tls_verify(base_url=base_url, verify_mode=verify_mode):
-            LOGGER.warning("LLM 客户端已关闭 TLS 严格校验：base_url=%s", base_url or "default")
+            base_key = str(base_url or "default").strip() or "default"
+            if base_key not in _TLS_VERIFY_NOTICE_BASE_URLS:
+                LOGGER.warning("LLM 客户端已关闭 TLS 严格校验：base_url=%s", base_key)
+                _TLS_VERIFY_NOTICE_BASE_URLS.add(base_key)
             client_kwargs["verify"] = False
         return httpx_module.Client(**client_kwargs)
 
