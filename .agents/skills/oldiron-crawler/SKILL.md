@@ -75,8 +75,12 @@ At the start of substantial work:
    - proxy settings (`7897` is the default outbound proxy port in this project)
 4. If protocol exploration is needed, ensure the workflow follows the repository's crawler tooling expectations.
 5. Read `coordination/active_tasks.json` and `coordination/shared_locks.json` before substantial edits.
-6. If the planned work touches a high-risk shared zone recorded in `AGENTS.md`, register the task and claim the shared lock before editing.
-7. If another active task already owns or locks the same scope, stop and report the conflict instead of editing through it.
+6. Classify the task first:
+   - `site_local` if it stays inside one country/site-local scope
+   - `shared_zone` if it touches any high-risk shared zone in `AGENTS.md`
+7. If the task is `site_local`, register the task and push the task branch early so the remote machine can see the work started.
+8. If the task is `shared_zone`, register the task, claim a shared lease lock, set `expires_at` + `heartbeat_at`, and push the lock to the remote before editing the shared-zone files.
+9. If another active task already owns or locks the same scope, stop and report the conflict instead of editing through it.
 8. If SQLite databases are being moved across machines:
    - stop the source process first
    - sync `.db`, `-wal`, and `-shm` together when the sidecar files exist
@@ -340,6 +344,8 @@ When the user has explicitly asked for git actions in the current session:
 - treat `git add` + `git commit` + `git push` as required completion steps
 - do not stop after local edits or local verification
 - do not report the task as complete while verified tracked changes are still only local
+- for `shared_zone` tasks, push the lease lock first, then edit the shared files, then release the lock in the completion push
+- for `site_local` tasks, push the task branch early for visibility even though a shared lock is not required
 
 If the task includes deployment to the remote Windows machine, use the machine record in `AGENTS.md` as the source of truth.
 

@@ -27,9 +27,12 @@ Example:
 - Task ID:
 - Machine:
 - Agent:
-- Branch:
+- Base Branch:
+- Working Branch:
+- Change Class:
 - GitHub Ref:
 - Related Shared Locks:
+- Lease Expiry At:
 
 ## What Was Done
 
@@ -52,3 +55,5 @@ Do not leave a partial shared-zone change without either:
 
 - an updated task + lock entry that clearly shows it is still owned
 - or a handoff note that explains what is safe to continue
+
+For expired shared locks, the handoff note should say whether takeover is safe or not.

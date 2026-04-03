@@ -14,7 +14,7 @@
 ## 当前开发口径
 
 - 多机协作模型：**不同机器跑不同站点**，按国家维度合并交付。不做同一站点多机分片。
-- 双 Codex 并行开发时，统一使用 `coordination/` + GitHub issue / PR 双通道做任务登记、共享区加锁和交接。
+- 双 Codex 并行开发时，统一使用 `coordination/` + GitHub issue / PR 双通道做任务登记、共享区租约锁和交接。
 - 邮箱补充路线：已从 `Firecrawl` 迁移到**协议爬虫（curl_cffi）+ LLM**。协议爬虫抓取网页，HTML 转 Markdown 后由 LLM 提取邮箱和代表人。
 - 老旧实现统一归档到 `<Country>/bak/` 或 `former/`，新开发全部接入新框架。
 
@@ -123,16 +123,32 @@ python product.py Denmark day1
 - 任意 `<Country>/shared/`
 - 任意 `<Country>/src/*/delivery.py`
 
+任务先分两类：
+
+- `site_local`
+  - 只改某个国家/站点自己的代码，不碰共享高风险区
+- `shared_zone`
+  - 会改 `shared/`、根文档、根 `product.py`、`.github/`、`coordination/`、任意 `delivery.py` 这类共享区
+
 默认流程：
 
 1. `git pull`
 2. 读取 `AGENTS.md`
 3. 读取 `coordination/active_tasks.json`
 4. 读取 `coordination/shared_locks.json`
-5. 先登记任务，再动手
-6. 如果要改高风险共享区，必须先加锁再改
-7. 改完后 push，并释放锁
-8. 如果工作未完成，写 `coordination/handoffs/` 交接文档
+5. 先判断任务属于 `site_local` 还是 `shared_zone`
+6. `site_local`：
+   - 先登记任务
+   - 创建任务分支
+   - 尽早把任务分支推到远端
+7. `shared_zone`：
+   - 先登记任务
+   - 先写租约锁（`expires_at` + `heartbeat_at`）
+   - 先把锁推到远端，再改共享区
+8. 改完验证后，先同步最新代码并合并
+9. 推代码
+10. 如果是共享区任务，再释放锁并一起推送
+11. 如果工作未完成，写 `coordination/handoffs/` 交接文档
 
 ## 目录约定
 

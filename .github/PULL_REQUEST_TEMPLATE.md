@@ -7,6 +7,9 @@
 - Task ID:
 - Machine:
 - Agent:
+- Change Class:
+- Base Branch:
+- Working Branch:
 - GitHub coordination issue:
 - Related shared lock paths:
 - `coordination/active_tasks.json` updated: yes / no
@@ -18,6 +21,7 @@
 - Country / Site:
 - High-risk shared zone touched:
 - Key files:
+- Task branch was pushed early for visibility: yes / no / not needed
 
 ## Verification
 

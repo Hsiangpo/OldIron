@@ -70,9 +70,16 @@
   3. read `coordination/active_tasks.json`
   4. read `coordination/shared_locks.json`
   5. check whether the planned scope is already owned or locked
+- Every task must be classified before implementation:
+  - `site_local`: only touches one country/site-local scope and does not modify the high-risk shared zone
+  - `shared_zone`: touches any high-risk shared zone path listed below
 - Default ownership rule:
   - one active Codex owns one country/site scope at a time
   - do not let two active Codex agents edit the same site scope simultaneously
+- Task branch rule:
+  - code changes should normally be made on a task branch, not directly on `main`
+  - recommended branch format: `<machine>/<country-or-scope>/<short-task>`
+  - site-local work should push its task branch early so the other machine can see the branch exists
 - High-risk shared zone rule:
   - the following paths are high-risk shared zones:
     - `shared/`
@@ -83,17 +90,30 @@
     - `coordination/`
     - any `<Country>/shared/`
     - any `<Country>/src/*/delivery.py`
+  - shared-zone work uses a lease lock, not an indefinite lock
   - before editing any high-risk shared zone, the agent must:
     1. register or update its task in `coordination/active_tasks.json`
     2. claim the exact path(s) in `coordination/shared_locks.json`
-    3. record the related GitHub issue/PR reference in the task/lock entry
-- Country/site-local changes outside the high-risk shared zone still require an active task entry, but do not require a shared lock unless they touch shared paths.
+    3. set `expires_at` and `heartbeat_at` on the lock entry
+    4. record the related GitHub issue/PR reference in the task/lock entry
+    5. push the lock state to the remote before editing the shared-zone files
+- Site-local changes outside the high-risk shared zone still require an active task entry, but do not require a shared lock.
+- For site-local work:
+  - update `coordination/active_tasks.json`
+  - create a task branch
+  - push that branch early so the remote machine can see the work has started
+  - a separate shared lock is not required
 - If a planned path is already locked by another active task, do not edit it. Stop, sync the latest state, and ask the user to reassign or sequence the work.
 - Keep lock scope small. Lock exact files or narrow directories; do not lock an entire country unless the whole country truly needs exclusive ownership.
+- Lease expiry rule:
+  - shared locks must always include `expires_at`
+  - refresh `heartbeat_at` while the shared-zone task is still active
+  - if a lock is expired and there has been no recent heartbeat, another agent may take over after pulling latest state and writing a takeover note
 - Release rule:
   - after push or when handing work back, update `coordination/active_tasks.json`
   - release any shared lock in `coordination/shared_locks.json`
   - if the work is partial, add a handoff note under `coordination/handoffs/`
+  - shared lock release should travel with the completion push; do not leave an already-finished shared task locked on the remote
 - Machine roles in the `Machines` section are default runtime responsibilities, not permanent exclusive development locks. Real-time ownership is defined by the coordination files and current task assignment.
 
 ## Country Delivery Rules

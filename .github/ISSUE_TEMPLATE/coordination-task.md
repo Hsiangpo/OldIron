@@ -11,7 +11,9 @@ assignees: []
 - Task ID:
 - Machine:
 - Agent:
-- Branch:
+- Change Class: site_local / shared_zone
+- Base Branch:
+- Working Branch:
 
 ## Scope
 
@@ -24,6 +26,8 @@ assignees: []
 - Related `coordination/active_tasks.json` entry:
 - Related `coordination/shared_locks.json` entry:
 - Expected lock paths:
+- Lease heartbeat:
+- Lease expiry:
 
 ## Runtime / Delivery Notes
 
