@@ -214,3 +214,7 @@ class OpenworkClient:
     @property
     def browser_primary(self) -> bool:
         return self._browser_client is not None and self._browser_mode
+
+    @property
+    def browser_enabled(self) -> bool:
+        return self._browser_client is not None

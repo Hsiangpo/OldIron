@@ -5,9 +5,11 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urljoin
 
 from playwright.sync_api import Error, TimeoutError, sync_playwright
 
@@ -19,6 +21,7 @@ DETAIL_READY_SELECTOR = "table.definitionList-wiki tr"
 _AUTH_TEXT = "画像認証"
 _DEFAULT_TIMEOUT_MS = 90000
 _DEFAULT_MANUAL_WAIT_SECONDS = 600
+_DETAIL_PATH_RE = re.compile(r'href="(/company\.php\?m_id=[^"]+)"')
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -59,29 +62,46 @@ class OpenworkPersistentBrowser:
         atexit.register(self.close)
 
     def prepare_manual_auth(self, target_url: str = LIST_URL, ready_selector: str = LIST_READY_SELECTOR) -> None:
-        """打开可见浏览器，让人工完成一次验证码并写入 profile。"""
+        """打开可见浏览器，让人工完成列表页和详情页验证码。"""
         with self._lock:
             self._start(headless=False)
             page = self._page_handle()
             page.goto(target_url, wait_until="domcontentloaded", timeout=self._timeout_ms)
-            if self._wait_ready(page, ready_selector) and self._looks_like_real_page(page.content()):
-                LOGGER.info("OpenWork profile 已可直接访问，无需再次人工验证。")
-                self._close_no_lock()
-                return
-            page.bring_to_front()
-            LOGGER.warning(
-                "OpenWork 当前需要人工完成图片验证码。请在打开的 Chrome 窗口中完成验证；最多等待 %d 秒。",
-                self._manual_wait_seconds,
+            self._ensure_page_ready(
+                page,
+                ready_selector=ready_selector,
+                target_url=target_url,
+                stage_label="列表页",
             )
-            deadline = time.time() + self._manual_wait_seconds
-            while time.time() < deadline:
-                if self._wait_ready(page, ready_selector) and self._looks_like_real_page(page.content()):
-                    LOGGER.info("OpenWork 浏览器 profile 已通过验证：%s", self._user_data_dir)
-                    self._close_no_lock()
-                    return
-                page.wait_for_timeout(2000)
+            detail_url = self._extract_first_detail_url(page.content())
+            if not detail_url:
+                self._close_no_lock()
+                raise OpenworkBrowserBlocked("OpenWork 列表页已打开，但未找到可用的公司详情链接。")
+            page.goto(detail_url, wait_until="domcontentloaded", timeout=self._timeout_ms)
+            self._ensure_page_ready(
+                page,
+                ready_selector=DETAIL_READY_SELECTOR,
+                target_url=detail_url,
+                stage_label="详情页",
+            )
+            LOGGER.info("OpenWork 浏览器 profile 已通过列表页和详情页验证：%s", self._user_data_dir)
             self._close_no_lock()
-            raise OpenworkBrowserBlocked(self._build_blocker_message(target_url))
+
+    def _ensure_page_ready(self, page, *, ready_selector: str, target_url: str, stage_label: str) -> None:
+        if self._wait_ready(page, ready_selector) and self._looks_like_real_page(page.content()):
+            return
+        page.bring_to_front()
+        LOGGER.warning(
+            "OpenWork %s 当前需要人工完成图片验证码。请在打开的 Chrome 窗口中完成验证；最多等待 %d 秒。",
+            stage_label,
+            self._manual_wait_seconds,
+        )
+        deadline = time.time() + self._manual_wait_seconds
+        while time.time() < deadline:
+            if self._wait_ready(page, ready_selector) and self._looks_like_real_page(page.content()):
+                return
+            page.wait_for_timeout(2000)
+        raise OpenworkBrowserBlocked(self._build_blocker_message(target_url))
 
     def fetch_html(self, *, url: str, ready_selector: str) -> str:
         """使用固定 profile 抓取真实页面 HTML。"""
@@ -156,6 +176,12 @@ class OpenworkPersistentBrowser:
         if "g-recaptcha" in lowered:
             return False
         return True
+
+    def _extract_first_detail_url(self, page_html: str) -> str:
+        matched = _DETAIL_PATH_RE.search(str(page_html or ""))
+        if matched is None:
+            return ""
+        return urljoin(LIST_URL, str(matched.group(1) or "").strip())
 
     def _build_blocker_message(self, url: str) -> str:
         return (

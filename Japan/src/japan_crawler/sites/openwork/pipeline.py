@@ -103,7 +103,7 @@ def _load_company_details(
     cards: list[dict[str, str]],
     detail_workers: int,
 ) -> list[dict[str, str]]:
-    if detail_workers <= 1 or client.browser_primary:
+    if detail_workers <= 1 or client.browser_enabled:
         return [_fetch_company_detail(client, card) for card in cards]
     results: list[dict[str, str]] = []
     with ThreadPoolExecutor(max_workers=detail_workers, thread_name_prefix="openwork-detail") as executor:
