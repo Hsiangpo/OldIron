@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import random
@@ -12,7 +13,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
+import httpx
 from curl_cffi.requests import Session
+from lxml import html
 
 from .browser_profile import DETAIL_READY_SELECTOR, LIST_READY_SELECTOR, OpenworkPersistentBrowser
 
@@ -38,6 +41,8 @@ _PROXY_FALLBACK_RESPONSE_HINTS = (
     "openwork,画像認証",
     "g-recaptcha",
 )
+_TWO_CAPTCHA_CREATE_URL = "https://api.2captcha.com/createTask"
+_TWO_CAPTCHA_RESULT_URL = "https://api.2captcha.com/getTaskResult"
 
 
 @dataclass(slots=True)
@@ -46,6 +51,16 @@ class _HtmlResponse:
 
     status_code: int
     text: str
+
+
+@dataclass(slots=True)
+class _CaptchaChallenge:
+    """OpenWork 图片验证码表单。"""
+
+    submit_url: str
+    image_url: str
+    answer_field: str
+    form_fields: dict[str, str]
 
 
 class OpenworkClient:
@@ -68,6 +83,10 @@ class OpenworkClient:
         self._browser_mode = os.getenv("OPENWORK_FORCE_BROWSER", "").strip() == "1"
         self._browser_notice_logged = False
         self._protocol_fallback_logged = False
+        self._captcha_api_key = str(
+            os.getenv("TWOCAPTCHA_API_KEY", "") or os.getenv("CAPTCHA_API_KEY", "")
+        ).strip()
+        self._captcha_notice_logged = False
         self._browser_client = None
         if browser_profile_dir is not None:
             self._browser_client = OpenworkPersistentBrowser(
@@ -113,6 +132,13 @@ class OpenworkClient:
                     response = self._session(use_proxy).get(url, params=params, timeout=30)
                     self._request_count += 1
                     if self._should_fallback_direct_from_response(response):
+                        solved = self._solve_captcha_if_possible(
+                            session=self._session(use_proxy),
+                            url=url,
+                            response=response,
+                        )
+                        if solved is not None:
+                            return solved
                         if use_proxy:
                             self._disable_proxy_temporarily(f"挑战页: {url}")
                             self._log_protocol_fallback_once()
@@ -215,6 +241,140 @@ class OpenworkClient:
             return
         LOGGER.info("OpenWork 协议详情已被站点拦截，自动回退到浏览器补抓。")
         self._protocol_fallback_logged = True
+
+    def _solve_captcha_if_possible(
+        self,
+        *,
+        session: Session,
+        url: str,
+        response: Any,
+    ) -> _HtmlResponse | None:
+        challenge = self._extract_captcha_challenge(url=url, response=response)
+        if challenge is None:
+            return None
+        if not self._captcha_api_key:
+            self._log_missing_2captcha_once()
+            return None
+        LOGGER.info("OpenWork 检测到图片验证码，开始走 2cc 自动识别：%s", url)
+        try:
+            image_bytes = self._fetch_captcha_image(session=session, challenge=challenge)
+            answer = self._solve_image_with_2captcha(image_bytes)
+            solved = self._submit_captcha_answer(session=session, challenge=challenge, answer=answer)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("OpenWork 2cc 自动识别失败，回退浏览器方案：%s", exc)
+            return None
+        if self._should_fallback_direct_from_response(solved):
+            LOGGER.warning("OpenWork 2cc 已提交但站点仍返回验证码，回退浏览器方案。")
+            return None
+        LOGGER.info("OpenWork 2cc 自动识别成功，继续协议抓取。")
+        return solved
+
+    def _extract_captcha_challenge(self, *, url: str, response: Any) -> _CaptchaChallenge | None:
+        page_html = str(getattr(response, "text", "") or "")
+        if not page_html:
+            return None
+        if "captcha[captcha]" not in page_html and "generate-captcha" not in page_html:
+            return None
+        tree = html.fromstring(page_html)
+        form = tree.cssselect("form")
+        if not form:
+            return None
+        form_node = form[0]
+        submit_url = urljoin(url, str(form_node.get("action", "") or "").strip()) or url
+        fields: dict[str, str] = {}
+        answer_field = ""
+        for input_node in form_node.cssselect("input"):
+            name = str(input_node.get("name", "") or "").strip()
+            if not name:
+                continue
+            input_type = str(input_node.get("type", "") or "").strip().lower()
+            value = str(input_node.get("value", "") or "")
+            fields[name] = value
+            if input_type == "text":
+                answer_field = name
+        image_node = tree.cssselect('img[src*="generate-captcha"], img[src*="captcha"]')
+        if not image_node or not answer_field:
+            return None
+        image_url = urljoin(url, str(image_node[0].get("src", "") or "").strip())
+        return _CaptchaChallenge(
+            submit_url=submit_url,
+            image_url=image_url,
+            answer_field=answer_field,
+            form_fields=fields,
+        )
+
+    def _fetch_captcha_image(self, *, session: Session, challenge: _CaptchaChallenge) -> bytes:
+        response = session.get(challenge.image_url, timeout=30)
+        content = bytes(getattr(response, "content", b"") or b"")
+        if not content:
+            raise RuntimeError("验证码图片下载为空")
+        return content
+
+    def _solve_image_with_2captcha(self, image_bytes: bytes) -> str:
+        proxy_url = str(os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "").strip()
+        client_kwargs: dict[str, Any] = {"timeout": 30, "follow_redirects": True}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+        payload = {
+            "clientKey": self._captcha_api_key,
+            "task": {
+                "type": "ImageToTextTask",
+                "body": base64.b64encode(image_bytes).decode("ascii"),
+                "case": True,
+                "numeric": 4,
+                "minLength": 6,
+                "maxLength": 6,
+                "comment": "enter the exact 6-character captcha from the image",
+            },
+            "languagePool": "en",
+        }
+        with httpx.Client(**client_kwargs) as client:
+            create_resp = client.post(_TWO_CAPTCHA_CREATE_URL, json=payload)
+            create_resp.raise_for_status()
+            create_data = create_resp.json()
+            if int(create_data.get("errorId", 1)) != 0:
+                raise RuntimeError(f"2cc createTask 失败: {create_data}")
+            task_id = create_data.get("taskId")
+            if not task_id:
+                raise RuntimeError("2cc 未返回 taskId")
+            for _ in range(25):
+                time.sleep(3)
+                result_resp = client.post(
+                    _TWO_CAPTCHA_RESULT_URL,
+                    json={"clientKey": self._captcha_api_key, "taskId": task_id},
+                )
+                result_resp.raise_for_status()
+                result_data = result_resp.json()
+                if int(result_data.get("errorId", 1)) != 0:
+                    raise RuntimeError(f"2cc getTaskResult 失败: {result_data}")
+                if result_data.get("status") == "processing":
+                    continue
+                answer = str((result_data.get("solution") or {}).get("text") or "").strip()
+                if answer:
+                    return answer
+                raise RuntimeError(f"2cc 返回空答案: {result_data}")
+        raise RuntimeError("2cc 超时未返回结果")
+
+    def _submit_captcha_answer(
+        self,
+        *,
+        session: Session,
+        challenge: _CaptchaChallenge,
+        answer: str,
+    ) -> _HtmlResponse:
+        form_data = dict(challenge.form_fields)
+        form_data[challenge.answer_field] = answer
+        response = session.post(challenge.submit_url, data=form_data, timeout=30, allow_redirects=True)
+        return _HtmlResponse(
+            status_code=int(getattr(response, "status_code", 0) or 0),
+            text=str(getattr(response, "text", "") or ""),
+        )
+
+    def _log_missing_2captcha_once(self) -> None:
+        if self._captcha_notice_logged:
+            return
+        LOGGER.info("OpenWork 未配置 2cc key，验证码仍将回退到浏览器方案。")
+        self._captcha_notice_logged = True
 
     @property
     def stats(self) -> dict[str, int]:
