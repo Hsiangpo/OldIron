@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from england_crawler.sites.companyname.companies_house import CompaniesHouseOfficer
+from england_crawler.sites.companyname.companies_house import CompaniesHouseClient
 from england_crawler.sites.companyname.companies_house import choose_best_search_result
 from england_crawler.sites.companyname.companies_house import parse_officers_page
 from england_crawler.sites.companyname.companies_house import parse_search_results
@@ -18,6 +19,15 @@ from england_crawler.sites.companyname.companies_house import select_representat
 
 
 class CompaniesHouseParsingTests(unittest.TestCase):
+    def test_client_uses_browser_style_headers(self) -> None:
+        client = CompaniesHouseClient(proxy_url="")
+        try:
+            self.assertIn("Mozilla/5.0", client._session.headers["User-Agent"])
+            self.assertEqual("document", client._session.headers["Sec-Fetch-Dest"])
+            self.assertEqual("none", client._session.headers["Sec-Fetch-Site"])
+        finally:
+            client.close()
+
     def test_search_exact_normalized_match(self) -> None:
         html = """
         <ul id="results">

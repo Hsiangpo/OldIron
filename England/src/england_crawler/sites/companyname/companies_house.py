@@ -14,6 +14,22 @@ from bs4 import BeautifulSoup
 
 _BASE_URL = "https://find-and-update.company-information.service.gov.uk"
 _SEARCH_PATH = "/search/companies?q="
+_DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/135.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.9",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
 _UK_SUFFIX_TOKENS = {
     "limited",
     "ltd",
@@ -76,12 +92,7 @@ class CompaniesHouseClient:
 
     def __init__(self, *, timeout_seconds: float = 20.0, proxy_url: str | None = None) -> None:
         self._session = requests.Session()
-        self._session.headers.update(
-            {
-                "User-Agent": "OldIron/England-CompanyName",
-                "Accept-Language": "en-GB,en;q=0.9",
-            }
-        )
+        self._session.headers.update(_DEFAULT_HEADERS)
         proxy = str(proxy_url or os.getenv("HTTP_PROXY") or "http://127.0.0.1:7897").strip()
         if proxy:
             self._session.proxies.update({"http": proxy, "https": proxy})
