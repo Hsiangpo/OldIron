@@ -115,7 +115,7 @@ class VirkPipelineRunner:
             w.start()
             # email worker 错峰启动，避免同时请求 LLM API
             if w.name.startswith("virk-email-"):
-                time.sleep(0.3)
+                time.sleep(0.1)
 
         # 在后台线程做搜索规划（可能被 429 卡很久，不阻塞已有任务）
         def _bg_plan() -> None:

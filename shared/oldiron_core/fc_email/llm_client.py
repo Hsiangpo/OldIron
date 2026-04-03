@@ -374,7 +374,7 @@ class EmailUrlLlmClient:
                 # 429 限流：无限排队等待，不计入重试次数
                 is_429 = any(kw in err_str for kw in ("429", "rate_limit", "Rate limit"))
                 if is_429:
-                    wait = 30 + _random.random() * 30  # 30-60 秒随机等待
+                    wait = 5 + _random.random() * 5  # 5-10 秒随机等待
                     LOGGER.warning("LLM API 429 限流排队，等待 %.0fs", wait)
                     _time.sleep(wait)
                     continue

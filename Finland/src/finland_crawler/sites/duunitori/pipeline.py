@@ -93,7 +93,7 @@ class DuunitoriPipelineRunner:
         for w in workers:
             w.start()
             if w.name.startswith("duu-email-"):
-                time.sleep(0.3)
+                time.sleep(0.1)
 
         def _bg_search() -> None:
             try:

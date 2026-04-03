@@ -18,7 +18,7 @@ def run_companyname(argv: list[str]) -> int:
     """CLI 入口。"""
     parser = argparse.ArgumentParser(description="England CompanyName 管线")
     parser.add_argument("--gmap-workers", type=int, default=128, help="Google Maps 并发数")
-    parser.add_argument("--email-workers", dest="firecrawl_workers", type=int, default=64, help="官网爬虫/邮箱补充并发数")
+    parser.add_argument("--email-workers", dest="firecrawl_workers", type=int, default=128, help="官网爬虫/邮箱补充并发数")
     parser.add_argument("--skip-gmap", action="store_true", help="跳过 Google Maps 补官网阶段")
     parser.add_argument("--skip-email", dest="skip_firecrawl", action="store_true", help="跳过官网爬虫邮箱补充阶段")
     parser.add_argument("--log-level", default="INFO", help="日志级别")

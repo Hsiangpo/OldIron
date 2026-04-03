@@ -189,7 +189,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--detail-workers", type=int, default=8)
     parser.add_argument("--gmap-workers", type=int, default=64)
-    parser.add_argument("--email-workers", dest="firecrawl_workers", type=int, default=8)
+    parser.add_argument("--email-workers", dest="firecrawl_workers", type=int, default=128)
     parser.add_argument("--skip-gmap", action="store_true")
     parser.add_argument("--skip-email", dest="skip_firecrawl", action="store_true")
     parser.add_argument("--log-level", default="INFO")

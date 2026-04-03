@@ -62,7 +62,7 @@ class VirkConfig:
     search_workers: int = 4
     detail_workers: int = 4
     gmap_workers: int = 64
-    firecrawl_workers: int = 64  # Protocol+LLM 邮箱发现并发
+    firecrawl_workers: int = 128  # Protocol+LLM 邮箱发现并发
 
     # CF cookie
     cf_browser_headless: bool = False  # CF 检测 headless，必须有界面
@@ -122,7 +122,7 @@ class VirkConfig:
         search_workers: int = 4,
         detail_workers: int = 4,
         gmap_workers: int = 64,
-        firecrawl_workers: int = 64,
+        firecrawl_workers: int = 128,
     ) -> VirkConfig:
         """从环境变量创建配置。"""
         store_db = output_dir / "virk_store.db"

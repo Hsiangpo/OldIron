@@ -34,7 +34,7 @@ def run_hellowork(argv: list[str]) -> int:
     parser.add_argument("--max-items", type=int, default=0, help="P2 最大处理企业数（0=全部）")
     parser.add_argument("--detail-workers", type=int, default=16, help="P1 详情页并发数（默认 16）")
     parser.add_argument("--pref-workers", type=int, default=6, help="P1 跨县并发数（默认 6）")
-    parser.add_argument("--email-workers", type=int, default=64, help="P2 邮箱提取并发数（默认 64）")
+    parser.add_argument("--email-workers", type=int, default=128, help="P2 邮箱提取并发数（默认 128）")
     parser.add_argument(
         "--log-level", type=str, default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],

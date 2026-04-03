@@ -109,7 +109,7 @@ class CompanyNamePipelineRunner:
             w.start()
             # email worker 错峰启动，避免同时请求 LLM API
             if w.name.startswith("email-"):
-                time.sleep(0.3)
+                time.sleep(0.1)
         try:
             self._monitor_until_done()
         finally:

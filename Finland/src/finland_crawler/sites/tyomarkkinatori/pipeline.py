@@ -108,7 +108,7 @@ class TmtPipelineRunner:
         for w in workers:
             w.start()
             if w.name.startswith("tmt-email-"):
-                time.sleep(0.3)
+                time.sleep(0.1)
 
         # 后台搜索
         def _bg_search() -> None:
