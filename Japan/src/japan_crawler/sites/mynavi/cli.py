@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import multiprocessing as mp
 import os
+import sqlite3
 import sys
-import threading
 import time
+import traceback
 from pathlib import Path
+from queue import Empty
 
 
 SITE_ROOT = Path(__file__).resolve().parents[4]
@@ -20,21 +23,20 @@ if str(SHARED_DIR) not in sys.path:
 LOGGER = logging.getLogger("mynavi.cli")
 _POLL_INTERVAL = 60
 _MAX_IDLE_ROUNDS = 3
+_HEARTBEAT_INTERVAL = 15
+
+
+def _configure_logging(level_name: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level_name),
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
 
 
 def _p1_zero_progress(stats: dict[str, int]) -> bool:
     return int(stats.get("groups_done", 0)) <= 0 and int(stats.get("new_companies", 0)) <= 0
-
-
-def _wait_for_next_round(stop_event: threading.Event, p1_failed: threading.Event) -> bool:
-    deadline = time.monotonic() + _POLL_INTERVAL
-    while time.monotonic() < deadline:
-        if p1_failed.is_set():
-            return False
-        remaining = max(0.0, deadline - time.monotonic())
-        if stop_event.wait(min(1.0, remaining)):
-            return False
-    return True
 
 
 def run_mynavi(argv: list[str]) -> int:
@@ -51,11 +53,7 @@ def run_mynavi(argv: list[str]) -> int:
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    _configure_logging(args.log_level)
     output_dir = SITE_ROOT / "output" / "mynavi"
     proxy = args.proxy or os.getenv("HTTP_PROXY", "") or "http://127.0.0.1:7897"
     try:
@@ -93,86 +91,254 @@ def run_mynavi(argv: list[str]) -> int:
 
 
 def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
-    p1_done = threading.Event()
-    p1_failed = threading.Event()
-    stop_event = threading.Event()
-    results: dict[str, dict] = {}
-    errors: list[str] = []
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    stop_event = ctx.Event()
+    p1_done = ctx.Event()
+    p1_failed = ctx.Event()
 
-    def _p1_worker() -> None:
-        try:
-            from .pipeline import run_pipeline_list
-
-            stats = run_pipeline_list(
-                output_dir=output_dir,
-                request_delay=args.delay,
-                proxy=proxy,
-                max_groups=args.max_groups,
-                max_pages=args.max_pages,
-                detail_workers=args.detail_workers,
-            )
-            results["pipeline1_list"] = stats
-            if _p1_zero_progress(stats):
-                p1_failed.set()
-                stop_event.set()
-                message = "P1 启动失败或零进展，停止空轮询。"
-                LOGGER.error(message)
-                errors.append(f"P1: {message}")
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.error("P1 异常: %s", exc, exc_info=True)
-            errors.append(f"P1: {exc}")
-            stop_event.set()
-        finally:
-            p1_done.set()
-
-    def _loop_runner(name: str, runner, workers: int) -> None:
-        try:
-            total_processed = 0
-            total_found = 0
-            idle_rounds = 0
-            round_no = 0
-            while not stop_event.is_set():
-                round_no += 1
-                LOGGER.info("[%s] 第 %d 轮扫描...", name, round_no)
-                stats = runner(output_dir=output_dir, max_items=args.max_items, concurrency=workers)
-                processed = int(stats.get("processed", 0))
-                total_processed += processed
-                total_found += int(stats.get("found", 0))
-                if processed == 0:
-                    if p1_failed.is_set():
-                        LOGGER.error("[%s] P1 零进展，停止轮询。", name)
-                        break
-                    if p1_done.is_set():
-                        idle_rounds += 1
-                        if idle_rounds >= _MAX_IDLE_ROUNDS:
-                            break
-                    if not _wait_for_next_round(stop_event, p1_failed):
-                        break
-                    continue
-                idle_rounds = 0
-            results[name] = {"processed": total_processed, "found": total_found}
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.error("%s 异常: %s", name, exc, exc_info=True)
-            errors.append(f"{name}: {exc}")
-            stop_event.set()
-
-    from .pipeline2_gmap import run_pipeline_gmap
-    from .pipeline3_email import run_pipeline_email
-
-    threads = [
-        threading.Thread(target=_p1_worker, name="mynavi-p1", daemon=True),
-        threading.Thread(target=_loop_runner, args=("pipeline2_gmap", run_pipeline_gmap, args.gmap_workers), daemon=True),
-        threading.Thread(target=_loop_runner, args=("pipeline3_email", run_pipeline_email, args.email_workers), daemon=True),
+    processes = [
+        ctx.Process(
+            target=_mynavi_p1_entry,
+            args=(
+                str(output_dir),
+                proxy,
+                float(args.delay),
+                int(args.max_groups),
+                int(args.max_pages),
+                int(args.detail_workers),
+                str(args.log_level),
+                result_queue,
+                stop_event,
+                p1_done,
+                p1_failed,
+            ),
+            name="mynavi-p1",
+        ),
+        ctx.Process(
+            target=_mynavi_loop_entry,
+            args=(
+                "pipeline2_gmap",
+                str(output_dir),
+                int(args.max_items),
+                int(args.gmap_workers),
+                str(args.log_level),
+                result_queue,
+                stop_event,
+                p1_done,
+                p1_failed,
+            ),
+            name="mynavi-p2",
+        ),
+        ctx.Process(
+            target=_mynavi_loop_entry,
+            args=(
+                "pipeline3_email",
+                str(output_dir),
+                int(args.max_items),
+                int(args.email_workers),
+                str(args.log_level),
+                result_queue,
+                stop_event,
+                p1_done,
+                p1_failed,
+            ),
+            name="mynavi-p3",
+        ),
     ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    for process in processes:
+        process.start()
+    LOGGER.info("Mynavi all 已启动：P1/P2/P3 多进程并行运行。")
+    _wait_for_processes(processes, output_dir, _mynavi_progress_snapshot)
+    results, errors = _collect_process_results(result_queue)
     print(f"\n全部完成: {results}")
     if errors:
         print(f"错误: {errors}")
         return 1
     return 0
+
+
+def _mynavi_p1_entry(
+    output_dir: str,
+    proxy: str,
+    delay: float,
+    max_groups: int,
+    max_pages: int,
+    detail_workers: int,
+    log_level: str,
+    result_queue,
+    stop_event,
+    p1_done,
+    p1_failed,
+) -> None:
+    try:
+        _configure_logging(log_level)
+        LOGGER.info("[pipeline1_list] 子进程启动")
+        from .pipeline import run_pipeline_list
+
+        stats = run_pipeline_list(
+            output_dir=Path(output_dir),
+            request_delay=delay,
+            proxy=proxy,
+            max_groups=max_groups,
+            max_pages=max_pages,
+            detail_workers=detail_workers,
+        )
+        if _p1_zero_progress(stats):
+            p1_failed.set()
+            stop_event.set()
+            result_queue.put(("pipeline1_list", stats, "P1: P1 启动失败或零进展，停止空轮询。"))
+        else:
+            result_queue.put(("pipeline1_list", stats, ""))
+    except Exception as exc:  # noqa: BLE001
+        result_queue.put(("pipeline1_list", {}, f"P1: {exc}\n{traceback.format_exc()}"))
+        stop_event.set()
+    finally:
+        LOGGER.info("[pipeline1_list] 子进程结束")
+        p1_done.set()
+
+
+def _mynavi_loop_entry(
+    name: str,
+    output_dir: str,
+    max_items: int,
+    workers: int,
+    log_level: str,
+    result_queue,
+    stop_event,
+    p1_done,
+    p1_failed,
+) -> None:
+    try:
+        _configure_logging(log_level)
+        runner = _resolve_mynavi_runner(name)
+        total_processed = 0
+        total_found = 0
+        idle_rounds = 0
+        round_no = 0
+        while not stop_event.is_set():
+            round_no += 1
+            LOGGER.info("[%s] 第 %d 轮扫描...", name, round_no)
+            stats = runner(output_dir=Path(output_dir), max_items=max_items, concurrency=workers)
+            processed = int(stats.get("processed", 0))
+            total_processed += processed
+            total_found += int(stats.get("found", 0))
+            if processed > 0:
+                LOGGER.info("[%s] 本轮处理 %d 家，累计处理 %d 家。", name, processed, total_processed)
+            if processed == 0:
+                if p1_failed.is_set():
+                    break
+                if p1_done.is_set():
+                    idle_rounds += 1
+                    if idle_rounds >= _MAX_IDLE_ROUNDS:
+                        LOGGER.info("[%s] 连续空轮询 %d 次，结束。", name, idle_rounds)
+                        break
+                if stop_event.wait(_POLL_INTERVAL):
+                    break
+                continue
+            idle_rounds = 0
+        LOGGER.info("[%s] 子进程结束：processed=%d found=%d", name, total_processed, total_found)
+        result_queue.put((name, {"processed": total_processed, "found": total_found}, ""))
+    except Exception as exc:  # noqa: BLE001
+        result_queue.put((name, {}, f"{name}: {exc}\n{traceback.format_exc()}"))
+        stop_event.set()
+
+
+def _resolve_mynavi_runner(name: str):
+    if name == "pipeline2_gmap":
+        from .pipeline2_gmap import run_pipeline_gmap
+
+        return run_pipeline_gmap
+    from .pipeline3_email import run_pipeline_email
+
+    return run_pipeline_email
+
+
+def _wait_for_processes(processes: list[mp.Process], output_dir: Path, snapshotter) -> None:
+    next_heartbeat = time.monotonic() + _HEARTBEAT_INTERVAL
+    while True:
+        alive = False
+        for process in processes:
+            process.join(timeout=0.5)
+            alive = alive or process.is_alive()
+        if not alive:
+            return
+        if time.monotonic() < next_heartbeat:
+            continue
+        LOGGER.info(
+            "Mynavi all 运行中：%s | 进程=%s",
+            snapshotter(output_dir),
+            _format_process_states(processes),
+        )
+        next_heartbeat = time.monotonic() + _HEARTBEAT_INTERVAL
+
+
+def _format_process_states(processes: list[mp.Process]) -> str:
+    states: list[str] = []
+    for process in processes:
+        if process.is_alive():
+            state = "运行中"
+        elif process.exitcode is None:
+            state = "未启动"
+        else:
+            state = f"退出({process.exitcode})"
+        states.append(f"{process.name}:{state}")
+    return ", ".join(states)
+
+
+def _mynavi_progress_snapshot(output_dir: Path) -> str:
+    db_path = output_dir / "mynavi_store.db"
+    if not db_path.exists():
+        return "数据库尚未创建"
+    try:
+        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+            checkpoint = conn.execute(
+                """
+                SELECT scope, last_page, total_pages, status
+                FROM checkpoints
+                WHERE status = 'running'
+                ORDER BY scope
+                LIMIT 1
+                """
+            ).fetchone()
+            group_done = conn.execute(
+                "SELECT COUNT(*) FROM checkpoints WHERE status = 'done'"
+            ).fetchone()[0]
+            company_count, updated_at = conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(updated_at), '') FROM companies"
+            ).fetchone()
+            email_todo = conn.execute(
+                "SELECT COUNT(*) FROM companies WHERE coalesce(email_status, 'pending') != 'done'"
+            ).fetchone()[0]
+            gmap_todo = conn.execute(
+                "SELECT COUNT(*) FROM companies WHERE (website IS NULL OR website = '') AND coalesce(gmap_status, 'pending') != 'done'"
+            ).fetchone()[0]
+    except sqlite3.Error as exc:
+        return f"读取进度失败: {exc}"
+    if checkpoint is None:
+        return f"当前无运行中分组 | 已完成分组={group_done} | 公司={company_count}"
+    return (
+        f"{checkpoint[0]}={checkpoint[1]}/{checkpoint[2]}:{checkpoint[3]} | 已完成分组={group_done} | "
+        f"公司={company_count} | 邮箱待补={email_todo} | 官网待补={gmap_todo} | 最新更新={updated_at or '-'}"
+    )
+
+
+def _collect_process_results(result_queue, expected_count: int = 3) -> tuple[dict[str, dict], list[str]]:
+    results: dict[str, dict] = {}
+    errors: list[str] = []
+    received = 0
+    while received < expected_count:
+        try:
+            name, stats, error = result_queue.get(timeout=5)
+        except Empty:
+            errors.append(f"子进程结果回收不完整：{received}/{expected_count}")
+            break
+        received += 1
+        if stats:
+            results[name] = stats
+        if error:
+            errors.append(str(error))
+    return results, errors
 
 
 def _p1_zero_progress(stats: dict[str, int]) -> bool:

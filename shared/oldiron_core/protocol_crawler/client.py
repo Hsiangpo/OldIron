@@ -23,6 +23,21 @@ _HTTP_FALLBACK_ERROR_HINTS = (
     "alert_internal_error",
     "no alternative certificate subject name",
 )
+_SKIP_URL_EXTENSIONS = (
+    ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp",
+    ".css", ".js", ".woff", ".woff2", ".ttf", ".eot",
+    ".mp3", ".mp4", ".avi", ".mov", ".wmv",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".zip", ".tar", ".gz", ".rar", ".7z",
+    ".exe", ".dmg", ".apk",
+)
+_TEXT_CONTENT_TYPE_HINTS = (
+    "text/html",
+    "application/xhtml+xml",
+    "application/xml",
+    "text/xml",
+    "text/plain",
+)
 
 
 @dataclass()
@@ -39,6 +54,7 @@ class SiteCrawlConfig:
     max_retries: int = 2
     proxy_url: str = ""
     impersonate: str = "chrome110"
+    max_html_chars: int = 250_000
     default_headers: dict[str, str] = field(default_factory=lambda: {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
@@ -160,7 +176,12 @@ class SiteCrawlClient:
                     url, timeout=self._config.timeout_seconds,
                 )
                 if resp.status_code == 200:
-                    return resp.text or ""
+                    content_type = str(resp.headers.get("Content-Type", "") or "").lower()
+                    if not _is_supported_page_response(url, content_type):
+                        LOGGER.info("协议爬虫跳过非 HTML 内容：url=%s content_type=%s", url, content_type or "-")
+                        return ""
+                    text = resp.text or ""
+                    return _truncate_html_text(url, text, self._config.max_html_chars)
                 if resp.status_code == 429:
                     LOGGER.warning(
                         "协议爬虫 HTTP 429：url=%s attempt=%s/%s",
@@ -194,6 +215,24 @@ class SiteCrawlClient:
                 return self._fetch_html(fallback_url)
             LOGGER.warning("协议爬虫请求最终失败：url=%s error=%s", url, last_error)
         return ""
+
+
+def _is_supported_page_response(url: str, content_type: str) -> bool:
+    lowered_url = str(url or "").lower()
+    if any(lowered_url.endswith(ext) for ext in _SKIP_URL_EXTENSIONS):
+        return False
+    clean_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    if not clean_type:
+        return True
+    return any(hint in clean_type for hint in _TEXT_CONTENT_TYPE_HINTS)
+
+
+def _truncate_html_text(url: str, text: str, limit: int) -> str:
+    if limit <= 0 or len(text) <= limit:
+        return text
+    half = max(limit // 2, 1)
+    LOGGER.info("协议爬虫页面过长已截断：url=%s 原长=%d", url, len(text))
+    return text[:half] + "\n<!-- 内容过长已截断 -->\n" + text[-half:]
 
     def _http_fallback_url(self, url: str, error: Exception) -> str:
         text = str(error or "").lower()

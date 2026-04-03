@@ -95,6 +95,15 @@ _BAD_EMAIL_HOST_HINTS = (
     "sentry.wixpress.com",
     "sentry-next.wixpress.com",
 )
+_SKIP_PAGE_SUFFIXES = (
+    ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp",
+    ".css", ".js", ".woff", ".woff2", ".ttf", ".eot",
+    ".mp3", ".mp4", ".avi", ".mov", ".wmv",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".zip", ".tar", ".gz", ".rar", ".7z",
+    ".exe", ".dmg", ".apk",
+)
+_MAX_PAGE_HTML_CHARS = 250_000
 
 _KEY_FILE_WRITE_LOCK = threading.Lock()
 _KEYWORD_POOL_LOCK = threading.Lock()
@@ -458,6 +467,8 @@ class FirecrawlEmailService:
         for url in all_urls:
             if url == start_url:
                 continue
+            if not _is_supported_page_url(url):
+                continue
             score = self._score_url(start_url, url)
             if score >= 60:
                 strong.append(url)
@@ -480,6 +491,8 @@ class FirecrawlEmailService:
             url = str(raw or "").strip()
             if not url or url in seen or not url.startswith("http"):
                 continue
+            if url != start_url and not _is_supported_page_url(url):
+                continue
             if not self._same_host(host, url):
                 continue
             seen.add(url)
@@ -498,18 +511,23 @@ class FirecrawlEmailService:
         return urls
 
     def _scrape_html_pages(self, urls: list[str]) -> list[HtmlPageResult]:
+        filtered_urls = [url for url in urls if _is_supported_page_url(url)]
+        if not filtered_urls:
+            return []
         if hasattr(self._firecrawl, "scrape_html_pages"):
-            return self._firecrawl.scrape_html_pages(urls)
+            raw_pages = self._firecrawl.scrape_html_pages(filtered_urls)
+            return _normalize_page_results(raw_pages)
         pages: list[HtmlPageResult] = []
-        for url in urls:
+        for url in filtered_urls:
             try:
                 page = self._firecrawl.scrape_html(url)
             except FirecrawlError as exc:
                 if exc.code in {"firecrawl_http_404", "firecrawl_5xx"}:
                     continue
                 raise
-            if page.html.strip():
-                pages.append(page)
+            html = _truncate_page_html(page.url, page.html)
+            if html.strip():
+                pages.append(HtmlPageResult(url=page.url, html=html))
         return pages
 
     def _map_site(self, start_url: str) -> list[str]:
@@ -627,7 +645,7 @@ class FirecrawlEmailService:
             return False
         if any(flag in host for flag in _BAD_HOST_KEYWORDS):
             return False
-        if parsed.path.lower().endswith(_IMAGE_EXTENSIONS):
+        if not _is_supported_page_url(url):
             return False
         return True
 
@@ -706,3 +724,31 @@ class FirecrawlEmailService:
 
     def _normalize_for_match(self, value: str) -> str:
         return _NON_ALPHA_RE.sub("", str(value or "").strip().lower())
+
+
+def _is_supported_page_url(url: str) -> bool:
+    path = (urlparse(str(url or "")).path or "").lower()
+    if path.endswith(_IMAGE_EXTENSIONS):
+        return False
+    return not any(path.endswith(suffix) for suffix in _SKIP_PAGE_SUFFIXES)
+
+
+def _truncate_page_html(url: str, raw_html: str) -> str:
+    text = str(raw_html or "")
+    if len(text) <= _MAX_PAGE_HTML_CHARS:
+        return text
+    half = max(_MAX_PAGE_HTML_CHARS // 2, 1)
+    LOGGER.info("协议邮箱页面过长已截断：url=%s 原长=%d", url, len(text))
+    return text[:half] + "\n<!-- 页面内容过长已截断 -->\n" + text[-half:]
+
+
+def _normalize_page_results(raw_pages: list[HtmlPageResult]) -> list[HtmlPageResult]:
+    pages: list[HtmlPageResult] = []
+    for page in raw_pages:
+        url = str(page.url or "").strip()
+        if not url or not _is_supported_page_url(url):
+            continue
+        html_text = _truncate_page_html(url, page.html)
+        if html_text.strip():
+            pages.append(HtmlPageResult(url=url, html=html_text))
+    return pages

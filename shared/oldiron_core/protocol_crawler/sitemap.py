@@ -17,6 +17,14 @@ _NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 # robots.txt 中 Sitemap 声明的正则
 _ROBOTS_SITEMAP_RE = re.compile(r"^Sitemap:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_SKIP_EXTENSIONS = frozenset({
+    ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp",
+    ".css", ".js", ".woff", ".woff2", ".ttf", ".eot",
+    ".mp3", ".mp4", ".avi", ".mov", ".wmv",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".zip", ".tar", ".gz", ".rar", ".7z",
+    ".exe", ".dmg", ".apk",
+})
 
 
 def discover_sitemap_urls(
@@ -120,12 +128,18 @@ def _parse_sitemap_recursive(
             if (
                 url
                 and url not in visited
+                and not _should_skip_candidate_url(url)
                 and _is_allowed_host(base_host, url, include_subdomains=include_subdomains)
             ):
                 visited.add(url)
                 result.append(url)
                 if len(result) >= limit:
                     return
+
+
+def _should_skip_candidate_url(candidate_url: str) -> bool:
+    path = (urlparse(candidate_url).path or "").lower()
+    return any(path.endswith(ext) for ext in _SKIP_EXTENSIONS)
 
 
 def _is_allowed_host(base_host: str, candidate_url: str, *, include_subdomains: bool) -> bool:

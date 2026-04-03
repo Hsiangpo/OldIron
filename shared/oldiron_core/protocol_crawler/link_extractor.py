@@ -16,6 +16,7 @@ _SKIP_EXTENSIONS = frozenset({
     ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp",
     ".css", ".js", ".woff", ".woff2", ".ttf", ".eot",
     ".mp3", ".mp4", ".avi", ".mov", ".wmv",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
     ".zip", ".tar", ".gz", ".rar", ".7z",
     ".exe", ".dmg", ".apk",
 })
