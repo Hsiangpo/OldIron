@@ -209,7 +209,7 @@ class SiteCrawlClient:
                         pass
 
         if last_error:
-            fallback_url = self._http_fallback_url(url, last_error)
+            fallback_url = _http_fallback_url(url, last_error)
             if fallback_url:
                 LOGGER.info("协议爬虫 HTTPS 失败，尝试 HTTP 回退：url=%s fallback=%s", url, fallback_url)
                 return self._fetch_html(fallback_url)
@@ -234,10 +234,11 @@ def _truncate_html_text(url: str, text: str, limit: int) -> str:
     LOGGER.info("协议爬虫页面过长已截断：url=%s 原长=%d", url, len(text))
     return text[:half] + "\n<!-- 内容过长已截断 -->\n" + text[-half:]
 
-    def _http_fallback_url(self, url: str, error: Exception) -> str:
-        text = str(error or "").lower()
-        if not str(url or "").startswith("https://"):
-            return ""
-        if not any(hint in text for hint in _HTTP_FALLBACK_ERROR_HINTS):
-            return ""
-        return str(url).replace("https://", "http://", 1)
+
+def _http_fallback_url(url: str, error: Exception) -> str:
+    text = str(error or "").lower()
+    if not str(url or "").startswith("https://"):
+        return ""
+    if not any(hint in text for hint in _HTTP_FALLBACK_ERROR_HINTS):
+        return ""
+    return str(url).replace("https://", "http://", 1)
