@@ -40,7 +40,7 @@ class TestLinkExtractor(unittest.TestCase):
         self.assertNotIn("https://other.com/page", links)
 
     def test_skips_static_resources(self) -> None:
-        html = '<a href="/logo.png">图片</a><a href="/style.css">样式</a><a href="/page">页面</a>'
+        html = '<a href="/logo.png">图片</a><a href="/style.css">样式</a><a href="/book.pdf">PDF</a><a href="/page">页面</a>'
         links = extract_same_site_links(html, "https://example.com/")
         self.assertEqual(["https://example.com/page"], links)
 
@@ -93,6 +93,11 @@ class _MockResponse:
     status_code: int
     text: str = ""
     content: bytes = b""
+    headers: dict[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.headers is None:
+            self.headers = {}
 
 
 class TestSitemap(unittest.TestCase):
@@ -163,6 +168,23 @@ class TestSitemap(unittest.TestCase):
             ["https://example.com/page1", "https://blog.example.com/page2"],
             urls,
         )
+
+    def test_skips_document_urls_from_sitemap(self) -> None:
+        robots_resp = _MockResponse(200, text="Sitemap: https://example.com/sitemap.xml")
+        sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <url><loc>https://example.com/profile.pdf</loc></url>
+            <url><loc>https://example.com/contact</loc></url>
+        </urlset>'''
+        sitemap_resp = _MockResponse(200, text=sitemap_xml, content=sitemap_xml.encode())
+
+        session = MagicMock()
+        session.get.side_effect = lambda url, **kw: (
+            robots_resp if "robots.txt" in url else sitemap_resp
+        )
+
+        urls = discover_sitemap_urls(session, "https://example.com", limit=100)
+        self.assertEqual(["https://example.com/contact"], urls)
 
 
 # ──────────────────────────────────────────────────────
