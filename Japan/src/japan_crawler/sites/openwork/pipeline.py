@@ -104,7 +104,13 @@ def _load_company_details(
     detail_workers: int,
 ) -> list[dict[str, str]]:
     if detail_workers <= 1 or client.browser_enabled:
-        return [_fetch_company_detail(client, card) for card in cards]
+        results: list[dict[str, str]] = []
+        total = len(cards)
+        for index, card in enumerate(cards, start=1):
+            results.append(_fetch_company_detail(client, card))
+            if index == 1 or index == total or index % 5 == 0:
+                LOGGER.info("OpenWork 浏览器详情进度：%d/%d", index, total)
+        return results
     results: list[dict[str, str]] = []
     with ThreadPoolExecutor(max_workers=detail_workers, thread_name_prefix="openwork-detail") as executor:
         futures = {executor.submit(_fetch_company_detail, client, card): card for card in cards}

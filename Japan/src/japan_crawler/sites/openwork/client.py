@@ -66,6 +66,7 @@ class OpenworkClient:
         self._proxy_cooldown_until = 0.0
         self._browser_lock = threading.Lock()
         self._browser_mode = os.getenv("OPENWORK_FORCE_BROWSER", "").strip() == "1"
+        self._browser_notice_logged = False
         self._browser_client = None
         if browser_profile_dir is not None:
             self._browser_client = OpenworkPersistentBrowser(
@@ -147,7 +148,9 @@ class OpenworkClient:
             raise RuntimeError("OpenWork 浏览器 profile 未配置。")
         with self._browser_lock:
             self._browser_mode = True
-            LOGGER.warning("OpenWork 协议请求不可用，切换到浏览器 profile 复用：%s", url)
+            if not self._browser_notice_logged:
+                LOGGER.warning("OpenWork 已切换到浏览器详情补抓模式，后续详情页会逐条处理，速度会慢一些。")
+                self._browser_notice_logged = True
             html_text = self._browser_client.fetch_html(url=url, ready_selector=self._ready_selector(url))
             self._request_count += 1
             return _HtmlResponse(status_code=200, text=html_text)
