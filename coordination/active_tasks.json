@@ -1,5 +1,43 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T02:28:00Z",
-  "tasks": []
+  "updated_at": "2026-04-03T02:40:00Z",
+  "tasks": [
+    {
+      "task_id": "coord-2026-04-03-coordination-automation",
+      "status": "in_progress",
+      "machine": "Machine 1",
+      "agent": "codex-windows",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "machine1/shared/coord-automation",
+      "scope": [
+        "AGENTS.md",
+        "README.md",
+        "coordination",
+        ".github",
+        ".agents/skills/oldiron-crawler/SKILL.md",
+        "tests"
+      ],
+      "planned_files": [
+        "AGENTS.md",
+        "README.md",
+        "coordination/README.md",
+        "coordination/active_tasks.json",
+        "coordination/shared_locks.json",
+        "coordination/handoffs/README.md",
+        "coordination/coord_cli.py",
+        ".github/ISSUE_TEMPLATE/coordination-task.md",
+        ".github/PULL_REQUEST_TEMPLATE.md",
+        ".agents/skills/oldiron-crawler/SKILL.md",
+        "tests/test_coordination_cli.py"
+      ],
+      "shared_lock_ids": [
+        "lock-coordination-automation"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-03T02:40:00Z",
+      "last_heartbeat_at": "2026-04-03T02:40:00Z",
+      "notes": "Add coordination automation for begin/check/heartbeat/finish/takeover/render."
+    }
+  ]
 }

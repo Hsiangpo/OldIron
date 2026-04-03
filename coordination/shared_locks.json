@@ -1,5 +1,19 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T02:28:00Z",
-  "locks": []
+  "updated_at": "2026-04-03T02:40:00Z",
+  "locks": [
+    {
+      "lock_id": "lock-coordination-automation",
+      "status": "locked",
+      "path": "AGENTS.md|README.md|coordination|.github|.agents/skills/oldiron-crawler/SKILL.md",
+      "machine": "Machine 1",
+      "agent": "codex-windows",
+      "task_id": "coord-2026-04-03-coordination-automation",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-03T02:40:00Z",
+      "heartbeat_at": "2026-04-03T02:40:00Z",
+      "expires_at": "2026-04-03T03:00:00Z",
+      "notes": "Shared-zone coordination automation implementation in progress."
+    }
+  ]
 }
