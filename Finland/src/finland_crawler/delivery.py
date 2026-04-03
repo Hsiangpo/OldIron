@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import csv
 import json
-import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -20,6 +19,7 @@ SHARED_ROOT = PROJECT_ROOT / "shared"
 if str(SHARED_ROOT) not in sys.path:
     sys.path.insert(0, str(SHARED_ROOT))
 
+from oldiron_core.delivery.engine import prepare_delivery_dir
 from oldiron_core.delivery.engine import validate_day_sequence
 from oldiron_core.delivery.sanitize import sanitize_record
 
@@ -45,9 +45,7 @@ def build_delivery_bundle(
     """构建 Finland 日交付包。"""
     day, _latest = validate_day_sequence(Path(delivery_root), "Finland", day_label)
     delivery_dir = Path(delivery_root) / f"Finland_day{day:03d}"
-    if delivery_dir.exists():
-        shutil.rmtree(delivery_dir)
-    delivery_dir.mkdir(parents=True, exist_ok=True)
+    prepare_delivery_dir(delivery_dir)
 
     current_records = _load_and_merge_records(Path(data_root))
     baseline_keys = _load_baseline_keys(Path(delivery_root), day - 1)

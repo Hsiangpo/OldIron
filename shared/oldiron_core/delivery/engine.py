@@ -5,14 +5,13 @@ from __future__ import annotations
 import csv
 import json
 import re
-import shutil
-import time
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .spec import DeliverySpec
+from .trash import move_path_to_recycle_bin
 
 
 DAY_PATTERN = re.compile(r"^day(\d+)$", flags=re.I)
@@ -223,28 +222,11 @@ def _record_from_csv_row(row: dict[str, str]) -> dict[str, object]:
     }
 
 
-def _clear_dir_contents_safe(day_dir: Path) -> None:
-    """目录被占用时，尽量复用目录并清空其内容。"""
-    if not day_dir.exists():
-        return
-    for child in sorted(day_dir.iterdir()):
-        if child.is_dir():
-            shutil.rmtree(child)
-            continue
-        child.unlink()
-
-
-def _remove_dir_safe(day_dir: Path) -> None:
-    """安全删除交付目录。"""
-    if not day_dir.exists():
-        return
-    for _ in range(8):
-        try:
-            shutil.rmtree(day_dir)
-            return
-        except (PermissionError, OSError):
-            time.sleep(0.6)
-    _clear_dir_contents_safe(day_dir)
+def prepare_delivery_dir(day_dir: Path) -> None:
+    """准备交付目录，重跑同一天时先送回收站。"""
+    if day_dir.exists():
+        move_path_to_recycle_bin(day_dir)
+    day_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _has_emails(record: dict[str, object]) -> bool:
@@ -377,8 +359,7 @@ def build_delivery_bundle(
     delta_records = _delta_records(keyed_records, baseline_keys)
 
     day_dir = delivery_root / _delivery_dir_name(spec.country_name, target_day)
-    _remove_dir_safe(day_dir)
-    day_dir.mkdir(parents=True, exist_ok=True)
+    prepare_delivery_dir(day_dir)
 
     summary = {
         "day": target_day,

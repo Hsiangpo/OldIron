@@ -96,6 +96,7 @@
 - For future countries, if delivery mode or email policy is not explicitly recorded here, ask the user first and write the confirmed strategy into `AGENTS.md` before implementing.
 - Do not run `python product.py <Country> dayN` unless the user has explicitly requested or approved that delivery run in the current task.
 - Do not delete existing delivery files or delivery directories unless the user has explicitly requested that deletion.
+- When re-running the same day delivery and replacing an existing day directory, do not hard-delete it. Move the old day directory to the OS recycle bin / trash first, then build the new delivery directory.
 - Country-specific delivery overrides:
   - `Japan`: per-site day delivery. Write one CSV + one keys file per site under `Japan/output/delivery/Japan_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `Brazil`: per-site day delivery. Write one CSV + one keys file per site under `Brazil/output/delivery/Brazil_dayNNN/`. Do not merge sites into one country-level `companies.csv`.

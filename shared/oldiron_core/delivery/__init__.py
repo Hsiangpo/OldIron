@@ -4,6 +4,7 @@ from .engine import _load_all_records
 from .engine import build_delivery_bundle
 from .engine import extract_domain
 from .engine import parse_day_label
+from .engine import prepare_delivery_dir
 from .spec import DeliverySpec
 
 __all__ = [
@@ -12,5 +13,6 @@ __all__ = [
     "build_delivery_bundle",
     "extract_domain",
     "parse_day_label",
+    "prepare_delivery_dir",
 ]
 

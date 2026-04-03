@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import json
-import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -15,6 +14,7 @@ SHARED_ROOT = PROJECT_ROOT / "shared"
 if str(SHARED_ROOT) not in sys.path:
     sys.path.insert(0, str(SHARED_ROOT))
 
+from oldiron_core.delivery.engine import prepare_delivery_dir
 from oldiron_core.delivery.engine import validate_day_sequence
 
 
@@ -56,9 +56,7 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
     delivery_dir = Path(delivery_root) / f"Japan_day{day:03d}"
     baseline_day = max(day - 1, 0)
 
-    if delivery_dir.exists():
-        shutil.rmtree(delivery_dir)
-    delivery_dir.mkdir(parents=True, exist_ok=True)
+    prepare_delivery_dir(delivery_dir)
 
     total_current_companies = 0
     total_delta_companies = 0
