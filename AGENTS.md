@@ -142,6 +142,9 @@
   - `UnitedStates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedStates/output/delivery/UnitedStates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
 - Country-specific email delivery overrides:
   - `Japan`: delivery-time email policy is personal-email-only. Filter out enterprise/company-domain emails and keep only personal mailbox domains.
+- Country-specific source overrides:
+  - `England`: representative source is Companies House `officers` pages, using current officers only. Join multiple names with semicolons in page order. Prefer human names; if no human names exist, use current company-entity officers.
+  - `England`: website email extraction is rule-based only. Do not use the website LLM path for England representative extraction or England website email extraction.
 - Never package delivery site by site when multiple sites belong to the same country, unless that country is explicitly listed in the country-specific overrides above.
 - If the same country is being run on multiple machines, the split must be by site or by whole pipeline, not by shard.
 

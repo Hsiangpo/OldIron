@@ -71,6 +71,15 @@ def _dump_json_list(items: list[str]) -> str:
     return json.dumps(cleaned, ensure_ascii=False)
 
 
+def _dump_text_list_preserve_case(items: list[str]) -> str:
+    cleaned: list[str] = []
+    for item in items:
+        text = str(item or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return json.dumps(cleaned, ensure_ascii=False)
+
+
 def _parse_json_list(raw: str) -> list[str]:
     try:
         payload = json.loads(str(raw or "[]"))
@@ -147,6 +156,7 @@ class CompanyNameStore:
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._conn.execute("PRAGMA busy_timeout = 30000;")
         self._init_schema()
+        self._ensure_company_columns()
         self._repair_runtime_state()
 
     def close(self) -> None:
@@ -207,6 +217,25 @@ class CompanyNameStore:
                 CREATE INDEX IF NOT EXISTS idx_firecrawl_claim
                 ON firecrawl_queue(status, next_run_at, updated_at, orgnr);
             """)
+            self._conn.commit()
+
+    def _ensure_company_columns(self) -> None:
+        """为增量演进补齐 England 公司表字段。"""
+        required = {
+            "company_number": "TEXT NOT NULL DEFAULT ''",
+            "officers_url": "TEXT NOT NULL DEFAULT ''",
+            "officers_names_json": "TEXT NOT NULL DEFAULT '[]'",
+            "officers_updated_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        with self._lock:
+            existing = {
+                str(row["name"])
+                for row in self._conn.execute("PRAGMA table_info(companies)").fetchall()
+            }
+            for name, column_def in required.items():
+                if name in existing:
+                    continue
+                self._conn.execute(f"ALTER TABLE companies ADD COLUMN {name} {column_def}")
             self._conn.commit()
 
     def _repair_runtime_state(self) -> None:
@@ -366,11 +395,12 @@ class CompanyNameStore:
 
     def complete_firecrawl_task(self, orgnr: str, emails: list[str],
                                  evidence_url: str = "", representative: str = "",
-                                 website_company_name: str = "") -> None:
+                                 website_company_name: str = "", company_number: str = "",
+                                 officers_url: str = "", officer_names: list[str] | None = None) -> None:
         now = _utc_now()
         with self._lock:
             row = self._conn.execute(
-                "SELECT company_name, representative, homepage, phone, emails_json, evidence_url FROM companies WHERE orgnr=?",
+                "SELECT company_name, representative, homepage, phone, emails_json, evidence_url, company_number, officers_url, officers_names_json FROM companies WHERE orgnr=?",
                 (orgnr,),
             ).fetchone()
             if not row:
@@ -381,7 +411,7 @@ class CompanyNameStore:
                 em_lower = em.strip().lower()
                 if em_lower and em_lower not in merged:
                     merged.append(em_lower)
-            ev = evidence_url or row["evidence_url"] or ""
+            ev = evidence_url or officers_url or row["evidence_url"] or ""
             # 代表人：优先用 LLM 提取到的，其次用数据库里已有的
             rep = representative.strip() if representative else ""
             if not rep:
@@ -390,21 +420,36 @@ class CompanyNameStore:
             final_name = website_company_name.strip() if website_company_name else ""
             if not final_name:
                 final_name = row["company_name"]
+            next_company_number = str(company_number or row["company_number"] or "").strip()
+            next_officers_url = str(officers_url or row["officers_url"] or "").strip()
+            if officer_names:
+                next_officers_names = _dump_text_list_preserve_case(officer_names)
+                next_officers_updated_at = now
+            else:
+                next_officers_names = row["officers_names_json"] or "[]"
+                next_officers_updated_at = row["officers_updated_at"] if "officers_updated_at" in row.keys() else ""
             self._conn.execute(
                 """UPDATE companies SET company_name=?, emails_json=?, firecrawl_status='done',
-                   representative=?, evidence_url=?, updated_at=? WHERE orgnr=?""",
-                (final_name, _dump_json_list(merged), rep, ev, now, orgnr),
+                   representative=?, evidence_url=?, company_number=?, officers_url=?, officers_names_json=?, officers_updated_at=?, updated_at=? WHERE orgnr=?""",
+                (
+                    final_name,
+                    _dump_json_list(merged),
+                    rep,
+                    ev,
+                    next_company_number,
+                    next_officers_url,
+                    next_officers_names,
+                    next_officers_updated_at,
+                    now,
+                    orgnr,
+                ),
             )
             self._conn.execute(
                 "UPDATE firecrawl_queue SET status='done', updated_at=? WHERE orgnr=?",
                 (now, orgnr),
             )
             # 写入 final_companies（三项齐全门禁）
-            _corp_suffix_re = re.compile(
-                r"\b(ApS|A/S|I/S|K/S|P/S|IVS|GmbH|AG|Ltd\.?|LLC|Inc\.?|PLC|LP|LLP|AB|SA|BV|NV|Oy|AS)\b",
-                re.IGNORECASE,
-            )
-            if final_name and rep and merged and not _corp_suffix_re.search(rep):
+            if final_name and rep and merged:
                 for em in merged:
                     try:
                         self._conn.execute(
@@ -414,6 +459,48 @@ class CompanyNameStore:
                         )
                     except sqlite3.IntegrityError:
                         pass
+            self._conn.commit()
+
+    def update_companies_house_result(
+        self,
+        orgnr: str,
+        *,
+        company_number: str = "",
+        officers_url: str = "",
+        officer_names: list[str] | None = None,
+        representative: str = "",
+    ) -> None:
+        """写入 Companies House 匹配结果，保留历史代表人。"""
+        now = _utc_now()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT representative, company_number, officers_url, officers_names_json, officers_updated_at FROM companies WHERE orgnr=?",
+                (orgnr,),
+            ).fetchone()
+            if not row:
+                return
+            next_representative = str(representative or "").strip() or str(row["representative"] or "").strip()
+            next_company_number = str(company_number or row["company_number"] or "").strip()
+            next_officers_url = str(officers_url or row["officers_url"] or "").strip()
+            if officer_names:
+                next_officers_names = _dump_text_list_preserve_case(officer_names)
+                next_officers_updated_at = now
+            else:
+                next_officers_names = str(row["officers_names_json"] or "[]")
+                next_officers_updated_at = str(row["officers_updated_at"] or "")
+            self._conn.execute(
+                """UPDATE companies SET representative=?, company_number=?, officers_url=?,
+                   officers_names_json=?, officers_updated_at=?, updated_at=? WHERE orgnr=?""",
+                (
+                    next_representative,
+                    next_company_number,
+                    next_officers_url,
+                    next_officers_names,
+                    next_officers_updated_at,
+                    now,
+                    orgnr,
+                ),
+            )
             self._conn.commit()
 
     def defer_firecrawl_task(self, orgnr: str, delay_seconds: float, error: str = "") -> None:

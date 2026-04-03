@@ -36,7 +36,7 @@
 |------|---------|--------|---------|
 | Denmark | `proff`、`virk` | Proff/Virk → GMap → 协议爬虫+LLM → delivery | 站点直出优先，缺邮箱用协议爬虫+LLM 补强 |
 | Brazil | `dnb` | DNB 列表 API → 隐藏详情 API → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
-| England | `companyname` | Excel 名单 → GMap → 协议爬虫+LLM → delivery | 协议爬虫+LLM |
+| England | `companyname` | Excel 名单 → GMap → Companies House officers → 规则邮箱提取 → delivery | 代表人来自 Companies House，邮箱走规则提取 |
 | UnitedStates | `dnb` | DNB API → DNB 详情 → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
 | Taiwan | `ieatpe` | 会员协议接口 → 详情接口 → delivery | 站点直出 |
 | SouthKorea | `catch`、`incheon`、`dart` 等 | 列表/详情 → 官网 → 邮箱 → 交付 | Snov 为主 |
@@ -74,8 +74,10 @@
 ## England 当前状态
 
 - 站点：`companyname` — 从 Excel 公司名单出发
-- 主链路：`Excel → GMap（补官网）→ 协议爬虫+LLM（补邮箱）→ delivery`
+- 主链路：`Excel → GMap（补官网）→ Companies House officers（补代表人）→ 协议爬虫规则抽邮箱 → delivery`
 - 运行机器：Windows (Machine 1)
+- 代表人来源：Companies House `officers` 页面，只取当前在任，多个名字用分号拼接
+- 邮箱来源：官网规则提取，不再让官网 LLM 抽代表人或邮箱
 
 ```bash
 cd England

@@ -8,6 +8,8 @@ import threading
 import time
 from pathlib import Path
 
+from england_crawler.sites.companyname.companies_house import CompaniesHouseClient
+from england_crawler.sites.companyname.email_rules import EnglandRuleEmailExtractor
 from oldiron_core.fc_email.domain_cache import FirecrawlDomainCache
 from oldiron_core.fc_email.email_service import FirecrawlEmailService, FirecrawlEmailSettings
 from oldiron_core.google_maps import GoogleMapsClient, GoogleMapsConfig
@@ -61,6 +63,7 @@ class CompanyNamePipelineRunner:
         self.stop_event = threading.Event()
         self._gmap_local = threading.local()
         self._firecrawl_local = threading.local()
+        self._companies_house_local = threading.local()
         self._firecrawl_key_pool = None
         self._firecrawl_key_pool_lock = threading.Lock()
         self._firecrawl_domain_cache = FirecrawlDomainCache(
@@ -257,8 +260,32 @@ class CompanyNamePipelineRunner:
             self._process_firecrawl_task(task)
 
     def _process_firecrawl_task(self, task: FirecrawlTask) -> None:
+        ch_result = self._get_companies_house_client().lookup_company(task.company_name)
+        LOGGER.info(
+            "CH officers：%s | 编号=%s | 名字=%d | representative=%s",
+            task.orgnr,
+            ch_result.company_number or "-",
+            len(ch_result.officer_names),
+            ch_result.representative or "-",
+        )
+        if ch_result.company_number or ch_result.officer_names or ch_result.representative:
+            self.store.update_companies_house_result(
+                task.orgnr,
+                company_number=ch_result.company_number,
+                officers_url=ch_result.officers_url,
+                officer_names=ch_result.officer_names,
+                representative=ch_result.representative,
+            )
         if not task.website:
-            self.store.complete_firecrawl_task(task.orgnr, [], evidence_url="")
+            self.store.complete_firecrawl_task(
+                task.orgnr,
+                [],
+                evidence_url=ch_result.officers_url or "",
+                representative=ch_result.representative,
+                company_number=ch_result.company_number,
+                officers_url=ch_result.officers_url,
+                officer_names=ch_result.officer_names,
+            )
             return
         decision = self._firecrawl_domain_cache.prepare_lookup(
             task.domain, stale_running_seconds=30.0,
@@ -266,10 +293,26 @@ class CompanyNamePipelineRunner:
         if decision.status == "done":
             if decision.emails:
                 LOGGER.info("邮箱补充 命中缓存：%s | 域名=%s | 邮箱=%d", task.orgnr, task.domain, len(decision.emails))
-                self.store.complete_firecrawl_task(task.orgnr, decision.emails, evidence_url="")
+                self.store.complete_firecrawl_task(
+                    task.orgnr,
+                    decision.emails,
+                    evidence_url=ch_result.officers_url or task.website,
+                    representative=ch_result.representative,
+                    company_number=ch_result.company_number,
+                    officers_url=ch_result.officers_url,
+                    officer_names=ch_result.officer_names,
+                )
             else:
                 LOGGER.info("邮箱补充 命中缓存(无邮箱)：%s | 域名=%s", task.orgnr, task.domain)
-                self.store.complete_firecrawl_task(task.orgnr, [], evidence_url="")
+                self.store.complete_firecrawl_task(
+                    task.orgnr,
+                    [],
+                    evidence_url=ch_result.officers_url or task.website,
+                    representative=ch_result.representative,
+                    company_number=ch_result.company_number,
+                    officers_url=ch_result.officers_url,
+                    officer_names=ch_result.officer_names,
+                )
             return
         if decision.status == "wait":
             LOGGER.info("邮箱补充 等待同域名：%s | 域名=%s", task.orgnr, task.domain)
@@ -277,23 +320,23 @@ class CompanyNamePipelineRunner:
             return
         LOGGER.info("邮箱补充 开始：%s | 域名=%s", task.orgnr, task.domain)
         try:
-            service = self._get_firecrawl_service()
-            result = service.discover_emails(
+            result = self._get_rule_email_extractor().discover(
                 company_name=task.company_name,
                 homepage=task.website,
                 domain=task.domain,
-                existing_representative=task.representative,
             )
-            emails = result.emails if hasattr(result, "emails") else []
-            ev = result.evidence_url if hasattr(result, "evidence_url") else ""
-            rep = result.representative if hasattr(result, "representative") else ""
-            website_name = result.company_name if hasattr(result, "company_name") else ""
-            retry_after = result.retry_after_seconds if hasattr(result, "retry_after_seconds") else 0.0
-            LOGGER.info("邮箱补充 完成：%s | 域名=%s | 邮箱=%d | 代表人=%s", task.orgnr, task.domain, len(emails), rep or "-")
-            self._firecrawl_domain_cache.mark_done(task.domain, emails, retry_after_seconds=retry_after)
+            emails = list(result.emails or [])
+            ev = str(result.evidence_url or task.website).strip()
+            LOGGER.info("邮箱补充 完成：%s | 域名=%s | 邮箱=%d | 代表人=%s", task.orgnr, task.domain, len(emails), ch_result.representative or "-")
+            self._firecrawl_domain_cache.mark_done(task.domain, emails, retry_after_seconds=0.0)
             self.store.complete_firecrawl_task(
-                task.orgnr, emails, evidence_url=ev,
-                representative=rep, website_company_name=website_name,
+                task.orgnr,
+                emails,
+                evidence_url=ch_result.officers_url or ev,
+                representative=ch_result.representative,
+                company_number=ch_result.company_number,
+                officers_url=ch_result.officers_url,
+                officer_names=ch_result.officer_names,
             )
         except Exception as exc:  # noqa: BLE001
             attempt = task.retries + 1
@@ -301,7 +344,15 @@ class CompanyNamePipelineRunner:
             if attempt >= 5:
                 LOGGER.warning("邮箱补充 最终失败 %s：%s", task.orgnr, exc)
                 self._firecrawl_domain_cache.mark_done(task.domain, [])
-                self.store.complete_firecrawl_task(task.orgnr, [], evidence_url="")
+                self.store.complete_firecrawl_task(
+                    task.orgnr,
+                    [],
+                    evidence_url=ch_result.officers_url or "",
+                    representative=ch_result.representative,
+                    company_number=ch_result.company_number,
+                    officers_url=ch_result.officers_url,
+                    officer_names=ch_result.officer_names,
+                )
                 return
             LOGGER.warning("邮箱补充 重试 %s(%d)：%s", task.orgnr, attempt, exc)
             self._firecrawl_domain_cache.defer(task.domain, delay_seconds=delay, error_text=str(exc)[:200])
@@ -326,6 +377,20 @@ class CompanyNamePipelineRunner:
             )
             self._firecrawl_local.service = svc
         return svc
+
+    def _get_rule_email_extractor(self) -> EnglandRuleEmailExtractor:
+        extractor = getattr(self._firecrawl_local, "rule_email_extractor", None)
+        if extractor is None:
+            extractor = EnglandRuleEmailExtractor(self._get_firecrawl_service())
+            self._firecrawl_local.rule_email_extractor = extractor
+        return extractor
+
+    def _get_companies_house_client(self) -> CompaniesHouseClient:
+        client = getattr(self._companies_house_local, "client", None)
+        if client is None:
+            client = CompaniesHouseClient()
+            self._companies_house_local.client = client
+        return client
 
 
 def run_companyname_pipeline(

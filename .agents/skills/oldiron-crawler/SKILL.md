@@ -56,6 +56,7 @@ Also confirm where the code should run:
 - or the other machine registered in `AGENTS.md`
 
 Current country overrides already fixed by repository rule:
+- `England`: representative comes from Companies House `officers` pages (current officers only, semicolon-joined). England website email extraction is rule-based only; do not use website LLM extraction for representative or email.
 - `Japan`: per-site delivery + personal-email-only delivery policy
 - `Brazil`: per-site delivery
 - `UnitedStates`: per-site delivery
