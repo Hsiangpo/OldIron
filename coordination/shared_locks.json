@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-03T05:16:33Z",
+  "updated_at": "2026-04-03T05:25:12Z",
   "locks": [
     {
       "lock_id": "lock-mac-japan-four-sites-20260402-1",
@@ -11,8 +11,8 @@
       "task_id": "mac-japan-four-sites-20260402",
       "github_ref": "not-created",
       "locked_at": "2026-04-03T05:05:55Z",
-      "heartbeat_at": "2026-04-03T05:16:33Z",
-      "expires_at": "2026-04-03T05:36:33Z",
+      "heartbeat_at": "2026-04-03T05:25:12Z",
+      "expires_at": "2026-04-03T05:45:12Z",
       "notes": "Continue Japan four-site integration; lock was released too early while task is still in progress."
     }
   ]

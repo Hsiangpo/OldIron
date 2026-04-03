@@ -24,7 +24,6 @@ USAGE_TEXT = """用法：
 站点：
   bizmaps     — biz-maps.com 日本企业信息列表
   hellowork   — ハローワーク 日本企业信息（求人検索）
-  mynavi      — マイナビ転職 日本职位转公司采集
   openwork    — OpenWork 日本企业信息列表
   onecareer   — One Career 日本企业信息列表
   pasonacareer — パソナキャリア 日本职位转公司采集
@@ -85,11 +84,6 @@ def _dispatch(argv: list[str]) -> int:
         from japan_crawler.sites.hellowork.cli import run_hellowork
 
         return run_hellowork(rest)
-
-    if site == "mynavi":
-        from japan_crawler.sites.mynavi.cli import run_mynavi
-
-        return run_mynavi(rest)
 
     if site == "openwork":
         from japan_crawler.sites.openwork.cli import run_openwork
