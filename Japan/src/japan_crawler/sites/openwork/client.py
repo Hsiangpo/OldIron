@@ -67,6 +67,7 @@ class OpenworkClient:
         self._browser_lock = threading.Lock()
         self._browser_mode = os.getenv("OPENWORK_FORCE_BROWSER", "").strip() == "1"
         self._browser_notice_logged = False
+        self._protocol_fallback_logged = False
         self._browser_client = None
         if browser_profile_dir is not None:
             self._browser_client = OpenworkPersistentBrowser(
@@ -114,7 +115,7 @@ class OpenworkClient:
                     if self._should_fallback_direct_from_response(response):
                         if use_proxy:
                             self._disable_proxy_temporarily(f"挑战页: {url}")
-                            LOGGER.warning("代理路径触发挑战页/异常状态，回退直连：%s", url)
+                            self._log_protocol_fallback_once()
                             continue
                         return self._browser_response(url)
                     if response.status_code == 200:
@@ -135,7 +136,7 @@ class OpenworkClient:
                     self._error_count += 1
                     if use_proxy and self._should_fallback_direct_from_exception(exc):
                         self._disable_proxy_temporarily(f"代理异常: {url}")
-                        LOGGER.warning("代理路径异常，回退直连：%s | %s", url, exc)
+                        self._log_protocol_fallback_once()
                         continue
                     LOGGER.warning("请求异常: %s", exc)
                     self._sleep_backoff(attempt, 2.0, 4.0, "网络异常重试")
@@ -149,7 +150,7 @@ class OpenworkClient:
         with self._browser_lock:
             self._browser_mode = True
             if not self._browser_notice_logged:
-                LOGGER.warning("OpenWork 已切换到浏览器详情补抓模式，后续详情页会逐条处理，速度会慢一些。")
+                LOGGER.info("OpenWork 已切换到浏览器详情补抓模式，后续详情页会逐条处理，速度会慢一些。")
                 self._browser_notice_logged = True
             html_text = self._browser_client.fetch_html(url=url, ready_selector=self._ready_selector(url))
             self._request_count += 1
@@ -189,7 +190,6 @@ class OpenworkClient:
             except Exception:  # noqa: BLE001
                 pass
             delattr(self._local, "proxy_session")
-        LOGGER.warning("代理暂时停用 120 秒：%s", reason)
 
     def _should_fallback_direct_from_exception(self, exc: Exception) -> bool:
         text = str(exc or "").lower()
@@ -209,6 +209,12 @@ class OpenworkClient:
         wait = base * (attempt + 1) + random.uniform(0.5, jitter)
         LOGGER.warning("%s，等待 %.1fs", label, wait)
         time.sleep(wait)
+
+    def _log_protocol_fallback_once(self) -> None:
+        if self._protocol_fallback_logged:
+            return
+        LOGGER.info("OpenWork 协议详情已被站点拦截，自动回退到浏览器补抓。")
+        self._protocol_fallback_logged = True
 
     @property
     def stats(self) -> dict[str, int]:
