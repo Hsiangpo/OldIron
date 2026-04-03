@@ -339,7 +339,3 @@ def _collect_process_results(result_queue, expected_count: int = 3) -> tuple[dic
         if error:
             errors.append(str(error))
     return results, errors
-
-
-def _p1_zero_progress(stats: dict[str, int]) -> bool:
-    return int(stats.get("groups_done", 0) or 0) <= 0
