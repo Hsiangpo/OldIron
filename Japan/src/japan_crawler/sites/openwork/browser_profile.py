@@ -140,7 +140,10 @@ class OpenworkPersistentBrowser:
             launch_kwargs["channel"] = self._channel
         if self._proxy_url:
             launch_kwargs["proxy"] = {"server": self._proxy_url}
-        self._context = self._playwright.chromium.launch_persistent_context(**launch_kwargs)
+        try:
+            self._context = self._playwright.chromium.launch_persistent_context(**launch_kwargs)
+        except Error as exc:
+            self._handle_launch_error(exc)
         self._started_headless = headless
         self._reset_pages()
         LOGGER.info("OpenWork 启动浏览器 profile：%s | headless=%s", self._user_data_dir, headless)
@@ -208,3 +211,14 @@ class OpenworkPersistentBrowser:
             " 请先执行 `cd Japan && .venv/bin/python run.py openwork auth`，"
             "在打开的 Chrome 窗口里人工完成一次图片验证码，之后再重新运行站点命令。"
         )
+
+    def _handle_launch_error(self, exc: Error) -> None:
+        message = str(exc or "")
+        if "ProcessSingleton" in message or "profile is already in use" in message:
+            raise OpenworkBrowserBlocked(
+                "OpenWork 浏览器 profile 当前已被另一个 Chrome/爬虫进程占用。"
+                " 如果你已经在跑 `openwork list` 或 `openwork all`，不要重复执行 `openwork auth`，"
+                "直接在那个已打开的 Chrome 窗口里处理验证码即可。"
+                " 如果当前没有在跑任务，先完全关闭占用该 profile 的 Chrome，再重试 `openwork auth`。"
+            ) from exc
+        raise

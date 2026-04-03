@@ -94,14 +94,18 @@ def run_openwork(argv: list[str]) -> int:
 
 
 def _run_auth(output_dir: Path, proxy: str, manual_wait_seconds: int) -> int:
-    from .browser_profile import OpenworkPersistentBrowser
+    from .browser_profile import OpenworkBrowserBlocked, OpenworkPersistentBrowser
 
     browser = OpenworkPersistentBrowser(
         user_data_dir=output_dir / "browser_profile",
         proxy_url=proxy,
         manual_wait_seconds=manual_wait_seconds,
     )
-    browser.prepare_manual_auth()
+    try:
+        browser.prepare_manual_auth()
+    except OpenworkBrowserBlocked as exc:
+        LOGGER.error("%s", exc)
+        return 1
     print(f"OpenWork 浏览器 profile 已就绪：{output_dir / 'browser_profile'}")
     return 0
 
