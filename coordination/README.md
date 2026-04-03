@@ -61,6 +61,22 @@ Country/site-local changes outside the paths above still require an active task 
 13. Update task status and release the shared lock if one exists
 14. If the work is partial, add a handoff note under `coordination/handoffs/`
 
+## CLI Shortcuts
+
+Prefer the coordination helper instead of hand-editing JSON:
+
+```bash
+python coordination/coord_cli.py begin --task-id coord-2026-04-03-example --change-class site_local --machine "Machine 1" --agent codex-windows --base-branch main --working-branch machine1/england/example --scope England/sites/companyname --planned-file England/src/england_crawler/sites/companyname/pipeline.py
+python coordination/coord_cli.py begin --task-id coord-2026-04-03-shared --change-class shared_zone --machine "Machine 1" --agent codex-windows --base-branch main --working-branch machine1/shared/example --scope AGENTS.md --planned-file AGENTS.md --lock-path AGENTS.md --lease-minutes 20
+python coordination/coord_cli.py heartbeat --task-id coord-2026-04-03-shared --lease-minutes 20
+python coordination/coord_cli.py finish --task-id coord-2026-04-03-shared --notes "done"
+python coordination/coord_cli.py takeover --previous-lock-id lock-some-task-1 --new-task-id coord-2026-04-03-takeover --machine "Machine 2" --agent codex-mac --base-branch main --working-branch machine2/shared/takeover --scope AGENTS.md --planned-file AGENTS.md --lease-minutes 20 --notes "expired lock takeover"
+python coordination/coord_cli.py render-issue --task-id coord-2026-04-03-shared
+python coordination/coord_cli.py render-pr --task-id coord-2026-04-03-shared
+python coordination/preflight.py --change-class shared_zone --scope AGENTS.md --lock-path AGENTS.md
+python coordination/lease_doctor.py
+```
+
 ## Conflict Rule
 
 If another active task already owns or locks the same scope:

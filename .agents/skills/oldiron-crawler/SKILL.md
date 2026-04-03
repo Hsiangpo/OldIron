@@ -81,6 +81,8 @@ At the start of substantial work:
 7. If the task is `site_local`, register the task and push the task branch early so the remote machine can see the work started.
 8. If the task is `shared_zone`, register the task, claim a shared lease lock, set `expires_at` + `heartbeat_at`, and push the lock to the remote before editing the shared-zone files.
 9. If another active task already owns or locks the same scope, stop and report the conflict instead of editing through it.
+10. Prefer `python coordination/coord_cli.py ...` for begin / heartbeat / finish / takeover / render instead of hand-editing coordination JSON.
+11. Prefer `python coordination/preflight.py ...` for a quick start check and `python coordination/lease_doctor.py` for stale-lock inspection before manually taking over an expired shared lock.
 8. If SQLite databases are being moved across machines:
    - stop the source process first
    - sync `.db`, `-wal`, and `-shm` together when the sidecar files exist

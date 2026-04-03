@@ -150,6 +150,19 @@ python product.py Denmark day1
 10. 如果是共享区任务，再释放锁并一起推送
 11. 如果工作未完成，写 `coordination/handoffs/` 交接文档
 
+常用命令：
+
+```bash
+python coordination/coord_cli.py begin --task-id coord-2026-04-03-example --change-class site_local --machine "Machine 1" --agent codex-windows --base-branch main --working-branch machine1/england/example --scope England/sites/companyname --planned-file England/src/england_crawler/sites/companyname/pipeline.py
+python coordination/coord_cli.py begin --task-id coord-2026-04-03-shared --change-class shared_zone --machine "Machine 1" --agent codex-windows --base-branch main --working-branch machine1/shared/example --scope AGENTS.md --planned-file AGENTS.md --lock-path AGENTS.md --lease-minutes 20
+python coordination/coord_cli.py heartbeat --task-id coord-2026-04-03-shared --lease-minutes 20
+python coordination/coord_cli.py finish --task-id coord-2026-04-03-shared --notes "done"
+python coordination/coord_cli.py render-issue --task-id coord-2026-04-03-shared
+python coordination/coord_cli.py render-pr --task-id coord-2026-04-03-shared
+python coordination/preflight.py --change-class shared_zone --scope AGENTS.md --lock-path AGENTS.md
+python coordination/lease_doctor.py
+```
+
 ## 目录约定
 
 ```

@@ -114,6 +114,13 @@
   - release any shared lock in `coordination/shared_locks.json`
   - if the work is partial, add a handoff note under `coordination/handoffs/`
   - shared lock release should travel with the completion push; do not leave an already-finished shared task locked on the remote
+- Preferred tooling:
+  - use `python coordination/coord_cli.py begin ...` to create task entries
+  - use `python coordination/coord_cli.py heartbeat ...` to refresh a shared lease
+  - use `python coordination/coord_cli.py finish ...` to complete a task and release locks
+  - use `python coordination/coord_cli.py takeover ...` only when a shared lock is expired and takeover is justified
+  - use `python coordination/preflight.py ...` before starting a task when you want a fast conflict check
+  - use `python coordination/lease_doctor.py` to inspect expired locks, orphan locks, or malformed shared-zone state
 - Machine roles in the `Machines` section are default runtime responsibilities, not permanent exclusive development locks. Real-time ownership is defined by the coordination files and current task assignment.
 
 ## Country Delivery Rules
