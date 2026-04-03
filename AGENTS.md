@@ -263,6 +263,8 @@ There is no single root build step. Work inside the target country directory for
 ## Code Sync Rules
 
 - Every code change must be committed and pushed to GitHub immediately after verification.
+- This applies to code, tests, docs, coordination files, `AGENTS.md`, and skill files as well; do not leave verified tracked changes only in the local worktree.
+- If the user explicitly asks for Git actions in the current task, treat `git add` + `git commit` + `git push` as required completion steps, not optional cleanup.
 - Every time code changes are deployed or verified against a running site process, stop the old process first, then restart it on the new code. Never leave an old process running on stale code after a code change.
 - Normal machine-to-machine code sync must use Git:
   - Mac pushes verified code to GitHub.

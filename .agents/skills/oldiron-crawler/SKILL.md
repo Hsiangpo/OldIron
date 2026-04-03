@@ -96,7 +96,7 @@ Follow this route:
 5. Implement crawler + pipelines
 6. Run smoke tests
 7. Integrate delivery
-8. Commit/push only when user explicitly asks for git actions in this session
+8. If the user explicitly asks for git actions in this session, commit and push after verification; do not leave the verified change set only in the local worktree
 
 ### B. Data import from Excel/CSV
 
@@ -106,7 +106,7 @@ Follow this route:
 3. Implement import route in the country/site structure
 4. Run smoke tests
 5. Integrate delivery
-6. Commit/push only when user explicitly asks for git actions in this session
+6. If the user explicitly asks for git actions in this session, commit and push after verification; do not leave the verified change set only in the local worktree
 
 ## 5. Site exploration requirements
 
@@ -335,6 +335,11 @@ If smoke tests fail, fix the cause before claiming the task is done.
 ## 18. Git / deployment behavior
 
 Follow repository expectations from `AGENTS.md`, but do not create commits or push unless the user explicitly asks for git actions in the current session.
+
+When the user has explicitly asked for git actions in the current session:
+- treat `git add` + `git commit` + `git push` as required completion steps
+- do not stop after local edits or local verification
+- do not report the task as complete while verified tracked changes are still only local
 
 If the task includes deployment to the remote Windows machine, use the machine record in `AGENTS.md` as the source of truth.
 
