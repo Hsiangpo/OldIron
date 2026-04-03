@@ -87,6 +87,9 @@ class CompaniesHouseClient:
             self._session.proxies.update({"http": proxy, "https": proxy})
         self._timeout = max(float(timeout_seconds), 5.0)
 
+    def close(self) -> None:
+        self._session.close()
+
     def lookup_company(self, company_name: str) -> CompaniesHouseLookupResult:
         query = str(company_name or "").strip()
         if not query:

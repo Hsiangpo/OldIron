@@ -257,7 +257,23 @@ class CompanyNamePipelineRunner:
             if not task:
                 time.sleep(1.0)
                 continue
-            self._process_firecrawl_task(task)
+            try:
+                self._process_firecrawl_task(task)
+            except Exception as exc:  # noqa: BLE001
+                self._handle_firecrawl_task_exception(task, exc)
+
+    def _handle_firecrawl_task_exception(self, task: FirecrawlTask, exc: Exception) -> None:
+        attempt = task.retries + 1
+        delay = _retry_delay_seconds(attempt, 120.0)
+        LOGGER.exception(
+            "邮箱补充 线程异常：%s | 域名=%s | 第%d次，%0.fs 后重试",
+            task.orgnr,
+            task.domain or "-",
+            attempt,
+            delay,
+        )
+        self._reset_email_worker_state()
+        self.store.defer_firecrawl_task(task.orgnr, delay, str(exc)[:200])
 
     def _process_firecrawl_task(self, task: FirecrawlTask) -> None:
         ch_result = self._get_companies_house_client().lookup_company(task.company_name)
@@ -377,6 +393,24 @@ class CompanyNamePipelineRunner:
             )
             self._firecrawl_local.service = svc
         return svc
+
+    def _reset_email_worker_state(self) -> None:
+        service = getattr(self._firecrawl_local, "service", None)
+        if service is not None:
+            try:
+                service.close()
+            except Exception:  # noqa: BLE001
+                pass
+            delattr(self._firecrawl_local, "service")
+        if hasattr(self._firecrawl_local, "rule_email_extractor"):
+            delattr(self._firecrawl_local, "rule_email_extractor")
+        ch_client = getattr(self._companies_house_local, "client", None)
+        if ch_client is not None:
+            try:
+                ch_client.close()
+            except Exception:  # noqa: BLE001
+                pass
+            delattr(self._companies_house_local, "client")
 
     def _get_rule_email_extractor(self) -> EnglandRuleEmailExtractor:
         extractor = getattr(self._firecrawl_local, "rule_email_extractor", None)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -16,7 +17,9 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
 from england_crawler.sites.companyname.email_rules import EnglandRuleEmailExtractor
+from england_crawler.sites.companyname.pipeline import CompanyNamePipelineRunner
 from england_crawler.sites.companyname.store import CompanyNameStore
+from england_crawler.sites.companyname.store import FirecrawlTask
 from oldiron_core.fc_email.client import HtmlPageResult
 
 
@@ -50,6 +53,25 @@ class _FakeRuleEmailService:
 
     def _extract_rule_emails(self, start_url: str, pages: list[HtmlPageResult]) -> list[str]:
         return ["info@example.co.uk", "sales@example.co.uk"]
+
+
+class _EmailWorkerExceptionStore:
+    def __init__(self, task: FirecrawlTask, stop_event: threading.Event) -> None:
+        self._task = task
+        self._stop_event = stop_event
+        self._claimed = False
+        self.deferred: list[tuple[str, float, str]] = []
+
+    def claim_firecrawl_task(self) -> FirecrawlTask | None:
+        if self._claimed:
+            self._stop_event.set()
+            return None
+        self._claimed = True
+        return self._task
+
+    def defer_firecrawl_task(self, orgnr: str, delay_seconds: float, error: str = "") -> None:
+        self.deferred.append((orgnr, delay_seconds, error))
+        self._stop_event.set()
 
 
 class EnglandRuleRefreshTests(unittest.TestCase):
@@ -160,6 +182,34 @@ class EnglandRuleRefreshTests(unittest.TestCase):
                 self.assertEqual("Legacy Rep", rep)
             finally:
                 store.close()
+
+    def test_email_worker_exception_does_not_kill_worker_loop(self) -> None:
+        stop_event = threading.Event()
+        task = FirecrawlTask(
+            orgnr="org-1",
+            company_name="Acme Limited",
+            representative="",
+            website="https://acme.example",
+            domain="acme.example",
+            override_mode="",
+            retries=0,
+        )
+        store = _EmailWorkerExceptionStore(task, stop_event)
+        runner = CompanyNamePipelineRunner.__new__(CompanyNamePipelineRunner)
+        runner.stop_event = stop_event
+        runner.store = store
+        runner._firecrawl_local = threading.local()
+        runner._companies_house_local = threading.local()
+
+        def _boom(_: FirecrawlTask) -> None:
+            raise RuntimeError("companies house timeout")
+
+        runner._process_firecrawl_task = _boom  # type: ignore[method-assign]
+        runner._email_worker()
+
+        self.assertEqual(1, len(store.deferred))
+        self.assertEqual("org-1", store.deferred[0][0])
+        self.assertIn("companies house timeout", store.deferred[0][2])
 
 
 if __name__ == "__main__":
