@@ -58,6 +58,7 @@ Also confirm where the code should run:
 Current country overrides already fixed by repository rule:
 - `England`: representative comes from Companies House `officers` pages (current officers only, semicolon-joined). England website email extraction is rule-based only; do not use website LLM extraction for representative or email.
 - `Japan`: per-site delivery + personal-email-only delivery policy
+- `Japan`: multi-machine same-day delivery is allowed only by site split. Different machines may run the same `dayN` only when each machine owns different Japan sites. Never let two machines generate the same Japan site package for the same `dayN`. Final Japan `summary.json` must be regenerated on one designated assembler machine after collecting all per-site CSV/keys files.
 - `Brazil`: per-site delivery
 - `UnitedStates`: per-site delivery
 - For future countries, never infer strategy from Japan/Brazil/UnitedStates/Denmark/England/Finland. Ask first, then record the confirmed override in `AGENTS.md`.
@@ -190,6 +191,15 @@ Rules:
 - if `AGENTS.md` declares a country-specific per-site delivery override, follow that override instead of the default merge+dedup rule
 - if `AGENTS.md` declares a country-specific email delivery override, follow that override instead of the default/no-filter assumption
 - if re-running the same day and replacing an existing day package, move the old day directory to recycle bin / trash first; do not hard-delete it
+
+Japan multi-machine delivery checklist:
+- split by site only; never split one Japan site across multiple machines
+- different machines may each run `python product.py Japan dayN` for their owned Japan sites
+- choose one final assembler machine for `Japan_dayNNN`
+- copy only per-site delivery files from the other machine: `<site>.csv` and `<site>.keys.txt`
+- do not copy the other machine's `summary.json` into the final package
+- stop the remote Japan site processes before copying delivery files out
+- regenerate the final Japan `summary.json` on the assembler after all site files are present
 
 ## 8. Email handling rules
 

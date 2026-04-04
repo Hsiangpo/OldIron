@@ -140,6 +140,14 @@
   - `Japan`: per-site day delivery. Write one CSV + one keys file per site under `Japan/output/delivery/Japan_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `Brazil`: per-site day delivery. Write one CSV + one keys file per site under `Brazil/output/delivery/Brazil_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `UnitedStates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedStates/output/delivery/UnitedStates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+- Japan multi-machine same-day rule:
+  - different machines may run the same `Japan dayN` only when the split is by site ownership
+  - never let two machines produce the same Japan site package for the same `dayN`
+  - one designated machine must be the final Japan day assembler
+  - merge only per-site delivery assets from the other machine: `<site>.csv` + `<site>.keys.txt`
+  - do not copy the other machine's `summary.json` as the final summary
+  - regenerate the final `summary.json` on the designated assembler after all site packages are collected
+  - before copying Japan delivery assets from another machine, stop the corresponding remote Japan site processes so the copied day package is complete and stable
 - Country-specific email delivery overrides:
   - `Japan`: delivery-time email policy is personal-email-only. Filter out enterprise/company-domain emails and keep only personal mailbox domains.
 - Country-specific source overrides:
@@ -171,6 +179,20 @@
 3. Merge Finland site outputs into one Finland country output tree.
 4. Run `python product.py Finland dayN` from the project root.
 5. The final day package must be deduplicated by company name across all Finland sites (TMT + Duunitori + Jobly) together.
+
+### Japan Same-Day Multi-Machine Flow
+
+1. Split Japan strictly by site ownership before running `dayN`.
+2. Each machine may run `python product.py Japan dayN` only for the Japan sites it owns.
+3. Never allow two machines to generate the same Japan site package for the same `dayN`.
+4. Choose one machine as the final `Japan_dayNNN` assembler.
+5. On the non-assembler machine, stop the Japan site processes for the owned sites before copying out the delivery assets.
+6. Copy only the owned site delivery files to the assembler:
+   - `<site>.csv`
+   - `<site>.keys.txt`
+7. Do not copy or keep the other machine's `summary.json` as the final summary.
+8. On the assembler machine, rebuild the final `summary.json` after all Japan site packages are present under the same `Japan_dayNNN/`.
+9. Treat the assembler's `Japan_dayNNN/` as the only final authoritative day package.
 
 ## Temporary Artifact Cleanup & File Organization
 
