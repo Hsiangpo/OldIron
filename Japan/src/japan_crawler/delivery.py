@@ -16,38 +16,6 @@ if str(SHARED_ROOT) not in sys.path:
     sys.path.insert(0, str(SHARED_ROOT))
 
 from oldiron_core.delivery.engine import validate_day_sequence
-
-
-PERSONAL_EMAIL_DOMAINS = {
-    "gmail.com",
-    "yahoo.com",
-    "yahoo.co.jp",
-    "hotmail.com",
-    "outlook.com",
-    "outlook.jp",
-    "icloud.com",
-    "live.com",
-    "live.jp",
-    "msn.com",
-    "me.com",
-    "aol.com",
-    "docomo.ne.jp",
-    "softbank.ne.jp",
-    "ezweb.ne.jp",
-    "au.com",
-    "i.softbank.jp",
-    "ymobile.ne.jp",
-    "nifty.com",
-    "ocn.ne.jp",
-    "plala.or.jp",
-    "biglobe.ne.jp",
-    "so-net.ne.jp",
-    "dion.ne.jp",
-    "infoweb.ne.jp",
-    "gol.com",
-    "jcom.home.ne.jp",
-    "ybb.ne.jp",
-}
 _SITE_FILTER_ENV = "JAPAN_DELIVERY_SITES"
 _SUMMARY_ONLY_ENV = "JAPAN_DELIVERY_SUMMARY_ONLY"
 
@@ -144,9 +112,6 @@ def _write_site_delivery_assets(
         return None
     records = _load_site_records(site_name, site_dir)
     raw_count = len(records)
-    for record in records:
-        if "emails" in record:
-            record["emails"] = _filter_emails(record["emails"])
     qualified = [
         record
         for record in records
@@ -297,22 +262,6 @@ def _normalize_company_record(row: sqlite3.Row, existing_cols: set[str]) -> dict
         "emails": emails_value,
         "source_job_url": str(row["source_job_url"] or "").strip() if "source_job_url" in existing_cols else "",
     }
-
-
-def _filter_emails(emails_str: str) -> str:
-    if not emails_str:
-        return ""
-    parts = [part.strip().lower() for part in emails_str.replace(";", ",").split(",") if part.strip()]
-    filtered: list[str] = []
-    for email in parts:
-        if "@" not in email:
-            continue
-        domain = email.split("@", 1)[1]
-        if domain in PERSONAL_EMAIL_DOMAINS and email not in filtered:
-            filtered.append(email)
-    return "; ".join(filtered)
-
-
 def _record_key(record: dict[str, str]) -> str:
     parts = [
         str(record.get("company_name", "") or "").strip().lower(),

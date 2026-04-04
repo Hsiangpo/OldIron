@@ -57,7 +57,7 @@ Also confirm where the code should run:
 
 Current country overrides already fixed by repository rule:
 - `England`: representative comes from Companies House `officers` pages (current officers only, semicolon-joined). England website email extraction is rule-based only; do not use website LLM extraction for representative or email.
-- `Japan`: per-site delivery + personal-email-only delivery policy
+- `Japan`: per-site delivery
 - `Japan`: multi-machine same-day delivery is allowed only by site split. Different machines may run the same `dayN` only when each machine owns different Japan sites. Never let two machines generate the same Japan site package for the same `dayN`. Final Japan `summary.json` must be regenerated on one designated assembler machine after collecting all per-site CSV/keys files.
 - `Brazil`: per-site delivery
 - `UnitedStates`: per-site delivery

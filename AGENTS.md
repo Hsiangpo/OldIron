@@ -148,8 +148,6 @@
   - do not copy the other machine's `summary.json` as the final summary
   - regenerate the final `summary.json` on the designated assembler after all site packages are collected
   - before copying Japan delivery assets from another machine, stop the corresponding remote Japan site processes so the copied day package is complete and stable
-- Country-specific email delivery overrides:
-  - `Japan`: delivery-time email policy is personal-email-only. Filter out enterprise/company-domain emails and keep only personal mailbox domains.
 - Country-specific source overrides:
   - `England`: representative source is Companies House `officers` pages, using current officers only. Join multiple names with semicolons in page order. Prefer human names; if no human names exist, use current company-entity officers.
   - `England`: website email extraction is rule-based only. Do not use the website LLM path for England representative extraction or England website email extraction.

@@ -97,8 +97,8 @@ class JapanDeliveryTests(unittest.TestCase):
 
             delivery_root = output_root / "delivery"
             day1 = build_delivery_bundle(output_root, delivery_root, "day1")
-            self.assertEqual(1, day1["delta_companies"])
-            self.assertEqual(1, day1["sites"]["bizmaps"]["qualified_current"])
+            self.assertEqual(2, day1["delta_companies"])
+            self.assertEqual(2, day1["sites"]["bizmaps"]["qualified_current"])
 
             conn = sqlite3.connect(str(bizmaps_dir / "bizmaps_store.db"))
             conn.execute(
@@ -110,7 +110,7 @@ class JapanDeliveryTests(unittest.TestCase):
 
             day2 = build_delivery_bundle(output_root, delivery_root, "day2")
             self.assertEqual(1, day2["delta_companies"])
-            self.assertEqual(2, day2["sites"]["bizmaps"]["qualified_current"])
+            self.assertEqual(3, day2["sites"]["bizmaps"]["qualified_current"])
 
             csv_path = delivery_root / "Japan_day002" / "bizmaps.csv"
             with csv_path.open(encoding="utf-8-sig", newline="") as fp:

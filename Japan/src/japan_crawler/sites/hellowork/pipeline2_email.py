@@ -20,18 +20,6 @@ from .store import HelloworkStore
 
 logger = logging.getLogger("hellowork.pipeline2")
 
-# 个人邮箱域名过滤
-PERSONAL_EMAIL_DOMAINS = {
-    "gmail.com", "yahoo.com", "yahoo.co.jp", "hotmail.com",
-    "outlook.com", "outlook.jp", "icloud.com", "live.com",
-    "live.jp", "msn.com", "me.com", "aol.com",
-    "docomo.ne.jp", "softbank.ne.jp", "ezweb.ne.jp",
-    "au.com", "i.softbank.jp", "ymobile.ne.jp",
-    "nifty.com", "ocn.ne.jp", "plala.or.jp", "biglobe.ne.jp",
-    "so-net.ne.jp", "dion.ne.jp", "infoweb.ne.jp",
-    "gol.com", "jcom.home.ne.jp", "ybb.ne.jp",
-}
-
 DEFAULT_CONCURRENCY = 64
 DEFAULT_BATCH_SIZE = 512
 
