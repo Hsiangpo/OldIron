@@ -87,7 +87,6 @@ class OpenworkClient:
         self._browser_lock = threading.Lock()
         self._browser_mode = os.getenv("OPENWORK_FORCE_BROWSER", "").strip() == "1"
         self._browser_notice_logged = False
-        self._protocol_fallback_logged = False
         self._captcha_api_key = str(
             os.getenv("TWOCAPTCHA_API_KEY", "") or os.getenv("CAPTCHA_API_KEY", "")
         ).strip()
@@ -149,20 +148,11 @@ class OpenworkClient:
                         )
                         if solved is not None:
                             return solved
-                        if self._captcha_api_key:
-                            if self._browser_client is not None:
-                                LOGGER.info("OpenWork 2cc 未解开验证码，自动回退到浏览器 profile 抓取：%s", url)
-                                return self._browser_response(url)
-                            if use_proxy:
-                                self._disable_proxy_temporarily(f"挑战页: {url}")
-                                self._log_protocol_fallback_once()
-                                continue
-                            raise RuntimeError(f"OpenWork 2cc 自动识别失败：{url}")
                         if use_proxy:
                             self._disable_proxy_temporarily(f"挑战页: {url}")
-                            self._log_protocol_fallback_once()
                             continue
-                        return self._browser_response(url)
+                        LOGGER.warning("OpenWork 验证码页未解开，保留断点等待换 IP 后重试：%s", url)
+                        return None
                     if response.status_code == 200:
                         return response
                     if response.status_code == 429:
@@ -170,15 +160,12 @@ class OpenworkClient:
                         break
                     if response.status_code == 403:
                         self._error_count += 1
-                        if self._captcha_api_key:
-                            if self._browser_client is not None:
-                                LOGGER.info("OpenWork 403 且 2cc 未解开验证码，自动回退到浏览器 profile 抓取：%s", url)
-                                browser_response = self._browser_response(url)
-                                return browser_response
-                            raise RuntimeError(f"OpenWork 403 且 2cc 未解开验证码：{url}")
-                        LOGGER.warning("403 禁止访问，切换浏览器复用：%s", url)
-                        browser_response = self._browser_response(url)
-                        return browser_response
+                        if use_proxy:
+                            LOGGER.warning("OpenWork 403，当前代理/IP 可能被拦，先停当前页等待换 IP：%s", url)
+                            self._disable_proxy_temporarily(f"403: {url}")
+                            continue
+                        LOGGER.warning("OpenWork 403，当前直连/IP 也被拦，保留断点等待换 IP：%s", url)
+                        return None
                     if response.status_code >= 500:
                         self._sleep_backoff(attempt, 2.0, 5.0, f"{response.status_code} 服务端错误")
                         break
@@ -188,7 +175,6 @@ class OpenworkClient:
                     self._error_count += 1
                     if use_proxy and self._should_fallback_direct_from_exception(exc):
                         self._disable_proxy_temporarily(f"代理异常: {url}")
-                        self._log_protocol_fallback_once()
                         continue
                     LOGGER.warning("请求异常: %s", exc)
                     self._sleep_backoff(attempt, 2.0, 4.0, "网络异常重试")
@@ -268,12 +254,6 @@ class OpenworkClient:
         wait = base * (attempt + 1) + random.uniform(0.5, jitter)
         LOGGER.warning("%s，等待 %.1fs", label, wait)
         time.sleep(wait)
-
-    def _log_protocol_fallback_once(self) -> None:
-        if self._protocol_fallback_logged:
-            return
-        LOGGER.info("OpenWork 协议详情已被站点拦截，自动回退到浏览器补抓。")
-        self._protocol_fallback_logged = True
 
     def _solve_captcha_if_possible(
         self,
@@ -406,7 +386,7 @@ class OpenworkClient:
     def _log_missing_2captcha_once(self) -> None:
         if self._captcha_notice_logged:
             return
-        LOGGER.info("OpenWork 未配置 2cc key，验证码仍将回退到浏览器方案。")
+        LOGGER.info("OpenWork 未配置 2cc key，遇到验证码页时将直接保留断点，等待换 IP 或补 key。")
         self._captcha_notice_logged = True
 
     @property

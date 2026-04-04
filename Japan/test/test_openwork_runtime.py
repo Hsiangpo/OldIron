@@ -25,7 +25,11 @@ from japan_crawler.sites.openwork.browser_profile import OpenworkBrowserBlocked
 
 
 class _FailingBrowser:
+    def __init__(self) -> None:
+        self.fetch_calls = 0
+
     def fetch_html(self, *, url: str, ready_selector: str) -> str:  # noqa: ARG002
+        self.fetch_calls += 1
         raise RuntimeError("browser blocked")
 
 
@@ -83,6 +87,20 @@ class _RetryListClient:
         return self._responses.pop(0) if self._responses else None
 
 
+class _StaticResponse:
+    def __init__(self, status_code: int, text: str) -> None:
+        self.status_code = status_code
+        self.text = text
+
+
+class _StaticSession:
+    def __init__(self, response: _StaticResponse) -> None:
+        self._response = response
+
+    def get(self, url: str, params=None, timeout: int = 30):  # noqa: ANN001, ARG002
+        return self._response
+
+
 class OpenworkRuntimeTests(unittest.TestCase):
     def test_browser_response_failure_returns_none(self) -> None:
         client = OpenworkClient.__new__(OpenworkClient)
@@ -111,6 +129,56 @@ class OpenworkRuntimeTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(0, browser.auth_calls)
         self.assertEqual(1, browser.fetch_calls)
+
+    def test_get_with_retry_does_not_auto_fallback_to_browser_on_403(self) -> None:
+        browser = _FailingBrowser()
+        client = OpenworkClient.__new__(OpenworkClient)
+        client._browser_client = browser
+        client._browser_lock = threading.Lock()
+        client._browser_mode = False
+        client._browser_notice_logged = False
+        client._captcha_notice_logged = False
+        client._captcha_api_key = "2cc-key"
+        client._proxy_url = ""
+        client._proxy_cooldown_until = 0
+        client._request_count = 0
+        client._error_count = 0
+        client._max_retries = 1
+        client._request_modes = lambda: [False]
+        client._session = lambda use_proxy: _StaticSession(_StaticResponse(403, "forbidden"))  # noqa: ARG005
+        client._polite_delay = lambda: None
+        client._sleep_backoff = lambda *args: None
+        client._disable_proxy_temporarily = lambda reason: None  # noqa: ARG005
+        client._solve_captcha_if_possible = lambda **kwargs: None
+
+        result = client._get_with_retry("https://www.openwork.jp/company_list")
+        self.assertIsNone(result)
+        self.assertEqual(0, browser.fetch_calls)
+
+    def test_get_with_retry_does_not_auto_fallback_to_browser_on_captcha_page(self) -> None:
+        browser = _FailingBrowser()
+        client = OpenworkClient.__new__(OpenworkClient)
+        client._browser_client = browser
+        client._browser_lock = threading.Lock()
+        client._browser_mode = False
+        client._browser_notice_logged = False
+        client._captcha_notice_logged = False
+        client._captcha_api_key = "2cc-key"
+        client._proxy_url = ""
+        client._proxy_cooldown_until = 0
+        client._request_count = 0
+        client._error_count = 0
+        client._max_retries = 1
+        client._request_modes = lambda: [False]
+        client._session = lambda use_proxy: _StaticSession(_StaticResponse(200, "<title>画像認証</title>"))  # noqa: ARG005
+        client._polite_delay = lambda: None
+        client._sleep_backoff = lambda *args: None
+        client._disable_proxy_temporarily = lambda reason: None  # noqa: ARG005
+        client._solve_captcha_if_possible = lambda **kwargs: None
+
+        result = client._get_with_retry("https://www.openwork.jp/company_list")
+        self.assertIsNone(result)
+        self.assertEqual(0, browser.fetch_calls)
 
     def test_load_company_details_parallelizes_when_browser_not_primary(self) -> None:
         client = _FakeClient()

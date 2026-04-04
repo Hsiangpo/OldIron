@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from urllib.parse import urlparse
 
@@ -29,7 +30,9 @@ def parse_total_pages(page_html: str, per_page: int = 50) -> int:
         matched = _PAGE_RE.search(href)
         if matched is not None:
             max_page = max(max_page, int(matched.group(1)))
-    return max_page
+    total_results = parse_total_results(page_html)
+    computed_pages = math.ceil(total_results / max(int(per_page or 1), 1)) if total_results > 0 else 1
+    return max(max_page, computed_pages)
 
 
 def parse_company_cards(page_html: str) -> list[dict[str, str]]:

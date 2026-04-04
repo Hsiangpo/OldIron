@@ -57,7 +57,7 @@ class OpenworkParserTests(unittest.TestCase):
 
     def test_parse_total_results_and_pages(self) -> None:
         self.assertEqual(193415, parse_total_results(LIST_HTML))
-        self.assertEqual(6, parse_total_pages(LIST_HTML))
+        self.assertEqual(3869, parse_total_pages(LIST_HTML))
 
     def test_parse_company_detail(self) -> None:
         detail = parse_company_detail(DETAIL_HTML)
