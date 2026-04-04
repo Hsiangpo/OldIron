@@ -47,6 +47,7 @@ def run_mynavi(argv: list[str]) -> int:
     parser.add_argument("--max-groups", type=int, default=0, help="P1 最大采集五十音分组数（0=全部）")
     parser.add_argument("--max-pages", type=int, default=0, help="P1 每个分组最大页数（0=全部）")
     parser.add_argument("--max-items", type=int, default=0, help="P2/P3 最大处理公司数（0=全部）")
+    parser.add_argument("--group-workers", type=int, default=10, help="P1 五十音分组并发数")
     parser.add_argument("--detail-workers", type=int, default=12, help="P1 详情页并发数")
     parser.add_argument("--gmap-workers", type=int, default=16, help="P2 GMap 并发数")
     parser.add_argument("--email-workers", type=int, default=128, help="P3 邮箱提取并发数")
@@ -69,6 +70,7 @@ def run_mynavi(argv: list[str]) -> int:
                     proxy=proxy,
                     max_groups=args.max_groups,
                     max_pages=args.max_pages,
+                    group_workers=args.group_workers,
                     detail_workers=args.detail_workers,
                 )
             )
@@ -106,6 +108,7 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
                 float(args.delay),
                 int(args.max_groups),
                 int(args.max_pages),
+                int(args.group_workers),
                 int(args.detail_workers),
                 str(args.log_level),
                 result_queue,
@@ -164,6 +167,7 @@ def _mynavi_p1_entry(
     delay: float,
     max_groups: int,
     max_pages: int,
+    group_workers: int,
     detail_workers: int,
     log_level: str,
     result_queue,
@@ -182,6 +186,7 @@ def _mynavi_p1_entry(
             proxy=proxy,
             max_groups=max_groups,
             max_pages=max_pages,
+            group_workers=group_workers,
             detail_workers=detail_workers,
         )
         if _p1_zero_progress(stats):
@@ -292,15 +297,14 @@ def _mynavi_progress_snapshot(output_dir: Path) -> str:
         return "数据库尚未创建"
     try:
         with sqlite3.connect(str(db_path), timeout=5.0) as conn:
-            checkpoint = conn.execute(
+            checkpoints = conn.execute(
                 """
                 SELECT scope, last_page, total_pages, status
                 FROM checkpoints
                 WHERE status = 'running'
                 ORDER BY scope
-                LIMIT 1
                 """
-            ).fetchone()
+            ).fetchall()
             group_done = conn.execute(
                 "SELECT COUNT(*) FROM checkpoints WHERE status = 'done'"
             ).fetchone()[0]
@@ -315,10 +319,14 @@ def _mynavi_progress_snapshot(output_dir: Path) -> str:
             ).fetchone()[0]
     except sqlite3.Error as exc:
         return f"读取进度失败: {exc}"
-    if checkpoint is None:
+    if not checkpoints:
         return f"当前无运行中分组 | 已完成分组={group_done} | 公司={company_count}"
+    running_summary = ", ".join(
+        f"{row[0].split(':', 1)[-1]}={row[1]}/{row[2]}"
+        for row in checkpoints[:4]
+    )
     return (
-        f"{checkpoint[0]}={checkpoint[1]}/{checkpoint[2]}:{checkpoint[3]} | 已完成分组={group_done} | "
+        f"运行分组={len(checkpoints)} [{running_summary}] | 已完成分组={group_done} | "
         f"公司={company_count} | 邮箱待补={email_todo} | 官网待补={gmap_todo} | 最新更新={updated_at or '-'}"
     )
 

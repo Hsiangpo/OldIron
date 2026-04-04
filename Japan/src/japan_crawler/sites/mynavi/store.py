@@ -7,10 +7,22 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 def _now_text() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def build_company_key(company_name: str, website: str, address: str) -> str:
+    """构建公司去重 key，优先使用官网域名。"""
+    name = str(company_name or "").strip().lower()
+    host = str(urlparse(str(website or "").strip()).netloc or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host:
+        return f"{name}|{host}"
+    return f"{name}|{str(address or '').strip().lower()}"
 
 
 class MynaviStore:
@@ -19,6 +31,8 @@ class MynaviStore:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._local = threading.local()
+        self._conn_lock = threading.Lock()
+        self._connections: list[sqlite3.Connection] = []
         self._max_write_retries = 6
         self._init_tables()
 
@@ -31,7 +45,27 @@ class MynaviStore:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=60000")
             self._local.conn = conn
+            with self._conn_lock:
+                self._connections.append(conn)
         return conn
+
+    def close(self) -> None:
+        with self._conn_lock:
+            connections = list(self._connections)
+            self._connections.clear()
+        for conn in connections:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        if hasattr(self._local, "conn"):
+            delattr(self._local, "conn")
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _run_write(self, action) -> Any:
         for attempt in range(self._max_write_retries):
@@ -60,6 +94,7 @@ class MynaviStore:
                 address TEXT DEFAULT '',
                 industry TEXT DEFAULT '',
                 detail_url TEXT DEFAULT '',
+                source_job_url TEXT DEFAULT '',
                 emails TEXT DEFAULT '',
                 gmap_status TEXT DEFAULT 'pending',
                 email_status TEXT DEFAULT 'pending',
@@ -73,23 +108,38 @@ class MynaviStore:
             );
             """
         )
+        self._ensure_company_columns(conn)
         conn.commit()
+
+    def _ensure_company_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(companies)").fetchall()}
+        if "source_job_url" not in existing:
+            conn.execute("ALTER TABLE companies ADD COLUMN source_job_url TEXT DEFAULT ''")
 
     def upsert_companies(self, companies: list[dict[str, str]]) -> int:
         def _action(conn: sqlite3.Connection) -> int:
             inserted = 0
             for company in companies:
-                company_id = str(company.get("company_id", "") or "").strip()
                 company_name = str(company.get("company_name", "") or "").strip()
+                company_id = str(company.get("company_id", "") or "").strip()
+                if not company_id and company_name:
+                    company_id = build_company_key(
+                        company_name,
+                        str(company.get("website", "") or ""),
+                        str(company.get("address", "") or ""),
+                    )
                 if not company_id or not company_name:
                     continue
-                before = conn.total_changes
+                existed = conn.execute(
+                    "SELECT 1 FROM companies WHERE company_id = ? LIMIT 1",
+                    (company_id,),
+                ).fetchone() is not None
                 conn.execute(
                     """
                     INSERT INTO companies (
                         company_id, company_name, representative, website,
-                        address, industry, detail_url, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        address, industry, detail_url, source_job_url, emails, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(company_id) DO UPDATE SET
                         company_name = excluded.company_name,
                         representative = CASE
@@ -101,6 +151,8 @@ class MynaviStore:
                         address = CASE WHEN excluded.address != '' THEN excluded.address ELSE companies.address END,
                         industry = CASE WHEN excluded.industry != '' THEN excluded.industry ELSE companies.industry END,
                         detail_url = CASE WHEN excluded.detail_url != '' THEN excluded.detail_url ELSE companies.detail_url END,
+                        source_job_url = CASE WHEN excluded.source_job_url != '' THEN excluded.source_job_url ELSE companies.source_job_url END,
+                        emails = CASE WHEN excluded.emails != '' THEN excluded.emails ELSE companies.emails END,
                         updated_at = excluded.updated_at
                     """,
                     (
@@ -111,10 +163,12 @@ class MynaviStore:
                         company.get("address", ""),
                         company.get("industry", ""),
                         company.get("detail_url", ""),
+                        company.get("source_job_url", ""),
+                        company.get("emails", ""),
                         _now_text(),
                     ),
                 )
-                inserted += int(conn.total_changes > before)
+                inserted += int(not existed)
             return inserted
 
         return int(self._run_write(_action) or 0)
@@ -216,7 +270,7 @@ class MynaviStore:
         conn = self._conn()
         rows = conn.execute(
             """
-            SELECT company_name, representative, website, address, industry, detail_url, emails
+            SELECT company_name, representative, website, address, industry, detail_url, source_job_url, emails
             FROM companies
             ORDER BY company_id
             """
