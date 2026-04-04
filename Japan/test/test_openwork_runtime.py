@@ -97,7 +97,7 @@ class OpenworkRuntimeTests(unittest.TestCase):
         result = client._browser_response("https://www.openwork.jp/company.php?m_id=test")
         self.assertIsNone(result)
 
-    def test_browser_response_retries_once_after_manual_auth(self) -> None:
+    def test_browser_response_does_not_enter_manual_auth_fallback(self) -> None:
         browser = _ManualAuthBrowser()
         client = OpenworkClient.__new__(OpenworkClient)
         client._browser_client = browser
@@ -106,12 +106,11 @@ class OpenworkRuntimeTests(unittest.TestCase):
         client._browser_notice_logged = False
         client._request_count = 0
         client._captcha_api_key = ""
-        client._manual_auth_attempted = False
 
         result = client._browser_response("https://www.openwork.jp/company.php?m_id=test")
-        self.assertIsNotNone(result)
-        self.assertEqual(1, browser.auth_calls)
-        self.assertEqual(2, browser.fetch_calls)
+        self.assertIsNone(result)
+        self.assertEqual(0, browser.auth_calls)
+        self.assertEqual(1, browser.fetch_calls)
 
     def test_load_company_details_parallelizes_when_browser_not_primary(self) -> None:
         client = _FakeClient()

@@ -88,7 +88,6 @@ class OpenworkClient:
         self._browser_mode = os.getenv("OPENWORK_FORCE_BROWSER", "").strip() == "1"
         self._browser_notice_logged = False
         self._protocol_fallback_logged = False
-        self._manual_auth_attempted = False
         self._captcha_api_key = str(
             os.getenv("TWOCAPTCHA_API_KEY", "") or os.getenv("CAPTCHA_API_KEY", "")
         ).strip()
@@ -208,37 +207,13 @@ class OpenworkClient:
             try:
                 html_text = self._browser_client.fetch_html(url=url, ready_selector=self._ready_selector(url))
             except OpenworkBrowserBlocked as exc:
-                if self._try_manual_browser_auth_once(exc):
-                    try:
-                        html_text = self._browser_client.fetch_html(url=url, ready_selector=self._ready_selector(url))
-                    except Exception as retry_exc:  # noqa: BLE001
-                        LOGGER.warning("OpenWork 浏览器补抓失败，回退为空详情：%s | %s", url, retry_exc)
-                        return None
-                else:
-                    LOGGER.warning("OpenWork 浏览器补抓失败，回退为空详情：%s | %s", url, exc)
-                    return None
+                LOGGER.warning("OpenWork 浏览器补抓失败，回退为空详情：%s | %s", url, exc)
+                return None
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("OpenWork 浏览器补抓失败，回退为空详情：%s | %s", url, exc)
                 return None
             self._request_count += 1
             return _HtmlResponse(status_code=200, text=html_text)
-
-    def _try_manual_browser_auth_once(self, exc: OpenworkBrowserBlocked) -> bool:
-        if self._browser_client is None:
-            return False
-        if self._captcha_api_key:
-            return False
-        if self._manual_auth_attempted:
-            return False
-        self._manual_auth_attempted = True
-        LOGGER.warning("OpenWork 浏览器需要人工认证，自动打开可见浏览器等待一次验证：%s", exc)
-        try:
-            self._browser_client.prepare_manual_auth()
-        except Exception as auth_exc:  # noqa: BLE001
-            LOGGER.warning("OpenWork 人工认证未完成，继续回退为空详情：%s", auth_exc)
-            return False
-        LOGGER.info("OpenWork 人工认证完成，继续浏览器补抓。")
-        return True
 
     def _ready_selector(self, url: str) -> str:
         if "/company_list" in url:
