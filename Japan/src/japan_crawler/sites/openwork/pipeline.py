@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from .store import OpenworkStore
 
 LOGGER = logging.getLogger("openwork.pipeline")
 _CHECKPOINT_SCOPE = "company_list"
+_LIST_PAGE_RETRY_SECONDS = 15
+_LIST_PAGE_RETRY_ROUNDS = 40
 
 
 def run_pipeline_list(
@@ -37,11 +40,11 @@ def run_pipeline_list(
     if max_pages > 0 and start_page > max_pages:
         LOGGER.warning("OpenWork 断点页 %d 超出测试页上限 %d，回退到第 1 页", start_page, max_pages)
         start_page = 1
-    first_html = client.fetch_list_page(start_page)
+    first_html = _wait_for_list_page_html(client, start_page)
     if first_html is None and start_page > 1:
         LOGGER.warning("OpenWork 断点页 %d 获取失败，回退到第 1 页重建断点", start_page)
         start_page = 1
-        first_html = client.fetch_list_page(start_page)
+        first_html = _wait_for_list_page_html(client, start_page)
     if first_html is None:
         return {"pages_done": 0, "new_companies": 0, "total_companies": store.get_company_count(), **client.stats}
     total_pages = parse_total_pages(first_html, DEFAULT_PER_PAGE)
@@ -65,7 +68,7 @@ def run_pipeline_list(
         current_page += 1
         if current_page > total_pages:
             break
-        current_html = client.fetch_list_page(current_page)
+        current_html = _wait_for_list_page_html(client, current_page)
         if current_html is None:
             LOGGER.warning("第 %d 页获取失败，保留断点", current_page)
             return {"pages_done": pages_done, "new_companies": new_total, "total_companies": store.get_company_count(), **client.stats}
@@ -84,6 +87,24 @@ def _expand_total_pages(page_html: str, current_total: int, max_pages: int) -> i
     if max_pages > 0:
         return min(total_pages, max_pages)
     return total_pages
+
+
+def _wait_for_list_page_html(client: OpenworkClient, page: int) -> str | None:
+    for attempt in range(1, _LIST_PAGE_RETRY_ROUNDS + 1):
+        page_html = client.fetch_list_page(page)
+        if page_html is not None:
+            return page_html
+        if attempt >= _LIST_PAGE_RETRY_ROUNDS:
+            break
+        LOGGER.warning(
+            "OpenWork 列表页 %d 暂不可用，第 %d/%d 次等待 %ds 后重试",
+            page,
+            attempt,
+            _LIST_PAGE_RETRY_ROUNDS,
+            _LIST_PAGE_RETRY_SECONDS,
+        )
+        time.sleep(_LIST_PAGE_RETRY_SECONDS)
+    return None
 
 
 def _fetch_and_store_details(

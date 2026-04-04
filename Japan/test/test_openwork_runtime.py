@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,7 @@ if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
 
 from japan_crawler.sites.openwork.client import OpenworkClient
+from japan_crawler.sites.openwork.pipeline import _wait_for_list_page_html
 from japan_crawler.sites.openwork.pipeline import _load_company_details
 from japan_crawler.sites.openwork.browser_profile import OpenworkBrowserBlocked
 
@@ -70,6 +72,17 @@ class _FakeClient:
         """
 
 
+class _RetryListClient:
+    def __init__(self, responses: list[str | None]) -> None:
+        self._responses = list(responses)
+        self.calls = 0
+
+    def fetch_list_page(self, page: int) -> str | None:
+        _ = page
+        self.calls += 1
+        return self._responses.pop(0) if self._responses else None
+
+
 class OpenworkRuntimeTests(unittest.TestCase):
     def test_browser_response_failure_returns_none(self) -> None:
         client = OpenworkClient.__new__(OpenworkClient)
@@ -110,6 +123,13 @@ class OpenworkRuntimeTests(unittest.TestCase):
         results = _load_company_details(client, cards, detail_workers=3)
         self.assertEqual(3, len(results))
         self.assertGreaterEqual(client.max_active, 2)
+
+    def test_wait_for_list_page_html_retries_until_success(self) -> None:
+        client = _RetryListClient([None, None, "<html>ok</html>"])
+        with patch("japan_crawler.sites.openwork.pipeline.time.sleep", return_value=None):
+            html = _wait_for_list_page_html(client, 9)
+        self.assertEqual("<html>ok</html>", html)
+        self.assertEqual(3, client.calls)
 
 
 if __name__ == "__main__":
