@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import csv
+import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,3 +187,165 @@ class JapanDeliveryTests(unittest.TestCase):
                 rows = list(csv.DictReader(fp))
             self.assertEqual(1, len(rows))
             self.assertEqual("OneCareer Delta", rows[0]["company_name"])
+
+    def test_site_filter_only_writes_owned_sites(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            onecareer_dir = output_root / "onecareer"
+            onecareer_dir.mkdir(parents=True)
+            openwork_dir = output_root / "openwork"
+            openwork_dir.mkdir(parents=True)
+            self._seed_company_db(
+                onecareer_dir / "onecareer_store.db",
+                "onecareer-a",
+                "OneCareer A",
+                "Hanako",
+                "https://onecareer.example",
+                "onecareer@gmail.com",
+            )
+            self._seed_company_db(
+                openwork_dir / "openwork_store.db",
+                "openwork-a",
+                "OpenWork A",
+                "Taro",
+                "https://openwork.example",
+                "openwork@gmail.com",
+            )
+
+            delivery_root = output_root / "delivery"
+            with patch.dict(os.environ, {"JAPAN_DELIVERY_SITES": "onecareer"}, clear=False):
+                summary = build_delivery_bundle(output_root, delivery_root, "day1")
+
+            self.assertEqual({"onecareer": {"qualified_current": 1, "delta": 1}}, summary["sites"])
+            self.assertTrue((delivery_root / "Japan_day001" / "onecareer.csv").exists())
+            self.assertFalse((delivery_root / "Japan_day001" / "openwork.csv").exists())
+
+    def test_same_day_rerun_preserves_copied_remote_site_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            onecareer_dir = output_root / "onecareer"
+            onecareer_dir.mkdir(parents=True)
+            self._seed_company_db(
+                onecareer_dir / "onecareer_store.db",
+                "onecareer-a",
+                "OneCareer A",
+                "Hanako",
+                "https://onecareer.example",
+                "onecareer@gmail.com",
+            )
+
+            delivery_root = output_root / "delivery"
+            with patch.dict(os.environ, {"JAPAN_DELIVERY_SITES": "onecareer"}, clear=False):
+                build_delivery_bundle(output_root, delivery_root, "day1")
+
+            day_dir = delivery_root / "Japan_day001"
+            self._write_remote_site_artifacts(day_dir, "openwork", "OpenWork Remote", "remote-key")
+
+            with patch.dict(os.environ, {"JAPAN_DELIVERY_SITES": "onecareer"}, clear=False):
+                summary = build_delivery_bundle(output_root, delivery_root, "day1")
+
+            self.assertEqual(2, summary["delta_companies"])
+            self.assertEqual(2, summary["total_current_companies"])
+            self.assertIn("onecareer", summary["sites"])
+            self.assertIn("openwork", summary["sites"])
+            self.assertTrue((day_dir / "openwork.csv").exists())
+            self.assertTrue((day_dir / "openwork.keys.txt").exists())
+
+    def test_summary_only_rebuilds_from_existing_site_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            delivery_root = output_root / "delivery"
+            day_dir = delivery_root / "Japan_day001"
+            day_dir.mkdir(parents=True)
+            self._write_remote_site_artifacts(day_dir, "openwork", "OpenWork Remote", "openwork-key")
+            self._write_remote_site_artifacts(day_dir, "onecareer", "OneCareer Remote", "onecareer-key")
+
+            with patch.dict(os.environ, {"JAPAN_DELIVERY_SUMMARY_ONLY": "1"}, clear=False):
+                summary = build_delivery_bundle(output_root, delivery_root, "day1")
+
+            self.assertEqual(2, summary["delta_companies"])
+            self.assertEqual(2, summary["total_current_companies"])
+            self.assertEqual({"onecareer", "openwork"}, set(summary["sites"]))
+
+    def _seed_company_db(
+        self,
+        db_path: Path,
+        company_id: str,
+        company_name: str,
+        representative: str,
+        website: str,
+        emails: str,
+    ) -> None:
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(
+            """
+            CREATE TABLE companies (
+                company_id TEXT PRIMARY KEY,
+                company_name TEXT,
+                representative TEXT,
+                website TEXT,
+                address TEXT,
+                industry TEXT,
+                detail_url TEXT,
+                emails TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO companies (company_id, company_name, representative, website, address, industry, detail_url, emails)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                company_id,
+                company_name,
+                representative,
+                website,
+                "Tokyo",
+                "IT",
+                f"https://example.com/{company_id}",
+                emails,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def _write_remote_site_artifacts(self, day_dir: Path, site_name: str, company_name: str, key_value: str) -> None:
+        csv_path = day_dir / f"{site_name}.csv"
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
+            writer = csv.DictWriter(
+                fp,
+                fieldnames=[
+                    "company_name",
+                    "representative",
+                    "website",
+                    "emails",
+                    "phone",
+                    "address",
+                    "industry",
+                    "founded_year",
+                    "capital",
+                    "detail_url",
+                    "source_job_url",
+                ],
+            )
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "company_name": company_name,
+                    "representative": "Remote Rep",
+                    "website": "https://remote.example",
+                    "emails": "remote@gmail.com",
+                    "phone": "",
+                    "address": "Tokyo",
+                    "industry": "IT",
+                    "founded_year": "",
+                    "capital": "",
+                    "detail_url": "https://example.com/remote",
+                    "source_job_url": "",
+                }
+            )
+        (day_dir / f"{site_name}.keys.txt").write_text(f"{key_value}\n", encoding="utf-8")

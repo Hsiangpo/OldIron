@@ -1,19 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-04T00:39:26Z",
-  "locks": [
-    {
-      "lock_id": "lock-codex-japan-delivery-fix-20260403-1",
-      "status": "locked",
-      "path": "Japan/src/japan_crawler/delivery.py",
-      "machine": "Machine 2 - macOS",
-      "agent": "codex",
-      "task_id": "codex-japan-delivery-fix-20260403",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-04T00:39:26Z",
-      "heartbeat_at": "2026-04-04T00:39:26Z",
-      "expires_at": "2026-04-04T01:09:26Z",
-      "notes": "implement japan same-day multi-machine safe delivery rebuild"
-    }
-  ]
+  "updated_at": "2026-04-04T00:44:18Z",
+  "locks": []
 }
