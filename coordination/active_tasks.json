@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "updated_at": "2026-04-04T00:32:25Z",
-  "tasks": []
+  "updated_at": "2026-04-04T00:39:26Z",
+  "tasks": [
+    {
+      "task_id": "codex-japan-delivery-fix-20260403",
+      "status": "in_progress",
+      "machine": "Machine 2 - macOS",
+      "agent": "codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Japan/delivery"
+      ],
+      "planned_files": [],
+      "shared_lock_ids": [
+        "lock-codex-japan-delivery-fix-20260403-1"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-04T00:39:26Z",
+      "last_heartbeat_at": "2026-04-04T00:39:26Z",
+      "notes": "implement japan same-day multi-machine safe delivery rebuild"
+    }
+  ]
 }
