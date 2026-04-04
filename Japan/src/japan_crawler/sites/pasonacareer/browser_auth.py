@@ -16,6 +16,14 @@ from playwright.sync_api import sync_playwright
 LOGGER = logging.getLogger("pasonacareer.browser")
 BASE_URL = "https://www.pasonacareer.jp"
 SEARCH_PATH = "/search/jl/"
+_ASYNC_LOOP_HINTS = (
+    "Playwright Sync API inside the asyncio loop",
+    "Playwright Sync API is unavailable inside the current asyncio loop",
+)
+_BROWSER_FATAL_HINTS = (
+    "Executable doesn't exist",
+    "Please run the following command to download new browsers",
+)
 
 
 @dataclass(slots=True)
@@ -37,9 +45,12 @@ class PasonacareerPersistentBrowser:
         self._playwright = None
         self._context = None
         self._page = None
+        self._disabled = False
         atexit.register(self.close)
 
     def fetch_search_page(self, page: int = 1) -> str | None:
+        if self._disabled:
+            return None
         params = {"utf8": "✓", "f[f]": "1", "f[q]": ""}
         if page > 1:
             params["page"] = str(page)
@@ -47,6 +58,8 @@ class PasonacareerPersistentBrowser:
         return self._fetch_html(url, ready_kind="search")
 
     def fetch_job_page(self, detail_url: str) -> str | None:
+        if self._disabled:
+            return None
         return self._fetch_html(urljoin(BASE_URL, detail_url), ready_kind="detail")
 
     def close(self) -> None:
@@ -72,6 +85,10 @@ class PasonacareerPersistentBrowser:
                 LOGGER.warning("浏览器访问超时: %s | %s", url, exc)
                 return None
             except Exception as exc:  # noqa: BLE001
+                if _should_disable_browser_for_exception(exc):
+                    self._disabled = True
+                    LOGGER.warning("浏览器主抓取已禁用，原因: %s", exc)
+                    return None
                 LOGGER.warning("浏览器访问失败: %s | %s", url, exc)
                 return None
         return html if self._looks_like_real_page(html, ready_kind) else None
@@ -111,6 +128,10 @@ class PasonacareerPersistentBrowser:
             return "検索結果一覧" in text and "/job/" in text
         return "<h1" in text
 
+    @property
+    def disabled(self) -> bool:
+        return self._disabled
+
 
 def fetch_browser_auth(target_url: str, proxy_url: str = "", timeout_ms: int = 30000) -> BrowserAuth:
     """通过无头浏览器访问页面，提取 WAF 通过后的 Cookie 和 UA。"""
@@ -118,17 +139,22 @@ def fetch_browser_auth(target_url: str, proxy_url: str = "", timeout_ms: int = 3
     if proxy_url:
         launch_kwargs["proxy"] = {"server": proxy_url}
 
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(**launch_kwargs)
-        try:
-            page = browser.new_page()
-            page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-            page.locator("text=検索結果一覧").first.wait_for(timeout=timeout_ms)
-            page.wait_for_timeout(3000)
-            cookies = page.context.cookies(target_url)
-            user_agent = str(page.evaluate("() => navigator.userAgent") or "").strip()
-        finally:
-            browser.close()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(**launch_kwargs)
+            try:
+                page = browser.new_page()
+                page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                page.locator("text=検索結果一覧").first.wait_for(timeout=timeout_ms)
+                page.wait_for_timeout(3000)
+                cookies = page.context.cookies(target_url)
+                user_agent = str(page.evaluate("() => navigator.userAgent") or "").strip()
+            finally:
+                browser.close()
+    except Exception as exc:  # noqa: BLE001
+        if is_sync_api_asyncio_error(exc):
+            raise RuntimeError("Playwright Sync API is unavailable inside the current asyncio loop") from exc
+        raise
 
     cookie_header = "; ".join(
         f"{cookie['name']}={cookie['value']}"
@@ -138,3 +164,13 @@ def fetch_browser_auth(target_url: str, proxy_url: str = "", timeout_ms: int = 3
     if not cookie_header or not user_agent:
         raise RuntimeError("浏览器鉴权未拿到有效 Cookie/UA")
     return BrowserAuth(cookie_header=cookie_header, user_agent=user_agent)
+
+
+def is_sync_api_asyncio_error(exc: Exception) -> bool:
+    text = str(exc or "")
+    return any(hint in text for hint in _ASYNC_LOOP_HINTS)
+
+
+def _should_disable_browser_for_exception(exc: Exception) -> bool:
+    text = str(exc or "")
+    return is_sync_api_asyncio_error(exc) or any(hint in text for hint in _BROWSER_FATAL_HINTS)

@@ -13,7 +13,11 @@ from urllib.parse import urljoin
 
 from curl_cffi.requests import Session
 
-from .browser_auth import PasonacareerPersistentBrowser, fetch_browser_auth
+from .browser_auth import (
+    PasonacareerPersistentBrowser,
+    fetch_browser_auth,
+    is_sync_api_asyncio_error,
+)
 
 
 LOGGER = logging.getLogger("pasonacareer.client")
@@ -55,6 +59,7 @@ class PasonacareerClient:
         self._browser_auth_expires_at = 0.0
         self._browser_cookie_header = ""
         self._browser_user_agent = ""
+        self._browser_auth_disabled = False
         if self._proxy_url:
             LOGGER.info("使用代理: %s", self._proxy_url)
         self._base_headers = {
@@ -95,6 +100,8 @@ class PasonacareerClient:
         if html is not None:
             self._request_count += 1
             return html
+        if self._browser.disabled:
+            return None
         self._error_count += 1
         LOGGER.warning("浏览器抓取%s失败，回退协议请求。", label)
         return None
@@ -194,6 +201,10 @@ class PasonacareerClient:
                 LOGGER.info("PasonaCareer 启动浏览器刷新鉴权 Cookie：%s", target_url)
                 auth = fetch_browser_auth(target_url, proxy_url=self._proxy_url)
             except Exception as exc:  # noqa: BLE001
+                if is_sync_api_asyncio_error(exc):
+                    self._browser_auth_disabled = True
+                    LOGGER.warning("浏览器鉴权已禁用，原因: %s", exc)
+                    return False
                 LOGGER.warning("浏览器刷新鉴权失败：%s", exc)
                 return False
             self._browser_cookie_header = auth.cookie_header
@@ -226,4 +237,4 @@ class PasonacareerClient:
 
     @property
     def browser_primary(self) -> bool:
-        return self._browser is not None
+        return self._browser is not None and not self._browser.disabled
