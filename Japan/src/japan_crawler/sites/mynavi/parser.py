@@ -44,7 +44,10 @@ def parse_total_results(page_html: str) -> int:
 def parse_company_cards(page_html: str) -> list[dict[str, str]]:
     tree = html.fromstring(page_html)
     cards: list[dict[str, str]] = []
-    for item in tree.cssselect("li.companySearchList__content"):
+    items = tree.xpath(
+        "//li[contains(@class, 'companySearchList__content')]"
+    )
+    for item in items:
         links = item.cssselect('a[href*="/company/"]')
         if not links:
             continue

@@ -55,6 +55,26 @@ LIST_HTML = """
 </body></html>
 """
 
+LIST_COMPLETED_HTML = """
+<html><body>
+  <section class="card companySearchList">
+    <ul>
+      <li class="companySearchList__content--completed">
+        <a href="//tenshoku.mynavi.jp/company/224127/">
+          <div class="navItem">
+            <h2 class="companySearchList__company-name">株式会社アイズ・コミュニケーション（掲載終了）</h2>
+            <div class="companySearchList__item">
+              <h3 class="companySearchList__icon-parent">東京都豊島区西池袋4-23-13 ドリームビラ1F</h3>
+              <h3 class="companySearchList__icon-parent">設備工事</h3>
+            </div>
+          </div>
+        </a>
+      </li>
+    </ul>
+  </section>
+</body></html>
+"""
+
 DETAIL_HTML = """
 <html><body>
   <h1 class="headingBlock">株式会社マイナビの会社概要</h1>
@@ -88,6 +108,13 @@ class MynaviParserTests(unittest.TestCase):
         self.assertEqual("426522", cards[0]["company_id"])
         self.assertEqual("株式会社NTTデータグループ", cards[0]["company_name"])
         self.assertEqual("インターネット関連", cards[0]["industry"])
+
+    def test_parse_company_cards_supports_completed_class(self) -> None:
+        cards = parse_company_cards(LIST_COMPLETED_HTML)
+        self.assertEqual(1, len(cards))
+        self.assertEqual("224127", cards[0]["company_id"])
+        self.assertEqual("株式会社アイズ・コミュニケーション（掲載終了）", cards[0]["company_name"])
+        self.assertEqual("設備工事", cards[0]["industry"])
 
     def test_parse_company_detail(self) -> None:
         detail = parse_company_detail(DETAIL_HTML)
