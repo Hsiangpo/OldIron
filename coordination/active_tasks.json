@@ -1,5 +1,28 @@
 {
   "version": 1,
-  "updated_at": "2026-04-04T04:25:37Z",
-  "tasks": []
+  "updated_at": "2026-04-04T05:07:56Z",
+  "tasks": [
+    {
+      "task_id": "win-japan-bizmaps-error-pref-fix-20260404",
+      "status": "in_progress",
+      "machine": "windows-admin",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Japan:bizmaps"
+      ],
+      "planned_files": [
+        "Japan/src/japan_crawler/sites/bizmaps/pipeline.py",
+        "Japan/src/japan_crawler/sites/bizmaps/store.py",
+        "coordination/active_tasks.json"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-04-04T04:48:02Z",
+      "last_heartbeat_at": "2026-04-04T04:48:02Z",
+      "notes": "Investigate and fix remaining Bizmaps error prefecture so it auto-recovers instead of staying stuck in error."
+    }
+  ]
 }

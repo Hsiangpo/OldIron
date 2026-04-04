@@ -170,12 +170,15 @@ class OpenworkPersistentBrowser:
     def _reset_pages(self) -> None:
         if self._context is None:
             return
-        for page in list(self._context.pages):
-            try:
-                if not page.is_closed():
+        pages = [page for page in self._context.pages if not page.is_closed()]
+        if pages:
+            self._page = pages[0]
+            for page in pages[1:]:
+                try:
                     page.close()
-            except Exception:  # noqa: BLE001
-                pass
+                except Exception:  # noqa: BLE001
+                    pass
+            return
         self._page = self._context.new_page()
 
     def _close_no_lock(self) -> None:
@@ -237,7 +240,10 @@ class OpenworkPersistentBrowser:
 
     def _is_closed_target_error(self, exc: Error) -> bool:
         message = str(exc or "").lower()
-        return "target page, context or browser has been closed" in message
+        return (
+            "target page, context or browser has been closed" in message
+            or "failed to open a new tab" in message
+        )
 
     def _try_auto_solve_captcha(self, page, target_url: str, ready_selector: str) -> bool:
         if not self._captcha_api_key or not self._is_captcha_page(page):

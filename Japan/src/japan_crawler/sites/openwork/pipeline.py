@@ -103,7 +103,7 @@ def _load_company_details(
     cards: list[dict[str, str]],
     detail_workers: int,
 ) -> list[dict[str, str]]:
-    if detail_workers <= 1 or client.browser_enabled:
+    if detail_workers <= 1 or client.browser_primary:
         results: list[dict[str, str]] = []
         total = len(cards)
         for index, card in enumerate(cards, start=1):

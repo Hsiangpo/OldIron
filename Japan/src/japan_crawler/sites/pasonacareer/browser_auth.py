@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,7 @@ class PasonacareerPersistentBrowser:
         self._user_data_dir = Path(user_data_dir)
         self._proxy_url = str(proxy_url or "").strip()
         self._timeout_ms = timeout_ms
+        self._channel = str(os.getenv("PASONACAREER_BROWSER_CHANNEL") or "chrome").strip()
         self._lock = threading.Lock()
         self._playwright = None
         self._context = None
@@ -107,6 +109,8 @@ class PasonacareerPersistentBrowser:
             "user_data_dir": str(self._user_data_dir),
             "headless": True,
         }
+        if self._channel:
+            launch_kwargs["channel"] = self._channel
         if self._proxy_url:
             launch_kwargs["proxy"] = {"server": self._proxy_url}
         self._context = self._playwright.chromium.launch_persistent_context(**launch_kwargs)
@@ -136,6 +140,9 @@ class PasonacareerPersistentBrowser:
 def fetch_browser_auth(target_url: str, proxy_url: str = "", timeout_ms: int = 30000) -> BrowserAuth:
     """通过无头浏览器访问页面，提取 WAF 通过后的 Cookie 和 UA。"""
     launch_kwargs: dict[str, object] = {"headless": True}
+    channel = str(os.getenv("PASONACAREER_BROWSER_CHANNEL") or "chrome").strip()
+    if channel:
+        launch_kwargs["channel"] = channel
     if proxy_url:
         launch_kwargs["proxy"] = {"server": proxy_url}
 
