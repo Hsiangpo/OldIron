@@ -314,13 +314,21 @@ def _filter_emails(emails_str: str) -> str:
 
 
 def _record_key(record: dict[str, str]) -> str:
-    parts = (
+    parts = [
         str(record.get("company_name", "") or "").strip().lower(),
         str(record.get("representative", "") or "").strip().lower(),
         str(record.get("website", "") or "").strip().lower(),
         str(record.get("address", "") or "").strip().lower(),
-    )
-    return " | ".join(parts)
+    ]
+    return "|".join(parts)
+
+
+def _normalize_key_text(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    parts = [part.strip().lower() for part in text.split("|")]
+    return "|".join(parts)
 
 
 def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_day: int) -> set[str]:
@@ -330,9 +338,9 @@ def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_da
     key_path = baseline_dir / f"{site_name}.keys.txt"
     if key_path.exists():
         return {
-            line.strip()
+            _normalize_key_text(line)
             for line in key_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            if _normalize_key_text(line)
         }
     csv_path = baseline_dir / f"{site_name}.csv"
     if csv_path.exists():
@@ -345,9 +353,9 @@ def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_da
     legacy_country_keys = baseline_dir / "keys.txt"
     if legacy_country_keys.exists():
         return {
-            line.strip()
+            _normalize_key_text(line)
             for line in legacy_country_keys.read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            if _normalize_key_text(line)
         }
     legacy_country_csv = baseline_dir / "companies.csv"
     if not legacy_country_csv.exists():

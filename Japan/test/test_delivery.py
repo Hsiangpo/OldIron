@@ -118,6 +118,86 @@ class JapanDeliveryTests(unittest.TestCase):
             self.assertEqual(1, len(rows))
             self.assertEqual("Gamma", rows[0]["company_name"])
 
+    def test_same_record_with_empty_address_is_not_redelivered_on_next_day(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            site_dir = output_root / "xlsximport"
+            site_dir.mkdir(parents=True)
+            conn = sqlite3.connect(str(site_dir / "xlsximport_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE companies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_name TEXT,
+                    representative TEXT,
+                    website TEXT,
+                    address TEXT,
+                    detail_url TEXT,
+                    emails TEXT
+                );
+                INSERT INTO companies (company_name, representative, website, address, detail_url, emails)
+                VALUES ('Alpha', 'Jane', 'https://alpha.example', '', 'https://example.com/a', 'jane@gmail.com');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            delivery_root = output_root / "delivery"
+            day1 = build_delivery_bundle(output_root, delivery_root, "day1")
+            self.assertEqual(1, day1["delta_companies"])
+
+            day2 = build_delivery_bundle(output_root, delivery_root, "day2")
+            self.assertEqual(0, day2["delta_companies"])
+            self.assertEqual(1, day2["sites"]["xlsximport"]["qualified_current"])
+
+            csv_path = delivery_root / "Japan_day002" / "xlsximport.csv"
+            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(0, len(rows))
+
+    def test_old_spaced_keys_are_normalized_before_baseline_compare(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            site_dir = output_root / "xlsximport"
+            site_dir.mkdir(parents=True)
+            conn = sqlite3.connect(str(site_dir / "xlsximport_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE companies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_name TEXT,
+                    representative TEXT,
+                    website TEXT,
+                    address TEXT,
+                    detail_url TEXT,
+                    emails TEXT
+                );
+                INSERT INTO companies (company_name, representative, website, address, detail_url, emails)
+                VALUES ('Alpha', 'Jane', 'https://alpha.example', '', 'https://example.com/a', 'jane@gmail.com');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            delivery_root = output_root / "delivery"
+            day2_dir = delivery_root / "Japan_day002"
+            day2_dir.mkdir(parents=True)
+            (day2_dir / "xlsximport.keys.txt").write_text(
+                "alpha | jane | https://alpha.example | \n",
+                encoding="utf-8",
+            )
+
+            day3 = build_delivery_bundle(output_root, delivery_root, "day3")
+            self.assertEqual(0, day3["delta_companies"])
+            self.assertEqual(1, day3["sites"]["xlsximport"]["qualified_current"])
+
+            csv_path = delivery_root / "Japan_day003" / "xlsximport.csv"
+            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(0, len(rows))
+
     def test_openwork_site_is_packaged_independently(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

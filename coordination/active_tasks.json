@@ -1,5 +1,28 @@
 {
   "version": 1,
-  "updated_at": "2026-04-04T00:44:18Z",
-  "tasks": []
+  "updated_at": "2026-04-04T01:52:39Z",
+  "tasks": [
+    {
+      "task_id": "win-japan-delivery-key-normalize-fix-20260404",
+      "status": "in_progress",
+      "machine": "windows-admin",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Japan:delivery"
+      ],
+      "planned_files": [
+        "Japan/src/japan_crawler/delivery.py",
+        "Japan/test/test_delivery.py",
+        "coordination/active_tasks.json"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-04-04T01:49:34Z",
+      "last_heartbeat_at": "2026-04-04T01:52:39Z",
+      "notes": "Fix Japan delivery baseline key normalization so sites like xlsximport do not redeliver unchanged rows on later dayN runs."
+    }
+  ]
 }
