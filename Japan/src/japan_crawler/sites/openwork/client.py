@@ -274,10 +274,10 @@ class OpenworkClient:
             answer = self._solve_image_with_2captcha(image_bytes)
             solved = self._submit_captcha_answer(session=session, challenge=challenge, answer=answer)
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("OpenWork 2cc 自动识别失败，回退浏览器方案：%s", exc)
+            LOGGER.warning("OpenWork 2cc 自动识别失败，保留断点等待换 IP 后重试：%s", exc)
             return None
         if self._should_fallback_direct_from_response(solved):
-            LOGGER.warning("OpenWork 2cc 已提交但站点仍返回验证码，回退浏览器方案。")
+            LOGGER.warning("OpenWork 2cc 已提交但站点仍返回验证码，保留断点等待换 IP 后重试。")
             return None
         LOGGER.info("OpenWork 2cc 自动识别成功，继续协议抓取。")
         return solved

@@ -32,7 +32,6 @@ def run_pipeline_list(
     client = OpenworkClient(
         request_delay=request_delay,
         proxy=proxy,
-        browser_profile_dir=output_dir / "browser_profile",
     )
 
     checkpoint = store.get_checkpoint(_CHECKPOINT_SCOPE)
