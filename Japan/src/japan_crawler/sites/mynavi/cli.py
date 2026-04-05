@@ -39,6 +39,42 @@ def _p1_zero_progress(stats: dict[str, int]) -> bool:
     return int(stats.get("groups_done", 0)) <= 0 and int(stats.get("new_companies", 0)) <= 0
 
 
+def _parent_process_is_alive() -> bool:
+    try:
+        parent = mp.parent_process()
+    except Exception:  # noqa: BLE001
+        return True
+    if parent is None:
+        return True
+    return bool(parent.is_alive())
+
+
+def _wait_for_next_round(stop_event, timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + max(float(timeout_seconds or 0), 0.0)
+    while time.monotonic() < deadline:
+        if stop_event.is_set():
+            return False
+        if not _parent_process_is_alive():
+            return False
+        remaining = max(0.0, deadline - time.monotonic())
+        time.sleep(min(1.0, remaining))
+    return not stop_event.is_set() and _parent_process_is_alive()
+
+
+def _start_parent_exit_guard(process_name: str) -> None:
+    def _watch_parent() -> None:
+        while True:
+            time.sleep(1.0)
+            if _parent_process_is_alive():
+                continue
+            try:
+                LOGGER.warning("[%s] 检测到父进程已退出，当前子进程强制结束。", process_name)
+            finally:
+                os._exit(0)
+
+    threading.Thread(target=_watch_parent, name=f"{process_name}-parent-guard", daemon=True).start()
+
+
 def run_mynavi(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Mynavi 日本企业信息采集")
     parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email"])
@@ -149,16 +185,20 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
             name="mynavi-p3",
         ),
     ]
-    for process in processes:
-        process.start()
-    LOGGER.info("Mynavi all 已启动：P1/P2/P3 多进程并行运行。")
-    _wait_for_processes(processes, output_dir, _mynavi_progress_snapshot)
-    results, errors = _collect_process_results(result_queue)
-    print(f"\n全部完成: {results}")
-    if errors:
-        print(f"错误: {errors}")
-        return 1
-    return 0
+    _prepare_processes_for_start(processes)
+    try:
+        for process in processes:
+            process.start()
+        LOGGER.info("Mynavi all 已启动：P1/P2/P3 多进程并行运行。")
+        _wait_for_processes(processes, output_dir, _mynavi_progress_snapshot)
+        results, errors = _collect_process_results(result_queue)
+        print(f"\n全部完成: {results}")
+        if errors:
+            print(f"错误: {errors}")
+            return 1
+        return 0
+    finally:
+        _shutdown_processes(processes, stop_event, result_queue)
 
 
 def _mynavi_p1_entry(
@@ -177,6 +217,7 @@ def _mynavi_p1_entry(
 ) -> None:
     try:
         _configure_logging(log_level)
+        _start_parent_exit_guard("pipeline1_list")
         LOGGER.info("[pipeline1_list] 子进程启动")
         from .pipeline import run_pipeline_list
 
@@ -216,12 +257,16 @@ def _mynavi_loop_entry(
 ) -> None:
     try:
         _configure_logging(log_level)
+        _start_parent_exit_guard(name)
         runner = _resolve_mynavi_runner(name)
         total_processed = 0
         total_found = 0
         idle_rounds = 0
         round_no = 0
         while not stop_event.is_set():
+            if not _parent_process_is_alive():
+                LOGGER.info("[%s] 父进程已退出，子进程跟随结束。", name)
+                break
             round_no += 1
             LOGGER.info("[%s] 第 %d 轮扫描...", name, round_no)
             stats = runner(output_dir=Path(output_dir), max_items=max_items, concurrency=workers)
@@ -238,7 +283,7 @@ def _mynavi_loop_entry(
                     if idle_rounds >= _MAX_IDLE_ROUNDS:
                         LOGGER.info("[%s] 连续空轮询 %d 次，结束。", name, idle_rounds)
                         break
-                if stop_event.wait(_POLL_INTERVAL):
+                if not _wait_for_next_round(stop_event, _POLL_INTERVAL):
                     break
                 continue
             idle_rounds = 0
@@ -257,6 +302,31 @@ def _resolve_mynavi_runner(name: str):
     from .pipeline3_email import run_pipeline_email
 
     return run_pipeline_email
+
+
+def _prepare_processes_for_start(processes: list[mp.Process]) -> None:
+    for process in processes:
+        process.daemon = True
+
+
+def _shutdown_processes(processes: list[mp.Process], stop_event, result_queue) -> None:
+    stop_event.set()
+    for process in processes:
+        try:
+            process.join(timeout=0.2)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+        except Exception:  # noqa: BLE001
+            continue
+    try:
+        result_queue.close()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        result_queue.cancel_join_thread()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _wait_for_processes(processes: list[mp.Process], output_dir: Path, snapshotter) -> None:
