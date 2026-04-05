@@ -118,6 +118,85 @@ class JapanDeliveryTests(unittest.TestCase):
             self.assertEqual(1, len(rows))
             self.assertEqual("Gamma", rows[0]["company_name"])
 
+    def test_non_xlsximport_delivery_filters_fake_emails_and_merges_duplicate_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            site_dir = output_root / "bizmaps"
+            site_dir.mkdir(parents=True)
+            conn = sqlite3.connect(str(site_dir / "bizmaps_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE companies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_name TEXT,
+                    representative TEXT,
+                    website TEXT,
+                    address TEXT,
+                    industry TEXT,
+                    phone TEXT,
+                    founded_year TEXT,
+                    capital TEXT,
+                    detail_url TEXT,
+                    emails TEXT
+                );
+                INSERT INTO companies (company_name, representative, website, address, emails, detail_url) VALUES
+                    ('Alpha', 'Jane', 'https://alpha.example', 'Tokyo', 'info@example.jp; sales@alpha.co.jp', 'https://example.com/a'),
+                    ('Alpha', 'Jane', 'https://alpha.example', 'Tokyo', 'sales@alpha.co.jp; support@alpha.co.jp', '');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            delivery_root = output_root / "delivery"
+            summary = build_delivery_bundle(output_root, delivery_root, "day1")
+            self.assertEqual(1, summary["delta_companies"])
+            self.assertEqual(1, summary["sites"]["bizmaps"]["qualified_current"])
+
+            csv_path = delivery_root / "Japan_day001" / "bizmaps.csv"
+            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(1, len(rows))
+            self.assertEqual("sales@alpha.co.jp; support@alpha.co.jp", rows[0]["emails"])
+            self.assertEqual("https://example.com/a", rows[0]["detail_url"])
+
+    def test_xlsximport_delivery_keeps_source_emails_but_still_dedupes_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            site_dir = output_root / "xlsximport"
+            site_dir.mkdir(parents=True)
+            conn = sqlite3.connect(str(site_dir / "xlsximport_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE companies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_name TEXT,
+                    representative TEXT,
+                    website TEXT,
+                    address TEXT,
+                    detail_url TEXT,
+                    emails TEXT
+                );
+                INSERT INTO companies (company_name, representative, website, address, detail_url, emails) VALUES
+                    ('Alpha', 'Jane', 'https://alpha.example', '', 'https://example.com/a', 'alpha@gmail.jp'),
+                    ('Alpha', 'Jane', 'https://alpha.example', '', 'https://example.com/a', 'alpha@gmail.jp');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            delivery_root = output_root / "delivery"
+            summary = build_delivery_bundle(output_root, delivery_root, "day1")
+            self.assertEqual(1, summary["delta_companies"])
+            self.assertEqual(1, summary["sites"]["xlsximport"]["qualified_current"])
+
+            csv_path = delivery_root / "Japan_day001" / "xlsximport.csv"
+            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(1, len(rows))
+            self.assertEqual("alpha@gmail.jp", rows[0]["emails"])
+
     def test_same_record_with_empty_address_is_not_redelivered_on_next_day(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

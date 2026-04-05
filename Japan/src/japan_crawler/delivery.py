@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -18,6 +19,16 @@ if str(SHARED_ROOT) not in sys.path:
 from oldiron_core.delivery.engine import validate_day_sequence
 _SITE_FILTER_ENV = "JAPAN_DELIVERY_SITES"
 _SUMMARY_ONLY_ENV = "JAPAN_DELIVERY_SUMMARY_ONLY"
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_SUSPICIOUS_EMAIL_DOMAINS = {
+    "group.calendar.google.com",
+    "example.jp",
+    "example.co.jp",
+    "gmaii.com",
+    "gmai.com",
+    "gmail.jp",
+    "48g9-.bybgnptut",
+}
 
 
 def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) -> dict[str, object]:
@@ -112,26 +123,21 @@ def _write_site_delivery_assets(
         return None
     records = _load_site_records(site_name, site_dir)
     raw_count = len(records)
-    qualified = [
-        record
-        for record in records
-        if record.get("company_name", "").strip()
-        and record.get("representative", "").strip()
-        and record.get("representative", "").strip() != "-"
-        and record.get("emails", "").strip()
-    ]
+    prepared = _prepare_delivery_records(site_name, records)
+    qualified = [record for record in prepared if _is_delivery_qualified(record)]
+    deduped = _dedupe_delivery_records(qualified)
     baseline_keys = _load_site_baseline_keys(
         delivery_root=delivery_root,
         site_name=site_name,
         baseline_day=baseline_day,
     )
-    delta_records = [record for record in qualified if _record_key(record) not in baseline_keys]
-    current_keys = sorted(baseline_keys | {_record_key(record) for record in qualified})
+    delta_records = [record for record in deduped if _record_key(record) not in baseline_keys]
+    current_keys = sorted(baseline_keys | {_record_key(record) for record in deduped})
     _write_site_csv(delivery_dir / f"{site_name}.csv", delta_records)
     (delivery_dir / f"{site_name}.keys.txt").write_text("\n".join(current_keys), encoding="utf-8")
     return {
         "raw_count": raw_count,
-        "qualified_current": len(qualified),
+        "qualified_current": len(deduped),
         "delta": len(delta_records),
     }
 
@@ -262,6 +268,84 @@ def _normalize_company_record(row: sqlite3.Row, existing_cols: set[str]) -> dict
         "emails": emails_value,
         "source_job_url": str(row["source_job_url"] or "").strip() if "source_job_url" in existing_cols else "",
     }
+
+
+def _prepare_delivery_records(site_name: str, records: list[dict[str, str]]) -> list[dict[str, str]]:
+    prepared: list[dict[str, str]] = []
+    for record in records:
+        copied = dict(record)
+        copied["emails"] = _normalize_delivery_emails(site_name, str(record.get("emails", "") or ""))
+        prepared.append(copied)
+    return prepared
+
+
+def _normalize_delivery_emails(site_name: str, emails_text: str) -> str:
+    tokens = _split_emails(emails_text)
+    if site_name != "xlsximport":
+        tokens = [email for email in tokens if _is_delivery_email_allowed(email)]
+    return "; ".join(tokens)
+
+
+def _split_emails(emails_text: str) -> list[str]:
+    result: list[str] = []
+    for raw in str(emails_text or "").replace(",", ";").split(";"):
+        value = raw.strip().lower()
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
+def _is_delivery_email_allowed(email: str) -> bool:
+    if not _EMAIL_RE.fullmatch(email):
+        return False
+    domain = email.split("@", 1)[1]
+    if domain in _SUSPICIOUS_EMAIL_DOMAINS:
+        return False
+    if domain.startswith("example."):
+        return False
+    return True
+
+
+def _is_delivery_qualified(record: dict[str, str]) -> bool:
+    return bool(
+        record.get("company_name", "").strip()
+        and record.get("representative", "").strip()
+        and record.get("representative", "").strip() != "-"
+        and record.get("emails", "").strip()
+    )
+
+
+def _dedupe_delivery_records(records: list[dict[str, str]]) -> list[dict[str, str]]:
+    merged_by_key: dict[str, dict[str, str]] = {}
+    order: list[str] = []
+    for record in records:
+        key = _record_key(record)
+        existing = merged_by_key.get(key)
+        if existing is None:
+            merged_by_key[key] = dict(record)
+            order.append(key)
+            continue
+        merged_by_key[key] = _merge_delivery_record(existing, record)
+    return [merged_by_key[key] for key in order]
+
+
+def _merge_delivery_record(existing: dict[str, str], incoming: dict[str, str]) -> dict[str, str]:
+    merged = dict(existing)
+    merged["emails"] = _merge_email_text(existing.get("emails", ""), incoming.get("emails", ""))
+    for field in ["phone", "industry", "founded_year", "capital", "detail_url", "source_job_url"]:
+        if not str(merged.get(field, "") or "").strip() and str(incoming.get(field, "") or "").strip():
+            merged[field] = incoming[field]
+    return merged
+
+
+def _merge_email_text(left: str, right: str) -> str:
+    merged: list[str] = []
+    for value in [*_split_emails(left), *_split_emails(right)]:
+        if value not in merged:
+            merged.append(value)
+    return "; ".join(merged)
+
+
 def _record_key(record: dict[str, str]) -> str:
     parts = [
         str(record.get("company_name", "") or "").strip().lower(),
