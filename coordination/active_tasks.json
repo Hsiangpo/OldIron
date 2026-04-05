@@ -1,5 +1,27 @@
 {
   "version": 1,
-  "updated_at": "2026-04-05T03:08:53Z",
-  "tasks": []
+  "updated_at": "2026-04-05T15:01:05Z",
+  "tasks": [
+    {
+      "task_id": "pasonacareer-protocol-priority-20260405",
+      "status": "in_progress",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Japan/pasonacareer"
+      ],
+      "planned_files": [
+        "Japan/src/japan_crawler/sites/pasonacareer/client.py",
+        "Japan/test/test_pasonacareer_browser_fallback.py"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-04-05T15:01:05Z",
+      "last_heartbeat_at": "2026-04-05T15:01:05Z",
+      "notes": "Prefer protocol for PasonaCareer search/detail and keep browser as detail fallback only"
+    }
+  ]
 }

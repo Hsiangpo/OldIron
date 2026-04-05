@@ -52,6 +52,64 @@ class PasonacareerBrowserFallbackTests(unittest.TestCase):
         self.assertFalse(refreshed)
         self.assertTrue(client._browser_auth_disabled)
 
+    def test_fetch_search_page_uses_protocol_without_browser_first(self) -> None:
+        client = PasonacareerClient.__new__(PasonacareerClient)
+        client._browser = type(
+            "_Browser",
+            (),
+            {"fetch_search_page": lambda self, page: (_ for _ in ()).throw(AssertionError("browser should not be used"))},
+        )()
+        client._request_count = 0
+        client._error_count = 0
+
+        class _Response:
+            status_code = 200
+            text = "<html>ok</html>"
+
+        client._get_with_retry = lambda url, params=None: _Response()  # noqa: ARG005
+
+        html = client.fetch_search_page(3)
+        self.assertEqual("<html>ok</html>", html)
+
+    def test_fetch_job_page_uses_protocol_before_browser(self) -> None:
+        client = PasonacareerClient.__new__(PasonacareerClient)
+        client._browser = type(
+            "_Browser",
+            (),
+            {"fetch_job_page": lambda self, detail_url: (_ for _ in ()).throw(AssertionError("browser should not be used"))},
+        )()
+        client._request_count = 0
+        client._error_count = 0
+
+        class _Response:
+            status_code = 200
+            text = "<html>job</html>"
+
+        client._get_with_retry = lambda url, params=None, **kwargs: _Response()  # noqa: ARG005
+
+        html = client.fetch_job_page("/job/1/")
+        self.assertEqual("<html>job</html>", html)
+
+    def test_browser_primary_is_disabled_for_parallel_detail_fetch(self) -> None:
+        client = PasonacareerClient.__new__(PasonacareerClient)
+        client._browser = object()
+        self.assertFalse(client.browser_primary)
+
+    def test_fetch_job_page_falls_back_to_browser_after_fast_fail(self) -> None:
+        client = PasonacareerClient.__new__(PasonacareerClient)
+        client._browser = type(
+            "_Browser",
+            (),
+            {"fetch_job_page": lambda self, detail_url: "<html>browser</html>"},
+        )()
+        client._request_count = 0
+        client._error_count = 0
+        client._fetch_with_browser = lambda label, action: action()  # noqa: ARG005
+        client._get_with_retry = lambda url, **kwargs: None  # noqa: ARG005
+
+        html = client.fetch_job_page("/job/1/")
+        self.assertEqual("<html>browser</html>", html)
+
 
 if __name__ == "__main__":
     unittest.main()

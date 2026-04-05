@@ -77,9 +77,6 @@ class PasonacareerClient:
         self._error_count = 0
 
     def fetch_search_page(self, page: int = 1) -> str | None:
-        browser_html = self._fetch_with_browser("搜索页", lambda: self._browser.fetch_search_page(page) if self._browser else None)
-        if browser_html is not None:
-            return browser_html
         params = {"utf8": "✓", "f[f]": "1", "f[q]": ""}
         if page > 1:
             params["page"] = str(page)
@@ -87,11 +84,13 @@ class PasonacareerClient:
         return response.text if response is not None else None
 
     def fetch_job_page(self, detail_url: str) -> str | None:
+        response = self._get_with_retry(urljoin(BASE_URL, detail_url), max_retries=1, fast_fail=True)
+        if response is not None:
+            return response.text
         browser_html = self._fetch_with_browser("详情页", lambda: self._browser.fetch_job_page(detail_url) if self._browser else None)
         if browser_html is not None:
             return browser_html
-        response = self._get_with_retry(urljoin(BASE_URL, detail_url))
-        return response.text if response is not None else None
+        return None
 
     def _fetch_with_browser(self, label: str, action) -> str | None:
         if self._browser is None:
@@ -106,8 +105,16 @@ class PasonacareerClient:
         LOGGER.warning("浏览器抓取%s失败，回退协议请求。", label)
         return None
 
-    def _get_with_retry(self, url: str, params: dict[str, str] | None = None) -> Any:
-        for attempt in range(self._max_retries):
+    def _get_with_retry(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        *,
+        max_retries: int | None = None,
+        fast_fail: bool = False,
+    ) -> Any:
+        retry_count = max(int(max_retries or self._max_retries), 1)
+        for attempt in range(retry_count):
             for use_proxy in self._request_modes():
                 try:
                     self._polite_delay()
@@ -118,6 +125,8 @@ class PasonacareerClient:
                             self._disable_proxy_temporarily(f"挑战页: {url}")
                             LOGGER.warning("代理路径触发挑战页/异常状态，回退直连：%s", url)
                             continue
+                        if fast_fail:
+                            return None
                         if self._refresh_browser_auth(url):
                             LOGGER.warning("直连命中挑战页，改用浏览器 Cookie 重试：%s", url)
                             continue
@@ -126,13 +135,19 @@ class PasonacareerClient:
                     if response.status_code == 200:
                         return response
                     if response.status_code == 429:
+                        if fast_fail:
+                            return None
                         self._sleep_backoff(attempt, 4.0, 8.0, "429 限流")
                         break
                     if response.status_code == 403:
                         self._error_count += 1
+                        if fast_fail:
+                            return None
                         LOGGER.error("403 禁止访问: %s", url)
                         return None
                     if response.status_code >= 500:
+                        if fast_fail:
+                            return None
                         self._sleep_backoff(attempt, 2.0, 5.0, f"{response.status_code} 服务端错误")
                         break
                     LOGGER.warning("HTTP %d: %s", response.status_code, url)
@@ -144,6 +159,8 @@ class PasonacareerClient:
                         LOGGER.warning("代理路径异常，回退直连：%s | %s", url, exc)
                         continue
                     LOGGER.warning("请求异常: %s", exc)
+                    if fast_fail:
+                        return None
                     self._sleep_backoff(attempt, 2.0, 4.0, "网络异常重试")
                     break
         LOGGER.error("重试耗尽: %s", url)
@@ -237,4 +254,4 @@ class PasonacareerClient:
 
     @property
     def browser_primary(self) -> bool:
-        return self._browser is not None and not self._browser.disabled
+        return False
