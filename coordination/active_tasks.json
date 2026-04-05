@@ -1,27 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-05T23:32:59Z",
-  "tasks": [
-    {
-      "task_id": "mynavi-process-cleanup-20260405",
-      "status": "in_progress",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "Japan/mynavi"
-      ],
-      "planned_files": [
-        "Japan/src/japan_crawler/sites/mynavi/cli.py",
-        "Japan/test/test_mynavi_concurrency.py"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-04-05T23:32:59Z",
-      "last_heartbeat_at": "2026-04-05T23:32:59Z",
-      "notes": "Fix Mynavi process lifecycle so child workers do not survive after parent exits"
-    }
-  ]
+  "updated_at": "2026-04-05T23:48:18Z",
+  "tasks": []
 }
