@@ -17,6 +17,7 @@ if str(SRC) not in sys.path:
 if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
 
+from japan_crawler.sites.mynavi.pipeline import _fetch_company_detail
 from japan_crawler.sites.mynavi.pipeline import _run_group_jobs
 
 
@@ -46,6 +47,26 @@ class MynaviConcurrencyTests(unittest.TestCase):
         self.assertEqual(3, groups_done)
         self.assertEqual(6, new_total)
         self.assertGreaterEqual(max_active, 2)
+
+    def test_fetch_company_detail_falls_back_when_detail_html_missing(self) -> None:
+        class _MissingDetailClient:
+            def fetch_detail_page(self, detail_url: str) -> str | None:
+                _ = detail_url
+                return None
+
+        card = {
+            "company_id": "413161",
+            "company_name": "株式会社メイツ",
+            "address": "東京都中央区",
+            "industry": "教育",
+            "detail_url": "/company/413161/",
+        }
+        company = _fetch_company_detail(_MissingDetailClient(), card)
+        self.assertEqual("413161", company["company_id"])
+        self.assertEqual("株式会社メイツ", company["company_name"])
+        self.assertEqual("", company["representative"])
+        self.assertEqual("", company["website"])
+        self.assertEqual("東京都中央区", company["address"])
 
 
 if __name__ == "__main__":

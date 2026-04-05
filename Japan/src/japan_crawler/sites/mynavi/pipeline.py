@@ -6,6 +6,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from lxml import etree
+
 from .client import MynaviClient
 from .parser import parse_company_cards, parse_company_detail, parse_kana_groups, parse_total_pages
 from .store import MynaviStore
@@ -147,13 +149,32 @@ def _load_company_details(client: MynaviClient, cards: list[dict[str, str]], det
 
 def _fetch_company_detail(client: MynaviClient, card: dict[str, str]) -> dict[str, str]:
     html_text = client.fetch_detail_page(card["detail_url"])
-    detail = parse_company_detail(html_text or "")
+    if not str(html_text or "").strip():
+        LOGGER.warning("Mynavi 详情页为空，保留列表页信息：%s", card["detail_url"])
+        return _build_fallback_company(card)
+    try:
+        detail = parse_company_detail(html_text)
+    except (ValueError, etree.ParserError) as exc:
+        LOGGER.warning("Mynavi 详情页解析失败，保留列表页信息：%s | %s", card["detail_url"], exc)
+        return _build_fallback_company(card)
     return {
         "company_id": card["company_id"],
         "company_name": detail["company_name"] or card["company_name"],
         "representative": detail["representative"],
         "website": detail["website"],
         "address": detail["address"] or card["address"],
+        "industry": card["industry"],
+        "detail_url": card["detail_url"],
+    }
+
+
+def _build_fallback_company(card: dict[str, str]) -> dict[str, str]:
+    return {
+        "company_id": card["company_id"],
+        "company_name": card["company_name"],
+        "representative": "",
+        "website": "",
+        "address": card["address"],
         "industry": card["industry"],
         "detail_url": card["detail_url"],
     }

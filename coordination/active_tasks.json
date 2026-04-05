@@ -1,5 +1,27 @@
 {
   "version": 1,
-  "updated_at": "2026-04-05T01:47:39Z",
-  "tasks": []
+  "updated_at": "2026-04-05T03:08:25Z",
+  "tasks": [
+    {
+      "task_id": "mynavi-empty-detail-fallback-20260405",
+      "status": "in_progress",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Japan/mynavi"
+      ],
+      "planned_files": [
+        "Japan/src/japan_crawler/sites/mynavi/pipeline.py",
+        "Japan/test/test_mynavi_concurrency.py"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-04-05T03:08:25Z",
+      "last_heartbeat_at": "2026-04-05T03:08:25Z",
+      "notes": "Fallback to list-card data when Mynavi detail page is empty or 404"
+    }
+  ]
 }
