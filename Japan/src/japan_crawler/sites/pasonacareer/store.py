@@ -19,8 +19,11 @@ class PasonacareerStore:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._local = threading.local()
+        self._conn_lock = threading.Lock()
+        self._connections: list[sqlite3.Connection] = []
         self._max_write_retries = 6
         self._init_tables()
+        self._repair_statuses()
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -31,7 +34,27 @@ class PasonacareerStore:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=60000")
             self._local.conn = conn
+            with self._conn_lock:
+                self._connections.append(conn)
         return conn
+
+    def close(self) -> None:
+        with self._conn_lock:
+            connections = list(self._connections)
+            self._connections.clear()
+        for conn in connections:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        if hasattr(self._local, "conn"):
+            delattr(self._local, "conn")
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _run_write(self, action) -> Any:
         for attempt in range(self._max_write_retries):
@@ -75,6 +98,31 @@ class PasonacareerStore:
             """
         )
         conn.commit()
+
+    def _repair_statuses(self) -> None:
+        def _action(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                """
+                UPDATE companies
+                SET email_status = 'done', updated_at = ?
+                WHERE (website = '' OR website IS NULL)
+                  AND gmap_status = 'done'
+                  AND (email_status = 'pending' OR email_status IS NULL)
+                """,
+                (_now_text(),),
+            )
+            conn.execute(
+                """
+                UPDATE companies
+                SET gmap_status = 'done', updated_at = ?
+                WHERE website != ''
+                  AND website IS NOT NULL
+                  AND (gmap_status = 'pending' OR gmap_status IS NULL)
+                """,
+                (_now_text(),),
+            )
+
+        self._run_write(_action)
 
     def upsert_companies(self, companies: list[dict[str, str]]) -> int:
         def _action(conn: sqlite3.Connection) -> int:
@@ -191,7 +239,11 @@ class PasonacareerStore:
     def mark_gmap_done(self, row_id: int) -> None:
         self._run_write(
             lambda conn: conn.execute(
-                "UPDATE companies SET gmap_status = 'done', updated_at = ? WHERE id = ?",
+                """
+                UPDATE companies
+                SET gmap_status = 'done', email_status = 'done', updated_at = ?
+                WHERE id = ?
+                """,
                 (_now_text(), row_id),
             )
         )
