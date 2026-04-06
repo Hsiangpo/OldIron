@@ -44,7 +44,13 @@ def run_pipeline_list(
         category_id = category["category_id"]
         scope = f"business_category:{category_id}"
         checkpoint = store.get_checkpoint(scope)
-        start_page = _resolve_start_page(checkpoint)
+        first_html = client.fetch_category_page(category_id, 1)
+        if first_html is None:
+            continue
+        total_pages = parse_total_pages(first_html)
+        if max_pages > 0:
+            total_pages = min(total_pages, max_pages)
+        start_page = _resolve_start_page(checkpoint, total_pages)
         if start_page is None:
             LOGGER.info("分类 %s 已完成，断点续跑时跳过", category_id)
             categories_done += 1
@@ -52,13 +58,9 @@ def run_pipeline_list(
         if max_pages > 0 and start_page > max_pages:
             LOGGER.warning("OneCareer 分类 %s 的断点页 %d 超出测试页上限 %d，回退到第 1 页", category_id, start_page, max_pages)
             start_page = 1
-        first_html = client.fetch_category_page(category_id, start_page)
-        if first_html is None:
+        current_html = first_html if start_page == 1 else client.fetch_category_page(category_id, start_page)
+        if current_html is None:
             continue
-        total_pages = parse_total_pages(first_html)
-        if max_pages > 0:
-            total_pages = min(total_pages, max_pages)
-        current_html = first_html
         current_page = start_page
         while current_page <= total_pages:
             cards = parse_company_cards(current_html)
@@ -82,11 +84,15 @@ def run_pipeline_list(
     }
 
 
-def _resolve_start_page(checkpoint: dict[str, int | str] | None) -> int | None:
-    if checkpoint and str(checkpoint.get("status", "") or "").strip().lower() == "done":
+def _resolve_start_page(checkpoint: dict[str, int | str] | None, total_pages: int) -> int | None:
+    if checkpoint is None:
+        return 1
+    last_page = int(checkpoint.get("last_page", 0) or 0)
+    status = str(checkpoint.get("status", "") or "").strip().lower()
+    if last_page >= max(int(total_pages or 1), 1):
         return None
-    if checkpoint and str(checkpoint.get("status", "") or "").strip().lower() == "running":
-        return int(checkpoint.get("last_page", 0) or 0) + 1
+    if status in {"running", "done"}:
+        return last_page + 1
     return 1
 
 

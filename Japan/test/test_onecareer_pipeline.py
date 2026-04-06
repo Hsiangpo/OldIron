@@ -21,13 +21,16 @@ from japan_crawler.sites.onecareer.pipeline import _resolve_start_page
 
 class OnecareerPipelineTests(unittest.TestCase):
     def test_resolve_start_page_skips_done_checkpoint(self) -> None:
-        self.assertIsNone(_resolve_start_page({"last_page": 5, "status": "done"}))
+        self.assertIsNone(_resolve_start_page({"last_page": 5, "status": "done"}, 5))
 
     def test_resolve_start_page_resumes_running_checkpoint(self) -> None:
-        self.assertEqual(4, _resolve_start_page({"last_page": 3, "status": "running"}))
+        self.assertEqual(4, _resolve_start_page({"last_page": 3, "status": "running"}, 20))
 
     def test_resolve_start_page_starts_new_checkpoint(self) -> None:
-        self.assertEqual(1, _resolve_start_page(None))
+        self.assertEqual(1, _resolve_start_page(None, 20))
+
+    def test_resolve_start_page_resumes_when_done_checkpoint_is_stale(self) -> None:
+        self.assertEqual(6, _resolve_start_page({"last_page": 5, "status": "done"}, 71))
 
     def test_fetch_company_detail_falls_back_when_detail_html_missing(self) -> None:
         class _MissingDetailClient:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from urllib.parse import urlparse
 
@@ -12,6 +13,7 @@ from lxml import html
 _CATEGORY_RE = re.compile(r"/companies/business_categories/(\d+)")
 _COMPANY_RE = re.compile(r"^/companies/(\d+)$")
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
+_COUNT_RE = re.compile(r"([\d,]+)\s*件（\s*[\d,]+\s*件?〜\s*([\d,]+)\s*件表示）")
 
 
 def parse_business_categories(page_html: str) -> list[dict[str, str]]:
@@ -32,6 +34,13 @@ def parse_total_pages(page_html: str) -> int:
     if not str(page_html or "").strip():
         return 1
     tree = html.fromstring(page_html)
+    count_text = _clean_text(tree.text_content())
+    matched = _COUNT_RE.search(count_text)
+    if matched is not None:
+        total = int(str(matched.group(1) or "0").replace(",", ""))
+        per_page = int(str(matched.group(2) or "0").replace(",", ""))
+        if total > 0 and per_page > 0:
+            return max(1, math.ceil(total / per_page))
     max_page = 1
     for link in tree.cssselect('a[href*="page="]'):
         href = str(link.get("href", "") or "")

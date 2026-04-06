@@ -47,6 +47,24 @@ LIST_HTML = """
 </body></html>
 """
 
+LIST_HTML_WITH_TOTAL = """
+<html><body>
+  <div>1770 件（1件〜25件表示）</div>
+  <ul class="v2-companies">
+    <li class="v2-companies__item">
+      <div class="v2-companies__business-field"><span>IT・通信</span><span>インターネット・Webサービス</span></div>
+      <div class="v2-companies__title-field">
+        <a class="v2-companies__title" href="/companies/70">サイバーエージェント</a>
+      </div>
+    </li>
+  </ul>
+  <a href="/companies/business_categories/5?page=2">2</a>
+  <a href="/companies/business_categories/5?page=3">3</a>
+  <a href="/companies/business_categories/5?page=4">4</a>
+  <a href="/companies/business_categories/5?page=5">5</a>
+</body></html>
+"""
+
 DETAIL_HTML = """
 <html><body>
   <table>
@@ -140,6 +158,9 @@ class OnecareerParserTests(unittest.TestCase):
 
     def test_parse_total_pages(self) -> None:
         self.assertEqual(7, parse_total_pages(LIST_HTML))
+
+    def test_parse_total_pages_prefers_total_count_text(self) -> None:
+        self.assertEqual(71, parse_total_pages(LIST_HTML_WITH_TOTAL))
 
     def test_parse_company_detail(self) -> None:
         detail = parse_company_detail(DETAIL_HTML)
