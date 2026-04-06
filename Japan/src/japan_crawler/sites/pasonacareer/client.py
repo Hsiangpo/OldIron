@@ -13,17 +13,10 @@ from urllib.parse import urljoin
 
 from curl_cffi.requests import Session
 
-from .browser_auth import (
-    PasonacareerPersistentBrowser,
-    fetch_browser_auth,
-    is_sync_api_asyncio_error,
-)
-
 
 LOGGER = logging.getLogger("pasonacareer.client")
 BASE_URL = "https://www.pasonacareer.jp"
 SEARCH_PATH = "/search/jl/"
-_BROWSER_AUTH_TTL_SECONDS = 900
 _PROXY_FALLBACK_ERROR_HINTS = (
     "curl: (35)",
     "tls connect error",
@@ -50,16 +43,12 @@ class PasonacareerClient:
         proxy: str | None = None,
         browser_profile_dir: str | Path | None = None,
     ) -> None:
+        _ = browser_profile_dir
         self._delay = request_delay
         self._max_retries = max_retries
         self._proxy_url = str(proxy or os.getenv("HTTP_PROXY", "")).strip()
         self._local = threading.local()
         self._proxy_cooldown_until = 0.0
-        self._browser_auth_lock = threading.Lock()
-        self._browser_auth_expires_at = 0.0
-        self._browser_cookie_header = ""
-        self._browser_user_agent = ""
-        self._browser_auth_disabled = False
         if self._proxy_url:
             LOGGER.info("使用代理: %s", self._proxy_url)
         self._base_headers = {
@@ -67,48 +56,21 @@ class PasonacareerClient:
             "Accept-Language": "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7",
             "Referer": f"{BASE_URL}{SEARCH_PATH}",
         }
-        self._browser = None
-        if browser_profile_dir is not None:
-            self._browser = PasonacareerPersistentBrowser(
-                user_data_dir=Path(browser_profile_dir),
-                proxy_url=self._proxy_url,
-            )
         self._request_count = 0
         self._error_count = 0
 
-    def fetch_search_page(self, page: int = 1) -> str | None:
+    def fetch_search_page(self, page: int = 1, *, filters: dict[str, str] | None = None) -> str | None:
         params = {"utf8": "✓", "f[f]": "1", "f[q]": ""}
+        if filters:
+            params.update(filters)
         if page > 1:
             params["page"] = str(page)
         response = self._get_with_retry(f"{BASE_URL}{SEARCH_PATH}", params=params)
-        if response is not None:
-            return response.text
-        browser_html = self._fetch_with_browser("搜索页", lambda: self._browser.fetch_search_page(page) if self._browser else None)
-        if browser_html is not None:
-            return browser_html
-        return None
+        return response.text if response is not None else None
 
     def fetch_job_page(self, detail_url: str) -> str | None:
         response = self._get_with_retry(urljoin(BASE_URL, detail_url), max_retries=1, fast_fail=True)
-        if response is not None:
-            return response.text
-        browser_html = self._fetch_with_browser("详情页", lambda: self._browser.fetch_job_page(detail_url) if self._browser else None)
-        if browser_html is not None:
-            return browser_html
-        return None
-
-    def _fetch_with_browser(self, label: str, action) -> str | None:
-        if self._browser is None:
-            return None
-        html = action()
-        if html is not None:
-            self._request_count += 1
-            return html
-        if self._browser.disabled:
-            return None
-        self._error_count += 1
-        LOGGER.warning("浏览器抓取%s失败，回退协议请求。", label)
-        return None
+        return response.text if response is not None else None
 
     def _get_with_retry(
         self,
@@ -132,9 +94,6 @@ class PasonacareerClient:
                             continue
                         if fast_fail:
                             return None
-                        if self._refresh_browser_auth(url):
-                            LOGGER.warning("直连命中挑战页，改用浏览器 Cookie 重试：%s", url)
-                            continue
                         self._sleep_backoff(attempt, 4.0, 8.0, "命中挑战页")
                         break
                     if response.status_code == 200:
@@ -187,8 +146,6 @@ class PasonacareerClient:
                 session.proxies = {"http": self._proxy_url, "https": self._proxy_url}
             session.headers.update(self._base_headers)
             setattr(self._local, attr, session)
-        if not use_proxy:
-            self._apply_browser_auth(session)
         return session
 
     def _disable_proxy_temporarily(self, reason: str) -> None:
@@ -213,37 +170,6 @@ class PasonacareerClient:
             return False
         text = str(getattr(response, "text", "") or "").lower()
         return any(hint in text for hint in _PROXY_FALLBACK_RESPONSE_HINTS)
-
-    def _refresh_browser_auth(self, target_url: str) -> bool:
-        with self._browser_auth_lock:
-            now = time.time()
-            if self._browser_cookie_header and now < self._browser_auth_expires_at:
-                return True
-            try:
-                LOGGER.info("PasonaCareer 启动浏览器刷新鉴权 Cookie：%s", target_url)
-                auth = fetch_browser_auth(target_url, proxy_url=self._proxy_url)
-            except Exception as exc:  # noqa: BLE001
-                if is_sync_api_asyncio_error(exc):
-                    self._browser_auth_disabled = True
-                    LOGGER.warning("浏览器鉴权已禁用，原因: %s", exc)
-                    return False
-                LOGGER.warning("浏览器刷新鉴权失败：%s", exc)
-                return False
-            self._browser_cookie_header = auth.cookie_header
-            self._browser_user_agent = auth.user_agent
-            self._browser_auth_expires_at = now + _BROWSER_AUTH_TTL_SECONDS
-            session = getattr(self._local, "direct_session", None)
-            if session is not None:
-                self._apply_browser_auth(session)
-            return True
-
-    def _apply_browser_auth(self, session: Session) -> None:
-        if not self._browser_cookie_header:
-            return
-        session.headers["Cookie"] = self._browser_cookie_header
-        session.headers["User-Agent"] = self._browser_user_agent
-        session.headers["Cache-Control"] = "max-age=0"
-        session.headers["Upgrade-Insecure-Requests"] = "1"
 
     def _polite_delay(self) -> None:
         time.sleep(self._delay + random.uniform(0.2, 0.6))

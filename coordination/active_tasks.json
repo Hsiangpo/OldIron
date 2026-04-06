@@ -1,29 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-06T05:14:45Z",
-  "tasks": [
-    {
-      "task_id": "jp-pasona-resume-20260406",
-      "status": "in_progress",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "Japan/pasonacareer"
-      ],
-      "planned_files": [
-        "Japan/src/japan_crawler/sites/pasonacareer/client.py",
-        "Japan/src/japan_crawler/sites/pasonacareer/pipeline.py",
-        "Japan/test/test_pasonacareer_browser_fallback.py",
-        "Japan/test/test_pasonacareer_pipeline.py"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-04-06T05:14:45Z",
-      "last_heartbeat_at": "2026-04-06T05:14:45Z",
-      "notes": "Fix PasonaCareer search-page fallback and preserve running checkpoint on interruption"
-    }
-  ]
+  "updated_at": "2026-04-06T06:01:21Z",
+  "tasks": []
 }

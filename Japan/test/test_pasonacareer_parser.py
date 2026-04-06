@@ -15,7 +15,13 @@ if str(SRC) not in sys.path:
 if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
 
-from japan_crawler.sites.pasonacareer.parser import parse_job_cards, parse_job_detail, parse_total_pages, parse_total_results
+from japan_crawler.sites.pasonacareer.parser import (
+    parse_filter_options,
+    parse_job_cards,
+    parse_job_detail,
+    parse_total_pages,
+    parse_total_results,
+)
 
 
 LIST_HTML = """
@@ -58,6 +64,14 @@ DETAIL_HTML = """
 </body></html>
 """
 
+FILTER_HTML = """
+<html><body>
+  <input data-name="関東" data-parent-value="" data-has-children="true" data-root-value="pb200" data-is-virtual="false" type="checkbox" value="pb200" name="f[s3][]" />
+  <input data-name="東京都" data-parent-value="pb200" data-has-children="true" data-root-value="pb200" data-is-virtual="false" type="checkbox" value="pm210" name="f[s3][]" />
+  <input data-name="営業" data-parent-value="" data-has-children="true" data-root-value="jb100" data-is-virtual="false" type="checkbox" value="jb100" name="f[s1][]" />
+</body></html>
+"""
+
 
 class PasonacareerParserTests(unittest.TestCase):
     def test_parse_total_results_and_pages(self) -> None:
@@ -80,6 +94,16 @@ class PasonacareerParserTests(unittest.TestCase):
         self.assertEqual("", detail["representative"])
         self.assertEqual("東京都 渋谷区渋谷１丁目１６－１４渋谷地下鉄ビル", detail["address"])
         self.assertEqual("https://www.tokyu-cnst.co.jp", detail["website"])
+
+    def test_parse_filter_options(self) -> None:
+        area_options = parse_filter_options(FILTER_HTML, "f[s3][]")
+        job_options = parse_filter_options(FILTER_HTML, "f[s1][]")
+        self.assertEqual("pb200", area_options[0]["value"])
+        self.assertEqual("東京都", area_options[1]["label"])
+        self.assertEqual("pb200", area_options[1]["parent_value"])
+        self.assertTrue(area_options[1]["has_children"])
+        self.assertEqual("jb100", job_options[0]["value"])
+        self.assertEqual("", job_options[0]["parent_value"])
 
 
 if __name__ == "__main__":

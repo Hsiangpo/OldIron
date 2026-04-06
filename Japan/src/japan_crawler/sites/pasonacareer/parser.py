@@ -33,6 +33,26 @@ def parse_total_pages(page_html: str, per_page: int = 51) -> int:
     return (total + per_page - 1) // per_page
 
 
+def parse_filter_options(page_html: str, input_name: str) -> list[dict[str, str | bool]]:
+    tree = html.fromstring(page_html)
+    options: list[dict[str, str | bool]] = []
+    for node in tree.xpath(f'//input[@name="{input_name}"]'):
+        value = str(node.get("value", "") or "").strip()
+        if not value:
+            continue
+        options.append(
+            {
+                "value": value,
+                "label": _clean_text(str(node.get("data-name", "") or "")),
+                "parent_value": str(node.get("data-parent-value", "") or "").strip(),
+                "root_value": str(node.get("data-root-value", "") or "").strip(),
+                "has_children": str(node.get("data-has-children", "") or "").strip().lower() == "true",
+                "is_virtual": str(node.get("data-is-virtual", "") or "").strip().lower() == "true",
+            }
+        )
+    return options
+
+
 def parse_job_cards(page_html: str) -> list[dict[str, str]]:
     tree = html.fromstring(page_html)
     cards: list[dict[str, str]] = []
