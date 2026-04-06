@@ -81,6 +81,44 @@ DETAIL_HTML_CURRENT = """
 </body></html>
 """
 
+DETAIL_HTML_ALIASES = """
+<html><body>
+  <table class="company-info-table">
+    <tr>
+      <td class="company-info-key">社名</td>
+      <td class="company-info-value"><p>東急リバブル株式会社</p></td>
+    </tr>
+    <tr>
+      <td class="company-info-key">本社所在地</td>
+      <td class="company-info-value"><p>東京都渋谷区道玄坂1-9-5</p></td>
+    </tr>
+    <tr>
+      <td class="company-info-key">コーポレートサイト</td>
+      <td class="company-info-value"><a href="https://www.livable.co.jp/">https://www.livable.co.jp/</a></td>
+    </tr>
+  </table>
+</body></html>
+"""
+
+DETAIL_HTML_ALIAS = """
+<html><body>
+  <table class="company-info-table">
+    <tr>
+      <td class="company-info-key">社名</td>
+      <td class="company-info-value"><p>東急リバブル株式会社</p></td>
+    </tr>
+    <tr>
+      <td class="company-info-key">本社所在地</td>
+      <td class="company-info-value"><p>東京都渋谷区道玄坂1-9-5</p></td>
+    </tr>
+    <tr>
+      <td class="company-info-key">コーポレートサイト</td>
+      <td class="company-info-value"><a href="https://www.livable.co.jp/">https://www.livable.co.jp/</a></td>
+    </tr>
+  </table>
+</body></html>
+"""
+
 
 class OnecareerParserTests(unittest.TestCase):
     def test_parse_business_categories(self) -> None:
@@ -123,6 +161,18 @@ class OnecareerParserTests(unittest.TestCase):
         self.assertEqual("", detail["representative"])
         self.assertEqual("", detail["address"])
         self.assertEqual("", detail["website"])
+
+    def test_parse_company_detail_with_alias_labels(self) -> None:
+        detail = parse_company_detail(DETAIL_HTML_ALIASES)
+        self.assertEqual("東急リバブル株式会社", detail["company_name"])
+        self.assertEqual("東京都渋谷区道玄坂1-9-5", detail["address"])
+        self.assertEqual("https://www.livable.co.jp", detail["website"])
+
+    def test_parse_company_detail_accepts_alias_keys(self) -> None:
+        detail = parse_company_detail(DETAIL_HTML_ALIAS)
+        self.assertEqual("東急リバブル株式会社", detail["company_name"])
+        self.assertEqual("東京都渋谷区道玄坂1-9-5", detail["address"])
+        self.assertEqual("https://www.livable.co.jp", detail["website"])
 
 
 if __name__ == "__main__":

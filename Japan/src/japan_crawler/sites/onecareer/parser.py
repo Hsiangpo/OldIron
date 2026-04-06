@@ -89,10 +89,10 @@ def parse_company_detail(page_html: str) -> dict[str, str]:
         if key not in info:
             info[key] = value
     return {
-        "company_name": info.get("会社名", "") or info.get("企業名", ""),
-        "representative": info.get("代表者名", "") or info.get("代表者", ""),
-        "website": _normalize_website(info.get("ホームページURL", "")),
-        "address": info.get("所在地", ""),
+        "company_name": _first_present(info, "会社名", "企業名", "社名"),
+        "representative": _first_present(info, "代表者名", "代表者", "代表"),
+        "website": _normalize_website(_find_website_value(info)),
+        "address": _first_present(info, "所在地", "本社所在地"),
         "industry": "",
     }
 
@@ -114,6 +114,28 @@ def _empty_detail() -> dict[str, str]:
         "address": "",
         "industry": "",
     }
+
+
+def _first_present(info: dict[str, str], *keys: str) -> str:
+    for key in keys:
+        value = str(info.get(key, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _find_website_value(info: dict[str, str]) -> str:
+    exact = _first_present(info, "ホームページURL", "コーポレートサイト")
+    if exact:
+        return exact
+    for key, value in info.items():
+        clean_key = str(key or "").strip()
+        clean_value = str(value or "").strip()
+        if not clean_value:
+            continue
+        if "ホームページ" in clean_key or "サイト" in clean_key:
+            return clean_value
+    return ""
 
 
 def _extract_company_id(detail_url: str) -> str:
