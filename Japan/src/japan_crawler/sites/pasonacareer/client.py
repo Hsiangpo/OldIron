@@ -81,7 +81,12 @@ class PasonacareerClient:
         if page > 1:
             params["page"] = str(page)
         response = self._get_with_retry(f"{BASE_URL}{SEARCH_PATH}", params=params)
-        return response.text if response is not None else None
+        if response is not None:
+            return response.text
+        browser_html = self._fetch_with_browser("搜索页", lambda: self._browser.fetch_search_page(page) if self._browser else None)
+        if browser_html is not None:
+            return browser_html
+        return None
 
     def fetch_job_page(self, detail_url: str) -> str | None:
         response = self._get_with_retry(urljoin(BASE_URL, detail_url), max_retries=1, fast_fail=True)

@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "updated_at": "2026-04-06T04:54:06Z",
+  "updated_at": "2026-04-06T05:14:45Z",
   "tasks": [
     {
-      "task_id": "jp-pasona-status-20260406",
+      "task_id": "jp-pasona-resume-20260406",
       "status": "in_progress",
       "machine": "machine1-windows",
       "agent": "codex",
@@ -14,14 +14,16 @@
         "Japan/pasonacareer"
       ],
       "planned_files": [
-        "Japan/src/japan_crawler/sites/pasonacareer/store.py",
-        "Japan/test/test_pasonacareer_store.py"
+        "Japan/src/japan_crawler/sites/pasonacareer/client.py",
+        "Japan/src/japan_crawler/sites/pasonacareer/pipeline.py",
+        "Japan/test/test_pasonacareer_browser_fallback.py",
+        "Japan/test/test_pasonacareer_pipeline.py"
       ],
       "shared_lock_ids": [],
       "github_ref": "not-created",
-      "started_at": "2026-04-06T04:54:06Z",
-      "last_heartbeat_at": "2026-04-06T04:54:06Z",
-      "notes": "Normalize PasonaCareer gmap/email statuses to match real queues"
+      "started_at": "2026-04-06T05:14:45Z",
+      "last_heartbeat_at": "2026-04-06T05:14:45Z",
+      "notes": "Fix PasonaCareer search-page fallback and preserve running checkpoint on interruption"
     }
   ]
 }

@@ -23,7 +23,11 @@ _MAX_IDLE_ROUNDS = 3
 
 
 def _p1_zero_progress(stats: dict[str, int]) -> bool:
-    return int(stats.get("pages_done", 0)) <= 0 and int(stats.get("new_companies", 0)) <= 0
+    return (
+        int(stats.get("pages_done", 0)) <= 0
+        and int(stats.get("new_companies", 0)) <= 0
+        and int(stats.get("total_companies", 0)) <= 0
+    )
 
 
 def _wait_for_next_round(stop_event: threading.Event, p1_failed: threading.Event) -> bool:

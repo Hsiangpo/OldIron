@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from .store import PasonacareerStore
 
 
 LOGGER = logging.getLogger("pasonacareer.pipeline")
+_SEARCH_PAGE_RETRY_LIMIT = 5
 
 
 def run_pipeline_list(
@@ -31,12 +33,16 @@ def run_pipeline_list(
     )
 
     checkpoint = store.get_checkpoint("job_list")
-    start_page = checkpoint["last_page"] + 1 if checkpoint and checkpoint["status"] == "running" else 1
+    start_page = _resolve_start_page(checkpoint)
+    if start_page is None:
+        return {"pages_done": 0, "new_companies": 0, "total_companies": store.get_company_count(), **client.stats}
     if max_pages > 0 and start_page > max_pages:
         LOGGER.warning("PasonaCareer 断点页 %d 超出测试页上限 %d，回退到第 1 页", start_page, max_pages)
         start_page = 1
-    first_html = client.fetch_search_page(start_page)
+    first_html = _fetch_search_page_with_retries(client, start_page)
     if first_html is None:
+        if checkpoint is not None and start_page > 1:
+            store.update_checkpoint("job_list", start_page - 1, int(checkpoint.get("total_pages", 0) or 0), "running")
         return {"pages_done": 0, "new_companies": 0, "total_companies": store.get_company_count(), **client.stats}
 
     total_pages = parse_total_pages(first_html)
@@ -49,6 +55,7 @@ def run_pipeline_list(
     new_total = 0
     current_html = first_html
     current_page = start_page
+    completed = False
     while current_page <= total_pages:
         cards = parse_job_cards(current_html)
         new_total += _fetch_and_store_details(store, client, cards, detail_workers)
@@ -58,19 +65,48 @@ def run_pipeline_list(
             LOGGER.info("第 %d/%d 页：解析 %d 条职位", current_page, total_pages, len(cards))
         current_page += 1
         if current_page > total_pages:
+            completed = True
             break
-        current_html = client.fetch_search_page(current_page)
+        current_html = _fetch_search_page_with_retries(client, current_page)
         if current_html is None:
             LOGGER.warning("第 %d 页获取失败，保留断点", current_page)
             break
 
-    store.update_checkpoint("job_list", min(current_page - 1, total_pages), total_pages, "done")
+    final_page = min(current_page - 1, total_pages)
+    final_status = "done" if completed else "running"
+    store.update_checkpoint("job_list", final_page, total_pages, final_status)
     return {
         "pages_done": pages_done,
         "new_companies": new_total,
         "total_companies": store.get_company_count(),
         **client.stats,
     }
+
+
+def _resolve_start_page(checkpoint: dict[str, int | str] | None) -> int | None:
+    if checkpoint is None:
+        return 1
+    last_page = int(checkpoint.get("last_page", 0) or 0)
+    total_pages = int(checkpoint.get("total_pages", 0) or 0)
+    status = str(checkpoint.get("status", "") or "").strip().lower()
+    if status == "done" and total_pages > 0 and last_page >= total_pages:
+        return None
+    if status in {"running", "done"} and last_page > 0:
+        return last_page + 1
+    return 1
+
+
+def _fetch_search_page_with_retries(client: PasonacareerClient, page: int) -> str | None:
+    for attempt in range(1, _SEARCH_PAGE_RETRY_LIMIT + 1):
+        html_text = client.fetch_search_page(page)
+        if html_text is not None:
+            return html_text
+        if attempt >= _SEARCH_PAGE_RETRY_LIMIT:
+            break
+        wait = min(10, attempt * 2)
+        LOGGER.warning("第 %d 页获取失败，第 %d/%d 次重试，%ds 后继续", page, attempt, _SEARCH_PAGE_RETRY_LIMIT, wait)
+        time.sleep(wait)
+    return None
 
 
 def _fetch_and_store_details(store: PasonacareerStore, client: PasonacareerClient, cards: list[dict[str, str]], detail_workers: int) -> int:

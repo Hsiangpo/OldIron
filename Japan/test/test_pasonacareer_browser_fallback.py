@@ -90,6 +90,21 @@ class PasonacareerBrowserFallbackTests(unittest.TestCase):
         html = client.fetch_job_page("/job/1/")
         self.assertEqual("<html>job</html>", html)
 
+    def test_fetch_search_page_falls_back_to_browser_after_protocol_failure(self) -> None:
+        client = PasonacareerClient.__new__(PasonacareerClient)
+        client._browser = type(
+            "_Browser",
+            (),
+            {"fetch_search_page": lambda self, page: f"<html>browser-{page}</html>"},
+        )()
+        client._request_count = 0
+        client._error_count = 0
+        client._fetch_with_browser = lambda label, action: action()  # noqa: ARG005
+        client._get_with_retry = lambda url, params=None: None  # noqa: ARG005
+
+        html = client.fetch_search_page(197)
+        self.assertEqual("<html>browser-197</html>", html)
+
     def test_browser_primary_is_disabled_for_parallel_detail_fetch(self) -> None:
         client = PasonacareerClient.__new__(PasonacareerClient)
         client._browser = object()
