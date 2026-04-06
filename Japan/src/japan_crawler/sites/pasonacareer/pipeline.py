@@ -92,9 +92,11 @@ def _plan_search_scopes(client: PasonacareerClient, base_html: str) -> list[Sear
     locations = [item for item in location_options if _is_location_scope(item)]
     job_roots = [item for item in job_options if _is_job_root_scope(item)]
     scopes: list[SearchScope] = []
-    for location in locations:
+    for index, location in enumerate(locations, start=1):
         filters = {_LOCATION_FILTER_NAME: str(location["value"])}
         label = str(location["label"] or location["value"])
+        if index <= 3 or index % 10 == 0 or index == len(locations):
+            LOGGER.info("PasonaCareer 分段规划：地区 %d/%d -> %s", index, len(locations), label)
         html_text = _fetch_search_page_with_retries(client, 1, filters)
         if html_text is None:
             LOGGER.warning("PasonaCareer 分段规划失败，地区 %s 本轮跳过。", label)
@@ -117,9 +119,11 @@ def _plan_large_location_scopes(
     job_roots: list[dict[str, str | bool]],
 ) -> list[SearchScope]:
     scopes: list[SearchScope] = []
-    for job_root in job_roots:
+    for index, job_root in enumerate(job_roots, start=1):
         filters = dict(location_filters)
         filters[_JOB_FILTER_NAME] = str(job_root["value"])
+        if index <= 3 or index == len(job_roots):
+            LOGGER.info("PasonaCareer 分段细化：%s 职种 %d/%d -> %s", location_label, index, len(job_roots), job_root["label"])
         html_text = _fetch_search_page_with_retries(client, 1, filters)
         if html_text is None:
             LOGGER.warning("PasonaCareer 分段规划失败，范围 %s / %s 本轮跳过。", location_label, job_root["label"])
@@ -275,18 +279,37 @@ def _load_job_details(
     with ThreadPoolExecutor(max_workers=detail_workers, thread_name_prefix="pasona-detail") as executor:
         futures = {executor.submit(_fetch_job_detail, client, card): card for card in cards}
         for future in as_completed(futures):
-            results.append(future.result())
+            card = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("PasonaCareer 详情页处理异常，保留列表页信息：%s | %s", card["detail_url"], exc)
+                results.append(_fallback_company_from_card(card))
     return results
 
 
 def _fetch_job_detail(client: PasonacareerClient, card: dict[str, str]) -> dict[str, str]:
     html_text = client.fetch_job_page(card["detail_url"])
-    detail = parse_job_detail(html_text or "")
+    if not str(html_text or "").strip():
+        LOGGER.warning("PasonaCareer 详情页为空，保留列表页信息：%s", card["detail_url"])
+        return _fallback_company_from_card(card)
+    detail = parse_job_detail(html_text)
     return {
         "company_name": detail["company_name"] or card["company_name"],
         "representative": detail["representative"],
         "website": detail["website"],
         "address": detail["address"],
+        "detail_url": card["detail_url"],
+        "source_job_url": card["detail_url"],
+    }
+
+
+def _fallback_company_from_card(card: dict[str, str]) -> dict[str, str]:
+    return {
+        "company_name": card["company_name"],
+        "representative": "",
+        "website": "",
+        "address": "",
         "detail_url": card["detail_url"],
         "source_job_url": card["detail_url"],
     }

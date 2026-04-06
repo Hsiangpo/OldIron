@@ -79,6 +79,13 @@ def parse_job_cards(page_html: str) -> list[dict[str, str]]:
 
 
 def parse_job_detail(page_html: str) -> dict[str, str]:
+    if not str(page_html or "").strip():
+        return {
+            "company_name": "",
+            "representative": "",
+            "website": "",
+            "address": "",
+        }
     tree = html.fromstring(page_html)
     job_posting = _extract_job_posting_json(tree)
     title = _clean_text(tree.xpath("string(//h1)") or "")

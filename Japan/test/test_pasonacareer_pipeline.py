@@ -18,6 +18,7 @@ if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
 
 from japan_crawler.sites.pasonacareer.pipeline import _fetch_search_page_with_retries
+from japan_crawler.sites.pasonacareer.pipeline import _fetch_job_detail
 from japan_crawler.sites.pasonacareer.pipeline import _plan_search_scopes
 from japan_crawler.sites.pasonacareer.pipeline import _resolve_start_page
 from japan_crawler.sites.pasonacareer.pipeline import run_pipeline_list
@@ -153,6 +154,25 @@ class PasonacareerPipelineTests(unittest.TestCase):
             ).fetchone()
             conn.close()
             self.assertEqual((1, 2, "running"), checkpoint)
+
+    def test_fetch_job_detail_falls_back_when_detail_page_is_empty(self) -> None:
+        class _Client:
+            def fetch_job_page(self, detail_url: str) -> str | None:
+                _ = detail_url
+                return None
+
+        company = _fetch_job_detail(
+            _Client(),
+            {
+                "detail_url": "/job/81224876/",
+                "company_name": "株式会社テスト",
+                "job_title": "求人",
+                "job_location": "北海道",
+            },
+        )
+        self.assertEqual("株式会社テスト", company["company_name"])
+        self.assertEqual("", company["website"])
+        self.assertEqual("", company["address"])
 
 
 if __name__ == "__main__":

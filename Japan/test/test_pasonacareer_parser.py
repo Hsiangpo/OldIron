@@ -95,6 +95,13 @@ class PasonacareerParserTests(unittest.TestCase):
         self.assertEqual("東京都 渋谷区渋谷１丁目１６－１４渋谷地下鉄ビル", detail["address"])
         self.assertEqual("https://www.tokyu-cnst.co.jp", detail["website"])
 
+    def test_parse_job_detail_empty_html(self) -> None:
+        detail = parse_job_detail("")
+        self.assertEqual("", detail["company_name"])
+        self.assertEqual("", detail["representative"])
+        self.assertEqual("", detail["address"])
+        self.assertEqual("", detail["website"])
+
     def test_parse_filter_options(self) -> None:
         area_options = parse_filter_options(FILTER_HTML, "f[s3][]")
         job_options = parse_filter_options(FILTER_HTML, "f[s1][]")
