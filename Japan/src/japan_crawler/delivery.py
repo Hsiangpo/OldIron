@@ -9,6 +9,7 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +30,52 @@ _SUSPICIOUS_EMAIL_DOMAINS = {
     "gmail.jp",
     "48g9-.bybgnptut",
 }
+_STRICT_EMAIL_DOMAIN_SITES = {"mynavi", "onecareer"}
+_MULTI_LABEL_PUBLIC_SUFFIXES = {
+    "co.jp",
+    "or.jp",
+    "ne.jp",
+    "go.jp",
+    "ac.jp",
+    "co.uk",
+    "org.uk",
+    "gov.uk",
+    "ac.uk",
+}
+_PRIORITY_EMAIL_LOCAL_PARTS = {
+    "contact",
+    "customer",
+    "hello",
+    "help",
+    "hr",
+    "info",
+    "inquiry",
+    "office",
+    "privacy",
+    "pr",
+    "press",
+    "recruit",
+    "recruiting",
+    "sales",
+    "service",
+    "support",
+    "saiyo",
+    "soumu",
+    "kojinjoho",
+}
+_REPRESENTATIVE_TITLE_PATTERNS = (
+    r"代表取締役社長",
+    r"代表執行役社長",
+    r"代表執行取締役",
+    r"代表取締役",
+    r"取締役代表執行役社長",
+    r"代表理事",
+    r"理事長",
+    r"社長",
+    r"ceo",
+    r"coo",
+    r"cfo",
+)
 
 
 def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) -> dict[str, object]:
@@ -274,15 +321,22 @@ def _prepare_delivery_records(site_name: str, records: list[dict[str, str]]) -> 
     prepared: list[dict[str, str]] = []
     for record in records:
         copied = dict(record)
-        copied["emails"] = _normalize_delivery_emails(site_name, str(record.get("emails", "") or ""))
+        copied["emails"] = _normalize_delivery_emails(
+            site_name,
+            str(record.get("website", "") or ""),
+            str(record.get("emails", "") or ""),
+        )
         prepared.append(copied)
     return prepared
 
 
-def _normalize_delivery_emails(site_name: str, emails_text: str) -> str:
+def _normalize_delivery_emails(site_name: str, website: str, emails_text: str) -> str:
     tokens = _split_emails(emails_text)
     if site_name != "xlsximport":
         tokens = [email for email in tokens if _is_delivery_email_allowed(email)]
+    if site_name in _STRICT_EMAIL_DOMAIN_SITES:
+        tokens = [email for email in tokens if _email_matches_website_domain(website, email)]
+        tokens = _prioritize_emails(tokens)[:10]
     return "; ".join(tokens)
 
 
@@ -319,7 +373,7 @@ def _dedupe_delivery_records(records: list[dict[str, str]]) -> list[dict[str, st
     merged_by_key: dict[str, dict[str, str]] = {}
     order: list[str] = []
     for record in records:
-        key = _record_key(record)
+        key = _delivery_merge_key(record)
         existing = merged_by_key.get(key)
         if existing is None:
             merged_by_key[key] = dict(record)
@@ -346,6 +400,18 @@ def _merge_email_text(left: str, right: str) -> str:
     return "; ".join(merged)
 
 
+def _delivery_merge_key(record: dict[str, str]) -> str:
+    company = _normalize_merge_text(record.get("company_name", ""))
+    representative = _normalize_representative_for_key(record.get("representative", ""))
+    website_domain = _registrable_domain(record.get("website", ""))
+    if company and representative and website_domain:
+        return f"{company}|{representative}|{website_domain}"
+    address = _normalize_merge_text(record.get("address", ""))
+    if company and representative and address:
+        return f"{company}|{representative}|{address}"
+    return _record_key(record)
+
+
 def _record_key(record: dict[str, str]) -> str:
     parts = [
         str(record.get("company_name", "") or "").strip().lower(),
@@ -354,6 +420,17 @@ def _record_key(record: dict[str, str]) -> str:
         str(record.get("address", "") or "").strip().lower(),
     ]
     return "|".join(parts)
+
+
+def _normalize_merge_text(raw: str) -> str:
+    return re.sub(r"\s+", "", str(raw or "").strip().lower())
+
+
+def _normalize_representative_for_key(raw: str) -> str:
+    text = _normalize_merge_text(raw)
+    for pattern in _REPRESENTATIVE_TITLE_PATTERNS:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    return text
 
 
 def _normalize_key_text(raw: str) -> str:
@@ -419,3 +496,72 @@ def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
+
+
+def _registrable_domain(url: str) -> str:
+    target = str(url or "").strip()
+    if not target:
+        return ""
+    if "://" not in target:
+        target = f"https://{target}"
+    parsed = urlparse(target)
+    host = (parsed.netloc or parsed.path).strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    labels = [label for label in host.split(".") if label]
+    if len(labels) < 2:
+        return host
+    suffix2 = ".".join(labels[-2:])
+    if suffix2 in _MULTI_LABEL_PUBLIC_SUFFIXES and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return suffix2
+
+
+def _domain_label(domain: str) -> str:
+    labels = [label for label in str(domain or "").split(".") if label]
+    if len(labels) < 2:
+        return str(domain or "")
+    suffix2 = ".".join(labels[-2:])
+    if suffix2 in _MULTI_LABEL_PUBLIC_SUFFIXES and len(labels) >= 3:
+        return labels[-3]
+    return labels[-2]
+
+
+def _email_matches_website_domain(website: str, email: str) -> bool:
+    website_domain = _registrable_domain(website)
+    if not website_domain:
+        return True
+    value = str(email or "").strip().lower()
+    if "@" not in value:
+        return False
+    email_domain = _registrable_domain(value.split("@", 1)[1])
+    if not email_domain:
+        return False
+    if website_domain == email_domain:
+        return True
+    website_label = _domain_label(website_domain)
+    email_label = _domain_label(email_domain)
+    if len(website_label) >= 4 and website_label in email_label:
+        return True
+    if len(email_label) >= 4 and email_label in website_label:
+        return True
+    return False
+
+
+def _prioritize_emails(emails: list[str]) -> list[str]:
+    unique = _split_emails(";".join(emails))
+    return sorted(unique, key=lambda item: (-_email_priority(item), unique.index(item)))
+
+
+def _email_priority(email: str) -> int:
+    local = str(email or "").split("@", 1)[0].strip().lower()
+    normalized = re.sub(r"[^a-z0-9]+", "", local)
+    if local in _PRIORITY_EMAIL_LOCAL_PARTS or normalized in _PRIORITY_EMAIL_LOCAL_PARTS:
+        return 100
+    if any(token in normalized for token in _PRIORITY_EMAIL_LOCAL_PARTS):
+        return 60
+    if re.fullmatch(r"[a-z]+", normalized):
+        return 20
+    return 10

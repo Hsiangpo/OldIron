@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from shared.oldiron_core.fc_email.email_service import FirecrawlEmailService
 from shared.oldiron_core.fc_email.email_service import FirecrawlEmailSettings
+from shared.oldiron_core.fc_email.email_service import extract_domain
 
 
 class _DummyCrawler:
@@ -46,6 +47,28 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
         service.close()
         self.assertEqual(0, crawler.closed)
         self.assertEqual(0, key_pool.closed)
+
+    def test_extract_domain_uses_registrable_domain_for_subdomain(self) -> None:
+        self.assertEqual("aig.com", extract_domain("http://www-154.aig.com/"))
+        self.assertEqual("abc.co.jp", extract_domain("https://recruit.abc.co.jp/about"))
+
+    def test_filter_same_domain_emails_matches_registrable_domain(self) -> None:
+        service = FirecrawlEmailService(
+            FirecrawlEmailSettings(
+                llm_api_key="x",
+                llm_model="gpt-5.4-mini",
+            ),
+            key_pool=_DummyKeyPool(),
+            firecrawl_client=_DummyCrawler(),
+        )
+        emails = service._filter_same_domain_emails(
+            "http://www-154.aig.com/",
+            [
+                "aviationworklist@aig.com",
+                "paul.smith@talbotuw.com",
+            ],
+        )
+        self.assertEqual(["aviationworklist@aig.com"], emails)
 
 
 if __name__ == "__main__":

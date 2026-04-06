@@ -47,7 +47,7 @@ class JapanDeliveryTests(unittest.TestCase):
                     source_job_url TEXT
                 );
                 INSERT INTO companies (company_name, representative, website, address, emails, source_job_url)
-                VALUES ('Delta', 'Jane', 'https://delta.example', 'Tokyo', 'jane@gmail.com', 'https://example.com/job/1');
+                VALUES ('Delta', 'Jane', 'https://delta.example', 'Tokyo', 'hr@delta.example', 'https://example.com/job/1');
                 """
             )
             conn.commit()
@@ -159,6 +159,86 @@ class JapanDeliveryTests(unittest.TestCase):
             self.assertEqual(1, len(rows))
             self.assertEqual("sales@alpha.co.jp; support@alpha.co.jp", rows[0]["emails"])
             self.assertEqual("https://example.com/a", rows[0]["detail_url"])
+
+    def test_strict_sites_drop_unrelated_email_domains(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            site_dir = output_root / "onecareer"
+            site_dir.mkdir(parents=True)
+            conn = sqlite3.connect(str(site_dir / "onecareer_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE companies (
+                    company_id TEXT PRIMARY KEY,
+                    company_name TEXT,
+                    representative TEXT,
+                    website TEXT,
+                    address TEXT,
+                    industry TEXT,
+                    detail_url TEXT,
+                    emails TEXT
+                );
+                INSERT INTO companies (company_id, company_name, representative, website, address, industry, detail_url, emails) VALUES
+                    ('oc-1', 'AIGグループ', '代表者A', 'http://www-154.aig.com', 'Tokyo', '金融', '/companies/317', 'aviationworklist@aig.com; paul.smith@talbotuw.com'),
+                    ('oc-2', 'J.P.モルガン', '代表者B', 'https://toushin-plaza.jp', 'Tokyo', '金融', '/companies/104', 'info@fan-sec.co.jp');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            delivery_root = output_root / "delivery"
+            summary = build_delivery_bundle(output_root, delivery_root, "day1")
+            self.assertEqual(1, summary["delta_companies"])
+            self.assertEqual(1, summary["sites"]["onecareer"]["qualified_current"])
+
+            csv_path = delivery_root / "Japan_day001" / "onecareer.csv"
+            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(1, len(rows))
+            self.assertEqual("aviationworklist@aig.com", rows[0]["emails"])
+
+    def test_delivery_merges_same_company_when_domain_and_representative_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            site_dir = output_root / "mynavi"
+            site_dir.mkdir(parents=True)
+            conn = sqlite3.connect(str(site_dir / "mynavi_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE companies (
+                    company_id TEXT PRIMARY KEY,
+                    company_name TEXT,
+                    representative TEXT,
+                    website TEXT,
+                    address TEXT,
+                    industry TEXT,
+                    detail_url TEXT,
+                    source_job_url TEXT,
+                    emails TEXT
+                );
+                INSERT INTO companies (company_id, company_name, representative, website, address, industry, detail_url, source_job_url, emails) VALUES
+                    ('324993', 'コストコホールセールジャパン株式会社', '代表取締役社長 ケン・テリオ', 'https://www.costco.co.jp', '木更津瓜倉361番地金田西2街区2各地', '流通', '/company/324993', '/job/1', 'w5180opt@costco.co.jp'),
+                    ('387502', 'コストコホールセールジャパン株式会社', '代表執行役社長 ケン・テリオ', 'https://www.costco.co.jp/company', '千葉県木更津市瓜倉361番地', '流通', '/company/387502', '/job/2', 'w5181opt@costco.co.jp');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            delivery_root = output_root / "delivery"
+            summary = build_delivery_bundle(output_root, delivery_root, "day1")
+            self.assertEqual(1, summary["delta_companies"])
+            self.assertEqual(1, summary["sites"]["mynavi"]["qualified_current"])
+
+            csv_path = delivery_root / "Japan_day001" / "mynavi.csv"
+            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(1, len(rows))
+            self.assertEqual(
+                "w5180opt@costco.co.jp; w5181opt@costco.co.jp",
+                rows[0]["emails"],
+            )
 
     def test_xlsximport_delivery_keeps_source_emails_but_still_dedupes_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -332,7 +412,7 @@ class JapanDeliveryTests(unittest.TestCase):
                     email TEXT
                 );
                 INSERT INTO companies (company_name, representative, website, address, detail_url, email) VALUES
-                    ('OneCareer Delta', 'Hanako', 'https://delta.example', 'Tokyo', 'https://www.onecareer.jp/companies/1', 'delta@gmail.com');
+                    ('OneCareer Delta', 'Hanako', 'https://delta.example', 'Tokyo', 'https://www.onecareer.jp/companies/1', 'recruit@delta.example');
                 """
             )
             conn.commit()
@@ -361,7 +441,7 @@ class JapanDeliveryTests(unittest.TestCase):
                 "OneCareer A",
                 "Hanako",
                 "https://onecareer.example",
-                "onecareer@gmail.com",
+                "hr@onecareer.example",
             )
             self._seed_company_db(
                 openwork_dir / "openwork_store.db",
@@ -392,7 +472,7 @@ class JapanDeliveryTests(unittest.TestCase):
                 "OneCareer A",
                 "Hanako",
                 "https://onecareer.example",
-                "onecareer@gmail.com",
+                "hr@onecareer.example",
             )
 
             delivery_root = output_root / "delivery"

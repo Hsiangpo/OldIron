@@ -9,6 +9,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+_MULTI_LABEL_PUBLIC_SUFFIXES = {
+    "co.jp",
+    "or.jp",
+    "ne.jp",
+    "go.jp",
+    "ac.jp",
+    "co.uk",
+    "org.uk",
+    "gov.uk",
+    "ac.uk",
+}
+
 
 def _now_text() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
@@ -17,12 +29,24 @@ def _now_text() -> str:
 def build_company_key(company_name: str, website: str, address: str) -> str:
     """构建公司去重 key，优先使用官网域名。"""
     name = str(company_name or "").strip().lower()
-    host = str(urlparse(str(website or "").strip()).netloc or "").strip().lower()
-    if host.startswith("www."):
-        host = host[4:]
+    host = _registrable_domain(website)
     if host:
         return f"{name}|{host}"
     return f"{name}|{str(address or '').strip().lower()}"
+
+
+def _registrable_domain(value: str) -> str:
+    parsed = urlparse(str(value or "").strip())
+    host = str(parsed.netloc or parsed.path or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    labels = [label for label in host.split(".") if label]
+    if len(labels) < 2:
+        return host
+    suffix2 = ".".join(labels[-2:])
+    if suffix2 in _MULTI_LABEL_PUBLIC_SUFFIXES and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return suffix2
 
 
 class MynaviStore:
@@ -121,13 +145,16 @@ class MynaviStore:
             inserted = 0
             for company in companies:
                 company_name = str(company.get("company_name", "") or "").strip()
-                company_id = str(company.get("company_id", "") or "").strip()
-                if not company_id and company_name:
+                raw_company_id = str(company.get("company_id", "") or "").strip()
+                company_id = ""
+                if company_name and (str(company.get("website", "") or "").strip() or str(company.get("address", "") or "").strip()):
                     company_id = build_company_key(
                         company_name,
                         str(company.get("website", "") or ""),
                         str(company.get("address", "") or ""),
                     )
+                if not company_id:
+                    company_id = raw_company_id
                 if not company_id or not company_name:
                     continue
                 existed = conn.execute(

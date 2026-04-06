@@ -64,3 +64,40 @@ class MynaviStoreTests(unittest.TestCase):
                 self.assertEqual("https://example.com/job/2", row[3])
             finally:
                 store.close()
+
+    def test_upsert_companies_ignores_unstable_page_company_id_when_company_fields_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MynaviStore(Path(tmpdir) / "mynavi_store.db")
+            try:
+                inserted_first = store.upsert_companies(
+                    [
+                        {
+                            "company_id": "324993",
+                            "company_name": "コストコホールセールジャパン株式会社",
+                            "website": "https://www.costco.co.jp",
+                            "address": "千葉県木更津市瓜倉361番地",
+                        }
+                    ]
+                )
+                inserted_second = store.upsert_companies(
+                    [
+                        {
+                            "company_id": "387502",
+                            "company_name": "コストコホールセールジャパン株式会社",
+                            "website": "https://www.costco.co.jp/company",
+                            "address": "木更津瓜倉361番地金田西2街区2各地",
+                            "representative": "代表取締役社長 ケン・テリオ",
+                        }
+                    ]
+                )
+                conn = sqlite3.connect(str(Path(tmpdir) / "mynavi_store.db"))
+                row = conn.execute(
+                    "SELECT COUNT(*), representative FROM companies"
+                ).fetchone()
+                conn.close()
+                self.assertEqual(1, inserted_first)
+                self.assertEqual(0, inserted_second)
+                self.assertEqual(1, row[0])
+                self.assertEqual("代表取締役社長 ケン・テリオ", row[1])
+            finally:
+                store.close()

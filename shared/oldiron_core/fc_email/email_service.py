@@ -95,6 +95,39 @@ _BAD_EMAIL_HOST_HINTS = (
     "sentry.wixpress.com",
     "sentry-next.wixpress.com",
 )
+_MULTI_LABEL_PUBLIC_SUFFIXES = {
+    "co.jp",
+    "or.jp",
+    "ne.jp",
+    "go.jp",
+    "ac.jp",
+    "co.uk",
+    "org.uk",
+    "gov.uk",
+    "ac.uk",
+}
+_EMAIL_PRIORITY_LOCAL_PARTS = {
+    "contact",
+    "hello",
+    "help",
+    "hr",
+    "info",
+    "inquiry",
+    "office",
+    "privacy",
+    "pr",
+    "press",
+    "recruit",
+    "recruiting",
+    "sales",
+    "service",
+    "support",
+    "saiyo",
+    "soumu",
+    "kojinjoho",
+    "customer",
+}
+_MAX_CLEAN_EMAILS = 12
 _SKIP_PAGE_SUFFIXES = (
     ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp",
     ".css", ".js", ".woff", ".woff2", ".ttf", ".eot",
@@ -122,7 +155,7 @@ def extract_domain(website_url: str) -> str:
         host = host[4:]
     if ":" in host:
         host = host.split(":", 1)[0]
-    return host
+    return _registrable_domain(host)
 
 
 def _keys_file_has_content(keys_file: Path) -> bool:
@@ -591,7 +624,11 @@ class FirecrawlEmailService:
                 continue
             if value not in cleaned:
                 cleaned.append(value)
-        return cleaned
+        prioritized = sorted(
+            cleaned,
+            key=lambda item: (-_email_priority_score(item), cleaned.index(item)),
+        )
+        return prioritized[:_MAX_CLEAN_EMAILS]
 
     def _normalize_email_candidate(self, value: object) -> str:
         text = unquote(str(value or "")).strip().lower()
@@ -731,6 +768,35 @@ def _is_supported_page_url(url: str) -> bool:
     if path.endswith(_IMAGE_EXTENSIONS):
         return False
     return not any(path.endswith(suffix) for suffix in _SKIP_PAGE_SUFFIXES)
+
+
+def _registrable_domain(host: str) -> str:
+    labels = [label for label in str(host or "").strip().lower().split(".") if label]
+    if len(labels) < 2:
+        return str(host or "").strip().lower()
+    suffix2 = ".".join(labels[-2:])
+    if suffix2 in _MULTI_LABEL_PUBLIC_SUFFIXES and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return suffix2
+
+
+def _email_priority_score(email: str) -> int:
+    value = str(email or "").strip().lower()
+    if "@" not in value:
+        return 0
+    local = value.split("@", 1)[0]
+    if local in _EMAIL_PRIORITY_LOCAL_PARTS:
+        return 100
+    normalized = re.sub(r"[^a-z0-9]+", "", local)
+    if normalized in _EMAIL_PRIORITY_LOCAL_PARTS:
+        return 90
+    if any(token in normalized for token in _EMAIL_PRIORITY_LOCAL_PARTS):
+        return 70
+    if re.fullmatch(r"[a-z]+", normalized):
+        return 20
+    if re.search(r"\d", normalized):
+        return 5
+    return 10
 
 
 def _truncate_page_html(url: str, raw_html: str) -> str:
