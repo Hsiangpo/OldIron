@@ -16,9 +16,19 @@ if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
 
 from japan_crawler.sites.onecareer.pipeline import _fetch_company_detail
+from japan_crawler.sites.onecareer.pipeline import _resolve_start_page
 
 
 class OnecareerPipelineTests(unittest.TestCase):
+    def test_resolve_start_page_skips_done_checkpoint(self) -> None:
+        self.assertIsNone(_resolve_start_page({"last_page": 5, "status": "done"}))
+
+    def test_resolve_start_page_resumes_running_checkpoint(self) -> None:
+        self.assertEqual(4, _resolve_start_page({"last_page": 3, "status": "running"}))
+
+    def test_resolve_start_page_starts_new_checkpoint(self) -> None:
+        self.assertEqual(1, _resolve_start_page(None))
+
     def test_fetch_company_detail_falls_back_when_detail_html_missing(self) -> None:
         class _MissingDetailClient:
             def fetch_detail_page(self, detail_url: str) -> str | None:

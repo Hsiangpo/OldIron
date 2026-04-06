@@ -1,5 +1,27 @@
 {
   "version": 1,
-  "updated_at": "2026-04-06T02:24:10Z",
-  "tasks": []
+  "updated_at": "2026-04-06T03:12:16Z",
+  "tasks": [
+    {
+      "task_id": "jp-onecareer-resume-20260406",
+      "status": "in_progress",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Japan/onecareer"
+      ],
+      "planned_files": [
+        "Japan/src/japan_crawler/sites/onecareer/pipeline.py",
+        "Japan/test/test_onecareer_pipeline.py"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-04-06T03:12:16Z",
+      "last_heartbeat_at": "2026-04-06T03:12:16Z",
+      "notes": "Fix OneCareer resume so done categories are skipped on rerun"
+    }
+  ]
 }

@@ -44,7 +44,11 @@ def run_pipeline_list(
         category_id = category["category_id"]
         scope = f"business_category:{category_id}"
         checkpoint = store.get_checkpoint(scope)
-        start_page = checkpoint["last_page"] + 1 if checkpoint and checkpoint["status"] == "running" else 1
+        start_page = _resolve_start_page(checkpoint)
+        if start_page is None:
+            LOGGER.info("分类 %s 已完成，断点续跑时跳过", category_id)
+            categories_done += 1
+            continue
         if max_pages > 0 and start_page > max_pages:
             LOGGER.warning("OneCareer 分类 %s 的断点页 %d 超出测试页上限 %d，回退到第 1 页", category_id, start_page, max_pages)
             start_page = 1
@@ -76,6 +80,14 @@ def run_pipeline_list(
         "total_companies": store.get_company_count(),
         **client.stats,
     }
+
+
+def _resolve_start_page(checkpoint: dict[str, int | str] | None) -> int | None:
+    if checkpoint and str(checkpoint.get("status", "") or "").strip().lower() == "done":
+        return None
+    if checkpoint and str(checkpoint.get("status", "") or "").strip().lower() == "running":
+        return int(checkpoint.get("last_page", 0) or 0) + 1
+    return 1
 
 
 def _fetch_and_store_details(store: OnecareerStore, client: OnecareerClient, cards: list[dict[str, str]], detail_workers: int) -> int:
