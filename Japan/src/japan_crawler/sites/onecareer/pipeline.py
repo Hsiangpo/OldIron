@@ -6,6 +6,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from lxml import etree
+
 from .client import OnecareerClient
 from .parser import parse_business_categories, parse_company_cards, parse_company_detail, parse_total_pages
 from .store import OnecareerStore
@@ -96,13 +98,39 @@ def _load_company_details(client: OnecareerClient, cards: list[dict[str, str]], 
 
 def _fetch_company_detail(client: OnecareerClient, card: dict[str, str]) -> dict[str, str]:
     html_text = client.fetch_detail_page(card["detail_url"])
-    detail = parse_company_detail(html_text or "")
+    if not str(html_text or "").strip():
+        LOGGER.warning("OneCareer 详情页为空，保留列表页信息：%s", card["detail_url"])
+        return _build_fallback_company(card)
+    try:
+        detail = parse_company_detail(html_text)
+    except (ValueError, TypeError, etree.ParserError) as exc:
+        LOGGER.warning("OneCareer 详情页解析失败，保留列表页信息：%s | %s", card["detail_url"], exc)
+        return _build_fallback_company(card)
+    if not _detail_has_content(detail):
+        LOGGER.warning("OneCareer 详情页未提取到结构化字段，保留列表页信息：%s", card["detail_url"])
+        return _build_fallback_company(card)
     return {
         "company_id": card["company_id"],
         "company_name": detail["company_name"] or card["company_name"],
         "representative": detail["representative"],
         "website": detail["website"],
-        "address": detail["address"],
+        "address": detail["address"] or card.get("address", ""),
+        "industry": card["industry"],
+        "detail_url": card["detail_url"],
+    }
+
+
+def _detail_has_content(detail: dict[str, str]) -> bool:
+    return any(str(detail.get(field, "") or "").strip() for field in ("company_name", "representative", "website", "address"))
+
+
+def _build_fallback_company(card: dict[str, str]) -> dict[str, str]:
+    return {
+        "company_id": card["company_id"],
+        "company_name": card["company_name"],
+        "representative": "",
+        "website": "",
+        "address": card.get("address", ""),
         "industry": card["industry"],
         "detail_url": card["detail_url"],
     }

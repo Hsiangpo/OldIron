@@ -5,12 +5,15 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+from lxml import etree
 from lxml import html
 
 
 _CATEGORY_RE = re.compile(r"/companies/business_categories/(\d+)")
 _COMPANY_RE = re.compile(r"^/companies/(\d+)$")
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
+
+
 def parse_business_categories(page_html: str) -> list[dict[str, str]]:
     """解析行业分类入口。"""
     categories: list[dict[str, str]] = []
@@ -26,6 +29,8 @@ def parse_business_categories(page_html: str) -> list[dict[str, str]]:
 
 def parse_total_pages(page_html: str) -> int:
     """解析分类页总页数。"""
+    if not str(page_html or "").strip():
+        return 1
     tree = html.fromstring(page_html)
     max_page = 1
     for link in tree.cssselect('a[href*="page="]'):
@@ -38,6 +43,8 @@ def parse_total_pages(page_html: str) -> int:
 
 def parse_company_cards(page_html: str) -> list[dict[str, str]]:
     """解析分类页的公司卡片。"""
+    if not str(page_html or "").strip():
+        return []
     tree = html.fromstring(page_html)
     cards: list[dict[str, str]] = []
     for item in tree.cssselect("li.v2-companies__item"):
@@ -68,22 +75,43 @@ def parse_company_cards(page_html: str) -> list[dict[str, str]]:
 
 def parse_company_detail(page_html: str) -> dict[str, str]:
     """解析公司详情页。"""
-    tree = html.fromstring(page_html)
+    if not str(page_html or "").strip():
+        return _empty_detail()
+    try:
+        tree = html.fromstring(page_html)
+    except (etree.ParserError, TypeError, ValueError):
+        return _empty_detail()
     info: dict[str, str] = {}
     for row in tree.cssselect("table tr"):
-        headers = row.cssselect("th")
-        cells = row.cssselect("td")
-        if not headers or not cells:
+        key, value = _extract_detail_row(row)
+        if not key or not value:
             continue
-        key = _clean_text(headers[0].text_content())
-        value = _clean_text(cells[0].text_content())
-        if key:
+        if key not in info:
             info[key] = value
     return {
-        "company_name": info.get("会社名", ""),
-        "representative": info.get("代表者名", ""),
+        "company_name": info.get("会社名", "") or info.get("企業名", ""),
+        "representative": info.get("代表者名", "") or info.get("代表者", ""),
         "website": _normalize_website(info.get("ホームページURL", "")),
         "address": info.get("所在地", ""),
+        "industry": "",
+    }
+
+
+def _extract_detail_row(row) -> tuple[str, str]:
+    cells = row.cssselect("th, td")
+    if len(cells) < 2:
+        return "", ""
+    key = _clean_text(cells[0].text_content())
+    value = _clean_text(cells[1].text_content())
+    return key, value
+
+
+def _empty_detail() -> dict[str, str]:
+    return {
+        "company_name": "",
+        "representative": "",
+        "website": "",
+        "address": "",
         "industry": "",
     }
 

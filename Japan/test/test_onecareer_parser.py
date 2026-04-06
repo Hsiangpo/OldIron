@@ -58,6 +58,29 @@ DETAIL_HTML = """
 </body></html>
 """
 
+DETAIL_HTML_CURRENT = """
+<html><body>
+  <table class="company-info-table">
+    <tr>
+      <td class="company-info-key">企業名</td>
+      <td class="company-info-value"><p>株式会社メディクルード</p></td>
+    </tr>
+    <tr>
+      <td class="company-info-key">ホームページURL</td>
+      <td class="company-info-value"><a href="https://www.mediclude.jp/">https://www.mediclude.jp/</a></td>
+    </tr>
+    <tr>
+      <td class="company-info-key">代表者</td>
+      <td class="company-info-value"><p>代表取締役社長 神成 裕介</p></td>
+    </tr>
+    <tr>
+      <td class="company-info-key">所在地</td>
+      <td class="company-info-value"><p>東京都港区六本木6丁目1-24</p></td>
+    </tr>
+  </table>
+</body></html>
+"""
+
 
 class OnecareerParserTests(unittest.TestCase):
     def test_parse_business_categories(self) -> None:
@@ -86,6 +109,20 @@ class OnecareerParserTests(unittest.TestCase):
         self.assertEqual("野呂寛之", detail["representative"])
         self.assertEqual("東京都中央区銀座7-13-6 サガミビル2F", detail["address"])
         self.assertEqual("https://www.xmile.co.jp", detail["website"])
+
+    def test_parse_company_detail_with_current_td_markup(self) -> None:
+        detail = parse_company_detail(DETAIL_HTML_CURRENT)
+        self.assertEqual("株式会社メディクルード", detail["company_name"])
+        self.assertEqual("代表取締役社長 神成 裕介", detail["representative"])
+        self.assertEqual("東京都港区六本木6丁目1-24", detail["address"])
+        self.assertEqual("https://www.mediclude.jp", detail["website"])
+
+    def test_parse_company_detail_accepts_empty_html(self) -> None:
+        detail = parse_company_detail("")
+        self.assertEqual("", detail["company_name"])
+        self.assertEqual("", detail["representative"])
+        self.assertEqual("", detail["address"])
+        self.assertEqual("", detail["website"])
 
 
 if __name__ == "__main__":

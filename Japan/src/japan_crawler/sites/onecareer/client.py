@@ -44,6 +44,8 @@ class OnecareerClient:
     ) -> None:
         self._delay = request_delay
         self._max_retries = max_retries
+        self._list_timeout = 30
+        self._detail_timeout = 45
         self._proxy_url = str(proxy or os.getenv("HTTP_PROXY", "")).strip()
         self._local = threading.local()
         self._proxy_cooldown_until = 0.0
@@ -58,7 +60,7 @@ class OnecareerClient:
         self._error_count = 0
 
     def fetch_index_page(self) -> str | None:
-        response = self._get_with_retry(INDEX_URL)
+        response = self._get_with_retry(INDEX_URL, timeout=self._list_timeout)
         return response.text if response is not None else None
 
     def fetch_category_page(self, category_id: str, page: int = 1) -> str | None:
@@ -66,19 +68,26 @@ class OnecareerClient:
         response = self._get_with_retry(
             f"{BASE_URL}{category_path}",
             params={"page": str(page)},
+            timeout=self._list_timeout,
         )
         return response.text if response is not None else None
 
     def fetch_detail_page(self, detail_url: str) -> str | None:
-        response = self._get_with_retry(urljoin(BASE_URL, detail_url))
+        response = self._get_with_retry(urljoin(BASE_URL, detail_url), timeout=self._detail_timeout)
         return response.text if response is not None else None
 
-    def _get_with_retry(self, url: str, params: dict[str, str] | None = None) -> Any:
+    def _get_with_retry(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        *,
+        timeout: int | float = 30,
+    ) -> Any:
         for attempt in range(self._max_retries):
             for use_proxy in self._request_modes():
                 try:
                     self._polite_delay()
-                    response = self._session(use_proxy).get(url, params=params, timeout=30)
+                    response = self._session(use_proxy).get(url, params=params, timeout=timeout)
                     self._request_count += 1
                     if self._should_fallback_direct_from_response(response):
                         if use_proxy:
