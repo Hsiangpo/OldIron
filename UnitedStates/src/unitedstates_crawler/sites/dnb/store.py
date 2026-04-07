@@ -250,19 +250,25 @@ class DnbUsStore:
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
-        self._local = threading.local()
+        self._shared_conn: sqlite3.Connection | None = None
         self._init_tables()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = getattr(self._local, "conn", None)
-        if conn is None:
-            conn = sqlite3.connect(str(self._db_path), timeout=30.0)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=60000")
-            self._local.conn = conn
-        return conn
+        with self._WRITE_MUTEX:
+            conn = self._shared_conn
+            if conn is None:
+                self._db_path.parent.mkdir(parents=True, exist_ok=True)
+                conn = sqlite3.connect(
+                    str(self._db_path),
+                    timeout=30.0,
+                    check_same_thread=False,
+                )
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA busy_timeout=60000")
+                self._shared_conn = conn
+            return conn
 
     def _run_write(self, action):
         with self._WRITE_MUTEX:
@@ -961,36 +967,39 @@ class DnbUsStore:
         self._retry_task("site_queue", duns)
 
     def progress(self) -> DnbProgress:
-        conn = self._conn()
-        return DnbProgress(
-            segment_pending=self._count_where(conn, "dnb_segments", "status = 'pending'"),
-            segment_running=self._count_where(conn, "dnb_segments", "status = 'running'"),
-            detail_pending=self._count_where(conn, "detail_queue", "status = 'pending'"),
-            detail_running=self._count_where(conn, "detail_queue", "status = 'running'"),
-            gmap_pending=self._count_where(conn, "gmap_queue", "status = 'pending'"),
-            gmap_running=self._count_where(conn, "gmap_queue", "status = 'running'"),
-            site_pending=self._count_where(conn, "site_queue", "status = 'pending'"),
-            site_running=self._count_where(conn, "site_queue", "status = 'running'"),
-            companies_total=self._count_where(conn, "companies", "1 = 1"),
-            final_total=self._count_where(conn, "final_companies", "1 = 1"),
-        )
+        with self._WRITE_MUTEX:
+            conn = self._conn()
+            return DnbProgress(
+                segment_pending=self._count_where(conn, "dnb_segments", "status = 'pending'"),
+                segment_running=self._count_where(conn, "dnb_segments", "status = 'running'"),
+                detail_pending=self._count_where(conn, "detail_queue", "status = 'pending'"),
+                detail_running=self._count_where(conn, "detail_queue", "status = 'running'"),
+                gmap_pending=self._count_where(conn, "gmap_queue", "status = 'pending'"),
+                gmap_running=self._count_where(conn, "gmap_queue", "status = 'running'"),
+                site_pending=self._count_where(conn, "site_queue", "status = 'pending'"),
+                site_running=self._count_where(conn, "site_queue", "status = 'running'"),
+                companies_total=self._count_where(conn, "companies", "1 = 1"),
+                final_total=self._count_where(conn, "final_companies", "1 = 1"),
+            )
 
     def export_final_records(self) -> list[dict[str, str]]:
-        conn = self._conn()
-        rows = conn.execute(
-            """
-            SELECT company_name, representative, emails, website, phone, address, evidence_url
-            FROM final_companies
-            ORDER BY company_name
-            """
-        ).fetchall()
-        return [dict(row) for row in rows]
+        with self._WRITE_MUTEX:
+            conn = self._conn()
+            rows = conn.execute(
+                """
+                SELECT company_name, representative, emails, website, phone, address, evidence_url
+                FROM final_companies
+                ORDER BY company_name
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def close(self) -> None:
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            conn.close()
-            self._local.conn = None
+        with self._WRITE_MUTEX:
+            conn = self._shared_conn
+            if conn is not None:
+                conn.close()
+                self._shared_conn = None
 
     def _count_where(self, conn: sqlite3.Connection, table: str, where_sql: str) -> int:
         row = conn.execute(f"SELECT COUNT(*) AS cnt FROM {table} WHERE {where_sql}").fetchone()
