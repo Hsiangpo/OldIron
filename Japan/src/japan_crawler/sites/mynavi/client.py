@@ -7,6 +7,7 @@ import os
 import random
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin
 
@@ -29,6 +30,12 @@ _PROXY_FALLBACK_RESPONSE_HINTS = (
     "verify that you're not a robot",
     "javascript is disabled",
 )
+
+
+@dataclass(slots=True)
+class MynaviPageFetchResult:
+    text: str
+    status_code: int = 0
 
 
 class MynaviClient:
@@ -67,11 +74,19 @@ class MynaviClient:
         response = self._get_with_retry(urljoin(BASE_URL, suffix))
         return response.text if response is not None else None
 
-    def fetch_detail_page(self, detail_url: str) -> str | None:
-        response = self._get_with_retry(urljoin(BASE_URL, detail_url))
-        return response.text if response is not None else None
+    def fetch_detail_page(self, detail_url: str) -> MynaviPageFetchResult:
+        response = self._get_with_retry(
+            urljoin(BASE_URL, detail_url),
+            keep_http_error_response=True,
+        )
+        if response is None:
+            return MynaviPageFetchResult(text="", status_code=0)
+        return MynaviPageFetchResult(
+            text=str(response.text or ""),
+            status_code=int(getattr(response, "status_code", 0) or 0),
+        )
 
-    def _get_with_retry(self, url: str) -> Any:
+    def _get_with_retry(self, url: str, *, keep_http_error_response: bool = False) -> Any:
         for attempt in range(self._max_retries):
             for use_proxy in self._request_modes():
                 try:
@@ -93,11 +108,20 @@ class MynaviClient:
                     if response.status_code == 403:
                         self._error_count += 1
                         LOGGER.error("403 禁止访问: %s", url)
+                        if keep_http_error_response:
+                            return response
+                        return None
+                    if response.status_code == 404:
+                        LOGGER.warning("HTTP 404: %s", url)
+                        if keep_http_error_response:
+                            return response
                         return None
                     if response.status_code >= 500:
                         self._sleep_backoff(attempt, 2.0, 5.0, f"{response.status_code} 服务端错误")
                         break
                     LOGGER.warning("HTTP %d: %s", response.status_code, url)
+                    if keep_http_error_response:
+                        return response
                     return None
                 except Exception as exc:  # noqa: BLE001
                     self._error_count += 1
