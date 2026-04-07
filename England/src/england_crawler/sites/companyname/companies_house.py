@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
 from dataclasses import dataclass
 from urllib.parse import quote
 from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+from requests import Response
 
 
 _BASE_URL = "https://find-and-update.company-information.service.gov.uk"
@@ -61,6 +64,12 @@ _ENTITY_HINTS = {
     "company",
     "companies",
 }
+_RETRYABLE_STATUS_CODES = {403, 429, 500, 502, 503, 504}
+_REQUEST_CONCURRENCY = max(int(os.getenv("COMPANIES_HOUSE_MAX_CONCURRENCY", "4") or "4"), 1)
+_REQUEST_MIN_INTERVAL_SECONDS = max(float(os.getenv("COMPANIES_HOUSE_MIN_INTERVAL_SECONDS", "0.35") or "0.35"), 0.0)
+_REQUEST_GATE = threading.BoundedSemaphore(_REQUEST_CONCURRENCY)
+_REQUEST_TIMING_LOCK = threading.Lock()
+_LAST_REQUEST_AT = 0.0
 
 
 @dataclass(slots=True)
@@ -87,16 +96,27 @@ class CompaniesHouseLookupResult:
     representative: str
 
 
+class CompaniesHouseTemporaryError(RuntimeError):
+    """Companies House 临时拒绝访问或短时不稳定。"""
+
+
 class CompaniesHouseClient:
     """英国 Companies House 轻量抓取客户端。"""
 
-    def __init__(self, *, timeout_seconds: float = 20.0, proxy_url: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 20.0,
+        proxy_url: str | None = None,
+        max_retries: int = 2,
+    ) -> None:
         self._session = requests.Session()
         self._session.headers.update(_DEFAULT_HEADERS)
         proxy = str(proxy_url or os.getenv("HTTP_PROXY") or "http://127.0.0.1:7897").strip()
         if proxy:
             self._session.proxies.update({"http": proxy, "https": proxy})
         self._timeout = max(float(timeout_seconds), 5.0)
+        self._max_retries = max(int(max_retries), 0)
 
     def close(self) -> None:
         self._session.close()
@@ -106,8 +126,7 @@ class CompaniesHouseClient:
         if not query:
             return CompaniesHouseLookupResult("", "", "", [], "")
         search_url = f"{_BASE_URL}{_SEARCH_PATH}{quote(query)}"
-        response = self._session.get(search_url, timeout=self._timeout)
-        response.raise_for_status()
+        response = self._request_response(search_url)
         search_results = parse_search_results(response.text, _BASE_URL)
         matched = choose_best_search_result(query, search_results)
         if matched is None:
@@ -128,14 +147,12 @@ class CompaniesHouseClient:
         entries: list[CompaniesHouseOfficer] = []
         page_urls = self._collect_page_urls(officers_url)
         for page_url in page_urls:
-            response = self._session.get(page_url, timeout=self._timeout)
-            response.raise_for_status()
+            response = self._request_response(page_url)
             entries.extend(parse_officers_page(response.text))
         return entries
 
     def _collect_page_urls(self, officers_url: str) -> list[str]:
-        response = self._session.get(officers_url, timeout=self._timeout)
-        response.raise_for_status()
+        response = self._request_response(officers_url)
         soup = BeautifulSoup(response.text, "html.parser")
         urls = [officers_url]
         for link in soup.select(".pagination a, .govuk-pagination a"):
@@ -146,6 +163,61 @@ class CompaniesHouseClient:
             if full_url not in urls:
                 urls.append(full_url)
         return urls
+
+    def _request_response(self, url: str) -> Response:
+        last_error: Exception | None = None
+        last_status = 0
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = self._send_request(url)
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt >= self._max_retries:
+                    break
+                self._sleep_before_retry(attempt)
+                continue
+            if response.status_code == 200:
+                return response
+            if response.status_code in _RETRYABLE_STATUS_CODES:
+                last_status = int(response.status_code)
+                response.close()
+                if attempt >= self._max_retries:
+                    break
+                self._sleep_before_retry(attempt)
+                continue
+            response.raise_for_status()
+        raise self._build_temporary_error(url, last_status, last_error)
+
+    def _send_request(self, url: str) -> Response:
+        with _REQUEST_GATE:
+            self._wait_request_turn()
+            return self._session.get(url, timeout=self._timeout)
+
+    def _wait_request_turn(self) -> None:
+        global _LAST_REQUEST_AT
+        if _REQUEST_MIN_INTERVAL_SECONDS <= 0:
+            return
+        with _REQUEST_TIMING_LOCK:
+            now = time.time()
+            wait_seconds = _REQUEST_MIN_INTERVAL_SECONDS - (now - _LAST_REQUEST_AT)
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+            _LAST_REQUEST_AT = time.time()
+
+    def _sleep_before_retry(self, attempt: int) -> None:
+        time.sleep(min(1.5 * (attempt + 1), 5.0))
+
+    def _build_temporary_error(
+        self,
+        url: str,
+        status_code: int,
+        exc: Exception | None,
+    ) -> CompaniesHouseTemporaryError:
+        if status_code > 0:
+            return CompaniesHouseTemporaryError(f"Companies House HTTP {status_code}: {url}")
+        if exc is not None:
+            return CompaniesHouseTemporaryError(f"Companies House request failed: {url} | {exc}")
+        return CompaniesHouseTemporaryError(f"Companies House request failed: {url}")
 
 
 def parse_search_results(html: str, base_url: str) -> list[CompaniesHouseSearchResult]:

@@ -1,5 +1,28 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T15:22:46Z",
-  "tasks": []
+  "updated_at": "2026-04-07T16:40:45Z",
+  "tasks": [
+    {
+      "task_id": "england-ch-403-20260407",
+      "status": "in_progress",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "England companyname reduce Companies House 403 noise and rate-limit lookups"
+      ],
+      "planned_files": [
+        "England/src/england_crawler/sites/companyname/companies_house.py",
+        "England/src/england_crawler/sites/companyname/pipeline.py",
+        "England/tests/test_companies_house.py"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-04-07T16:40:45Z",
+      "last_heartbeat_at": "2026-04-07T16:40:45Z",
+      "notes": "Companies House search/officers requests are hitting 403 under live concurrency; add polite retry/rate limit and cleaner logging"
+    }
+  ]
 }

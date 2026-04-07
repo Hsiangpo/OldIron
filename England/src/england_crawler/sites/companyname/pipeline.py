@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from england_crawler.sites.companyname.companies_house import CompaniesHouseClient
+from england_crawler.sites.companyname.companies_house import CompaniesHouseTemporaryError
 from england_crawler.sites.companyname.email_rules import EnglandRuleEmailExtractor
 from oldiron_core.fc_email.domain_cache import FirecrawlDomainCache
 from oldiron_core.fc_email.email_service import FirecrawlEmailService, FirecrawlEmailSettings
@@ -265,13 +266,23 @@ class CompanyNamePipelineRunner:
     def _handle_firecrawl_task_exception(self, task: FirecrawlTask, exc: Exception) -> None:
         attempt = task.retries + 1
         delay = _retry_delay_seconds(attempt, 120.0)
-        LOGGER.exception(
-            "邮箱补充 线程异常：%s | 域名=%s | 第%d次，%0.fs 后重试",
-            task.orgnr,
-            task.domain or "-",
-            attempt,
-            delay,
-        )
+        if isinstance(exc, CompaniesHouseTemporaryError):
+            LOGGER.warning(
+                "邮箱补充 Companies House 临时拒绝：%s | 域名=%s | 第%d次，%0.fs 后重试 | %s",
+                task.orgnr,
+                task.domain or "-",
+                attempt,
+                delay,
+                exc,
+            )
+        else:
+            LOGGER.exception(
+                "邮箱补充 线程异常：%s | 域名=%s | 第%d次，%0.fs 后重试",
+                task.orgnr,
+                task.domain or "-",
+                attempt,
+                delay,
+            )
         self._reset_email_worker_state()
         self.store.defer_firecrawl_task(task.orgnr, delay, str(exc)[:200])
 

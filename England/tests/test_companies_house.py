@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,7 @@ if str(SRC) not in sys.path:
 
 from england_crawler.sites.companyname.companies_house import CompaniesHouseOfficer
 from england_crawler.sites.companyname.companies_house import CompaniesHouseClient
+from england_crawler.sites.companyname.companies_house import CompaniesHouseTemporaryError
 from england_crawler.sites.companyname.companies_house import choose_best_search_result
 from england_crawler.sites.companyname.companies_house import parse_officers_page
 from england_crawler.sites.companyname.companies_house import parse_search_results
@@ -103,6 +105,64 @@ class CompaniesHouseParsingTests(unittest.TestCase):
             ["ACME HOLDINGS LIMITED", "BRAVO INVESTMENTS LLP"],
             select_representative_names(officers),
         )
+
+    def test_lookup_company_retries_after_403_and_returns_officers(self) -> None:
+        client = CompaniesHouseClient(proxy_url="", max_retries=1)
+        client._sleep_before_retry = lambda attempt: None  # type: ignore[method-assign]
+        client._wait_request_turn = lambda: None  # type: ignore[method-assign]
+        try:
+            response_403 = _build_response(403, "")
+            search_ok = _build_response(
+                200,
+                """
+                <ul id="results">
+                  <li><a href="/company/01234567">BROS LOGISTIC LP</a> 01234567</li>
+                </ul>
+                """,
+            )
+            officers_ok = _build_response(
+                200,
+                """
+                <div class="appointments-list">
+                  <div class="appointment-1">
+                    <h2 class="heading-medium">SMITH, Jane</h2>
+                    <span class="status-tag font-xsmall">Active</span>
+                    <dd id="officer-role-1" class="data">Director</dd>
+                  </div>
+                </div>
+                """,
+            )
+            client._session.get = MagicMock(side_effect=[response_403, search_ok, officers_ok, officers_ok])
+
+            result = client.lookup_company("BROS LOGISTIC LP")
+
+            self.assertEqual("01234567", result.company_number)
+            self.assertEqual(["SMITH, Jane"], result.officer_names)
+        finally:
+            client.close()
+
+    def test_lookup_company_raises_temporary_error_when_403_persists(self) -> None:
+        client = CompaniesHouseClient(proxy_url="", max_retries=1)
+        client._sleep_before_retry = lambda attempt: None  # type: ignore[method-assign]
+        client._wait_request_turn = lambda: None  # type: ignore[method-assign]
+        try:
+            client._session.get = MagicMock(side_effect=[_build_response(403, ""), _build_response(403, "")])
+            with self.assertRaises(CompaniesHouseTemporaryError):
+                client.lookup_company("BROS LOGISTIC LP")
+        finally:
+            client.close()
+
+
+def _build_response(status_code: int, text: str):
+    response = MagicMock()
+    response.status_code = status_code
+    response.text = text
+    response.close = MagicMock()
+    if status_code >= 400:
+        response.raise_for_status.side_effect = RuntimeError(f"http {status_code}")
+    else:
+        response.raise_for_status.return_value = None
+    return response
 
 
 if __name__ == "__main__":
