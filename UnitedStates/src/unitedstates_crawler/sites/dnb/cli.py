@@ -26,7 +26,7 @@ def run_dnb(argv: list[str]) -> int:
     parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email"])
     parser.add_argument("--segment-workers", type=int, default=4)
     parser.add_argument("--detail-workers", type=int, default=4)
-    parser.add_argument("--gmap-workers", type=int, default=16)
+    parser.add_argument("--gmap-workers", type=int, default=32)
     parser.add_argument("--email-workers", type=int, default=16)
     parser.add_argument("--max-segments", type=int, default=0, help="P1 最多处理多少个小类切片（0=全部）")
     parser.add_argument("--max-pages-per-segment", type=int, default=20, help="P1 单切片最大页数（默认 20）")
