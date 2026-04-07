@@ -88,7 +88,7 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
     summary_only = _summary_only_enabled()
 
     _prepare_japan_delivery_dir(delivery_dir)
-    _render_local_site_outputs(
+    rendered_site_stats, skipped_sites_no_delta = _render_local_site_outputs(
         data_root=Path(data_root),
         delivery_root=delivery_root,
         delivery_dir=delivery_dir,
@@ -96,7 +96,13 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
         site_filter=site_filter,
         summary_only=summary_only,
     )
-    summary = _build_summary_from_delivery_dir(delivery_dir=delivery_dir, day=day, baseline_day=baseline_day)
+    summary = _build_summary_from_delivery_dir(
+        delivery_dir=delivery_dir,
+        day=day,
+        baseline_day=baseline_day,
+        rendered_site_stats=rendered_site_stats,
+        skipped_sites_no_delta=skipped_sites_no_delta,
+    )
     (delivery_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -117,11 +123,13 @@ def _render_local_site_outputs(
     baseline_day: int,
     site_filter: set[str] | None,
     summary_only: bool,
-) -> None:
+) -> tuple[dict[str, dict[str, int]], set[str]]:
     if summary_only:
         print("  Japan 汇总模式：仅重建 summary.json，不重打本站点文件")
-        return
+        return {}, set()
     selected_dirs = _iter_selected_site_dirs(data_root, site_filter)
+    rendered_site_stats: dict[str, dict[str, int]] = {}
+    skipped_sites_no_delta: set[str] = set()
     if site_filter:
         print(f"  Japan 站点过滤：{', '.join(sorted(site_filter))}")
     for site_dir in selected_dirs:
@@ -134,6 +142,18 @@ def _render_local_site_outputs(
         )
         if site_stats is None:
             continue
+        rendered_site_stats[site_dir.name] = site_stats
+        if site_stats["delta"] <= 0:
+            skipped_sites_no_delta.add(site_dir.name)
+            print(
+                "  {site}: DB 总计 {raw} → 当前合格 {qualified} 家公司 → 当日新增 {delta} 家公司（无新增，已跳过交付文件）".format(
+                    site=site_dir.name,
+                    raw=site_stats["raw_count"],
+                    qualified=site_stats["qualified_current"],
+                    delta=site_stats["delta"],
+                )
+            )
+            continue
         print(
             "  {site}: DB 总计 {raw} → 当前合格 {qualified} 家公司 → 当日新增 {delta} 家公司".format(
                 site=site_dir.name,
@@ -142,6 +162,7 @@ def _render_local_site_outputs(
                 delta=site_stats["delta"],
             )
         )
+    return rendered_site_stats, skipped_sites_no_delta
 
 
 def _iter_selected_site_dirs(data_root: Path, site_filter: set[str] | None) -> list[Path]:
@@ -180,8 +201,12 @@ def _write_site_delivery_assets(
     )
     delta_records = [record for record in deduped if _record_key(record) not in baseline_keys]
     current_keys = sorted(baseline_keys | {_record_key(record) for record in deduped})
-    _write_site_csv(delivery_dir / f"{site_name}.csv", delta_records)
-    (delivery_dir / f"{site_name}.keys.txt").write_text("\n".join(current_keys), encoding="utf-8")
+    _write_site_delivery_files(
+        delivery_dir=delivery_dir,
+        site_name=site_name,
+        delta_records=delta_records,
+        current_keys=current_keys,
+    )
     return {
         "raw_count": raw_count,
         "qualified_current": len(deduped),
@@ -189,11 +214,47 @@ def _write_site_delivery_assets(
     }
 
 
-def _build_summary_from_delivery_dir(*, delivery_dir: Path, day: int, baseline_day: int) -> dict[str, object]:
-    site_stats: dict[str, dict[str, int]] = {}
-    total_current_companies = 0
-    total_delta_companies = 0
+def _write_site_delivery_files(
+    *,
+    delivery_dir: Path,
+    site_name: str,
+    delta_records: list[dict[str, str]],
+    current_keys: list[str],
+) -> None:
+    csv_path = delivery_dir / f"{site_name}.csv"
+    keys_path = delivery_dir / f"{site_name}.keys.txt"
+    if delta_records:
+        _write_site_csv(csv_path, delta_records)
+        keys_path.write_text("\n".join(current_keys), encoding="utf-8")
+        return
+    _clear_site_delivery_files(csv_path, keys_path)
+
+
+def _clear_site_delivery_files(csv_path: Path, keys_path: Path) -> None:
+    if csv_path.exists():
+        csv_path.unlink()
+    if keys_path.exists():
+        keys_path.unlink()
+
+
+def _build_summary_from_delivery_dir(
+    *,
+    delivery_dir: Path,
+    day: int,
+    baseline_day: int,
+    rendered_site_stats: dict[str, dict[str, int]],
+    skipped_sites_no_delta: set[str],
+) -> dict[str, object]:
+    site_stats = {
+        site_name: {
+            "qualified_current": int(stats["qualified_current"]),
+            "delta": int(stats["delta"]),
+        }
+        for site_name, stats in rendered_site_stats.items()
+    }
     for site_name in _discover_delivery_sites(delivery_dir):
+        if site_name in site_stats:
+            continue
         current_count = _count_key_lines(delivery_dir / f"{site_name}.keys.txt")
         delta_count = _count_csv_rows(delivery_dir / f"{site_name}.csv")
         if current_count <= 0 and delta_count <= 0:
@@ -202,8 +263,8 @@ def _build_summary_from_delivery_dir(*, delivery_dir: Path, day: int, baseline_d
             "qualified_current": current_count,
             "delta": delta_count,
         }
-        total_current_companies += current_count
-        total_delta_companies += delta_count
+    total_current_companies = sum(stats["qualified_current"] for stats in site_stats.values())
+    total_delta_companies = sum(stats["delta"] for stats in site_stats.values())
     return {
         "country": "Japan",
         "day": day,
@@ -211,6 +272,7 @@ def _build_summary_from_delivery_dir(*, delivery_dir: Path, day: int, baseline_d
         "delta_companies": total_delta_companies,
         "total_current_companies": total_current_companies,
         "sites": site_stats,
+        "skipped_sites_no_delta": sorted(skipped_sites_no_delta),
     }
 
 

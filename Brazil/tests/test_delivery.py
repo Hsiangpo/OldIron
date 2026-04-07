@@ -82,6 +82,40 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(2, summary["delta_companies"])
             self.assertTrue((root / "delivery" / "Brazil_day001" / "dnb.csv").exists())
 
+    def test_day2_skips_site_files_when_no_delta(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            data_root = root / "output" / "dnb"
+            data_root.mkdir(parents=True)
+            conn = sqlite3.connect(str(data_root / "dnb_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE final_companies (
+                    duns TEXT PRIMARY KEY,
+                    company_name TEXT,
+                    representative TEXT,
+                    emails TEXT,
+                    website TEXT,
+                    phone TEXT,
+                    address TEXT,
+                    evidence_url TEXT
+                );
+                INSERT INTO final_companies VALUES
+                    ('1', 'Acme Inc', 'Jane Doe', 'sales@acme.com', 'https://acme.com', '1', 'x', 'https://acme.com');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            build_delivery_bundle(root / "output", root / "delivery", "day1")
+            summary = build_delivery_bundle(root / "output", root / "delivery", "day2")
+
+            self.assertEqual(0, summary["delta_companies"])
+            self.assertEqual(["dnb"], summary["skipped_sites_no_delta"])
+            self.assertEqual(1, summary["sites"]["dnb"]["qualified_current"])
+            self.assertFalse((root / "delivery" / "Brazil_day002" / "dnb.csv").exists())
+            self.assertFalse((root / "delivery" / "Brazil_day002" / "dnb.keys.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

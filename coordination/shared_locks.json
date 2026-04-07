@@ -1,45 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T00:43:41Z",
-  "locks": [
-    {
-      "lock_id": "lock-machine1-delivery-skip-zero-delta-20260407-1",
-      "status": "locked",
-      "path": "Japan/src/japan_crawler/delivery.py",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "task_id": "machine1-delivery-skip-zero-delta-20260407",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-07T00:43:41Z",
-      "heartbeat_at": "2026-04-07T00:43:41Z",
-      "expires_at": "2026-04-07T01:43:41Z",
-      "notes": "Add per-site delivery rule to skip day files for zero-delta sites while reporting skipped sites in summary"
-    },
-    {
-      "lock_id": "lock-machine1-delivery-skip-zero-delta-20260407-2",
-      "status": "locked",
-      "path": "Brazil/src/brazil_crawler/delivery.py",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "task_id": "machine1-delivery-skip-zero-delta-20260407",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-07T00:43:41Z",
-      "heartbeat_at": "2026-04-07T00:43:41Z",
-      "expires_at": "2026-04-07T01:43:41Z",
-      "notes": "Add per-site delivery rule to skip day files for zero-delta sites while reporting skipped sites in summary"
-    },
-    {
-      "lock_id": "lock-machine1-delivery-skip-zero-delta-20260407-3",
-      "status": "locked",
-      "path": "UnitedStates/src/unitedstates_crawler/delivery.py",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "task_id": "machine1-delivery-skip-zero-delta-20260407",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-07T00:43:41Z",
-      "heartbeat_at": "2026-04-07T00:43:41Z",
-      "expires_at": "2026-04-07T01:43:41Z",
-      "notes": "Add per-site delivery rule to skip day files for zero-delta sites while reporting skipped sites in summary"
-    }
-  ]
+  "updated_at": "2026-04-07T00:52:23Z",
+  "locks": []
 }

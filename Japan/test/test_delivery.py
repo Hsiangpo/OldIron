@@ -309,11 +309,9 @@ class JapanDeliveryTests(unittest.TestCase):
             day2 = build_delivery_bundle(output_root, delivery_root, "day2")
             self.assertEqual(0, day2["delta_companies"])
             self.assertEqual(1, day2["sites"]["xlsximport"]["qualified_current"])
-
-            csv_path = delivery_root / "Japan_day002" / "xlsximport.csv"
-            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
-                rows = list(csv.DictReader(fp))
-            self.assertEqual(0, len(rows))
+            self.assertEqual(["xlsximport"], day2["skipped_sites_no_delta"])
+            self.assertFalse((delivery_root / "Japan_day002" / "xlsximport.csv").exists())
+            self.assertFalse((delivery_root / "Japan_day002" / "xlsximport.keys.txt").exists())
 
     def test_old_spaced_keys_are_normalized_before_baseline_compare(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -351,11 +349,9 @@ class JapanDeliveryTests(unittest.TestCase):
             day3 = build_delivery_bundle(output_root, delivery_root, "day3")
             self.assertEqual(0, day3["delta_companies"])
             self.assertEqual(1, day3["sites"]["xlsximport"]["qualified_current"])
-
-            csv_path = delivery_root / "Japan_day003" / "xlsximport.csv"
-            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
-                rows = list(csv.DictReader(fp))
-            self.assertEqual(0, len(rows))
+            self.assertEqual(["xlsximport"], day3["skipped_sites_no_delta"])
+            self.assertFalse((delivery_root / "Japan_day003" / "xlsximport.csv").exists())
+            self.assertFalse((delivery_root / "Japan_day003" / "xlsximport.keys.txt").exists())
 
     def test_openwork_site_is_packaged_independently(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

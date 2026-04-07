@@ -29,6 +29,7 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
     total_current_companies = 0
     total_delta_companies = 0
     site_stats: dict[str, dict[str, int]] = {}
+    skipped_sites_no_delta: list[str] = []
 
     if data_root.exists():
         for site_dir in sorted(data_root.iterdir()):
@@ -52,18 +53,24 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
             )
             delta_records = [record for record in qualified if _record_key(record) not in baseline_keys]
             current_keys = sorted(baseline_keys | {_record_key(record) for record in qualified})
-
-            csv_path = delivery_dir / f"{site_name}.csv"
-            _write_site_csv(csv_path, delta_records)
-            (delivery_dir / f"{site_name}.keys.txt").write_text(
-                "\n".join(current_keys), encoding="utf-8"
-            )
             site_stats[site_name] = {
                 "qualified_current": len(qualified),
                 "delta": len(delta_records),
             }
             total_current_companies += len(qualified)
             total_delta_companies += len(delta_records)
+            if delta_records:
+                csv_path = delivery_dir / f"{site_name}.csv"
+                _write_site_csv(csv_path, delta_records)
+                (delivery_dir / f"{site_name}.keys.txt").write_text(
+                    "\n".join(current_keys), encoding="utf-8"
+                )
+            else:
+                skipped_sites_no_delta.append(site_name)
+                print(
+                    f"  {site_name}: DB 总计 {raw_count} → 当前合格 {len(qualified)} 家公司 → 当日新增 {len(delta_records)} 家公司（无新增，已跳过交付文件）"
+                )
+                continue
             print(
                 f"  {site_name}: DB 总计 {raw_count} → 当前合格 {len(qualified)} 家公司 → 当日新增 {len(delta_records)} 家公司"
             )
@@ -75,6 +82,7 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
         "delta_companies": total_delta_companies,
         "total_current_companies": total_current_companies,
         "sites": site_stats,
+        "skipped_sites_no_delta": skipped_sites_no_delta,
     }
     (delivery_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
