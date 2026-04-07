@@ -1,5 +1,32 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T12:59:06Z",
-  "locks": []
+  "updated_at": "2026-04-07T13:13:28Z",
+  "locks": [
+    {
+      "lock_id": "lock-email-no-truncate-20260407-1",
+      "status": "locked",
+      "path": "shared/oldiron_core/protocol_crawler/client.py",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "task_id": "email-no-truncate-20260407",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-07T13:13:28Z",
+      "heartbeat_at": "2026-04-07T13:13:28Z",
+      "expires_at": "2026-04-07T13:33:28Z",
+      "notes": "Fix remaining truncation on rule-email path before restarting England companyname / Japan bizmaps / Japan mynavi"
+    },
+    {
+      "lock_id": "lock-email-no-truncate-20260407-2",
+      "status": "locked",
+      "path": "shared/oldiron_core/protocol_crawler/tests/test_client.py",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "task_id": "email-no-truncate-20260407",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-07T13:13:28Z",
+      "heartbeat_at": "2026-04-07T13:13:28Z",
+      "expires_at": "2026-04-07T13:33:28Z",
+      "notes": "Fix remaining truncation on rule-email path before restarting England companyname / Japan bizmaps / Japan mynavi"
+    }
+  ]
 }
