@@ -94,6 +94,44 @@ class PasonacareerStoreTests(unittest.TestCase):
             finally:
                 repaired.close()
 
+    def test_store_purges_generic_navigation_company_names_on_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "pasonacareer_store.db"
+            store = PasonacareerStore(db_path)
+            try:
+                store.upsert_companies(
+                    [
+                        {
+                            "company_name": "採用動画",
+                            "address": "東京都渋谷区",
+                            "detail_url": "/job/81252682/",
+                            "source_job_url": "/job/81252682/",
+                        },
+                        {
+                            "company_name": "企業インタビュー",
+                            "address": "大阪府大阪市",
+                            "detail_url": "/job/2/",
+                            "source_job_url": "/job/2/",
+                        },
+                        {
+                            "company_name": "東急建設株式会社",
+                            "address": "東京都渋谷区",
+                            "detail_url": "/job/81204678/",
+                            "source_job_url": "/job/81204678/",
+                        },
+                    ]
+                )
+            finally:
+                store.close()
+            repaired = PasonacareerStore(db_path)
+            try:
+                conn = sqlite3.connect(db_path)
+                names = [row[0] for row in conn.execute("SELECT company_name FROM companies ORDER BY company_name").fetchall()]
+                conn.close()
+                self.assertEqual(["東急建設株式会社"], names)
+            finally:
+                repaired.close()
+
 
 if __name__ == "__main__":
     unittest.main()

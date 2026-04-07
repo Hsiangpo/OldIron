@@ -10,6 +10,14 @@ from typing import Any
 
 from shared.oldiron_core.fc_email.normalization import join_emails
 
+_PLACEHOLDER_COMPANY_NAMES = (
+    "企業を探す",
+    "採用動画",
+    "企業インタビュー",
+    "採用企業検索",
+)
+
+
 def _now_text() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -25,6 +33,7 @@ class PasonacareerStore:
         self._max_write_retries = 6
         self._init_tables()
         self._repair_statuses()
+        self.purge_placeholder_companies()
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -185,8 +194,9 @@ class PasonacareerStore:
             conn.execute(
                 """
                 DELETE FROM companies
-                WHERE company_name IN ('企業を探す')
-                """
+                WHERE company_name IN ({placeholders})
+                """.format(placeholders=", ".join("?" for _ in _PLACEHOLDER_COMPANY_NAMES)),
+                _PLACEHOLDER_COMPANY_NAMES,
             )
             return conn.total_changes - before
 

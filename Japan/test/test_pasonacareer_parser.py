@@ -64,6 +64,16 @@ DETAIL_HTML = """
 </body></html>
 """
 
+DETAIL_HTML_WITH_GENERIC_COMPANY_LINK = """
+<html><body>
+  <h1>機械・精密機器メーカー【インド駐在】経営企画補佐～将来的なディレクター候補～</h1>
+  <a href="/company/search/">企業を探す</a>
+  <a href="/company/1/">採用動画</a>
+  <a href="/company/2/">企業インタビュー</a>
+  <a href="/company/3/">採用企業検索</a>
+</body></html>
+"""
+
 FILTER_HTML = """
 <html><body>
   <input data-name="関東" data-parent-value="" data-has-children="true" data-root-value="pb200" data-is-virtual="false" type="checkbox" value="pb200" name="f[s3][]" />
@@ -99,6 +109,12 @@ class PasonacareerParserTests(unittest.TestCase):
         detail = parse_job_detail("")
         self.assertEqual("", detail["company_name"])
         self.assertEqual("", detail["representative"])
+        self.assertEqual("", detail["address"])
+        self.assertEqual("", detail["website"])
+
+    def test_parse_job_detail_ignores_generic_company_navigation(self) -> None:
+        detail = parse_job_detail(DETAIL_HTML_WITH_GENERIC_COMPANY_LINK)
+        self.assertEqual("", detail["company_name"])
         self.assertEqual("", detail["address"])
         self.assertEqual("", detail["website"])
 

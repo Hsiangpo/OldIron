@@ -15,6 +15,21 @@ _TOTAL_PATTERNS = (
     re.compile(r"該当求人数\s*<span[^>]*>\s*([\d,]+)\s*</span>\s*件"),
     re.compile(r"該当求人数\s*([\d,]+)\s*件"),
 )
+_GENERIC_COMPANY_TEXTS = {
+    "企業を探す",
+    "採用動画",
+    "企業インタビュー",
+    "採用企業検索",
+}
+_LEGAL_ENTITY_HINTS = (
+    "株式会社",
+    "有限会社",
+    "合同会社",
+    "合名会社",
+    "合資会社",
+    "法人",
+    "会社",
+)
 
 
 def parse_total_results(page_html: str) -> int:
@@ -125,14 +140,19 @@ def _extract_company_name(job_posting: dict[str, object], tree, title: str) -> s
             return name
     for link in tree.cssselect('a[href^="/company/"]'):
         text = _clean_text(link.text_content())
-        if text and text != "企業を探す":
+        if text and text not in _GENERIC_COMPANY_TEXTS:
             return text
     return _extract_company_name_from_title(title)
 
 
 def _extract_company_name_from_title(title: str) -> str:
     matched = re.match(r"(.+?)\s+の【", title)
-    return _clean_text(matched.group(1)) if matched is not None else title
+    candidate = _clean_text(matched.group(1)) if matched is not None else _clean_text(title)
+    if candidate in _GENERIC_COMPANY_TEXTS:
+        return ""
+    if matched is None and not any(token in candidate for token in _LEGAL_ENTITY_HINTS):
+        return ""
+    return candidate
 
 
 def _extract_job_posting_json(tree) -> dict[str, object]:
