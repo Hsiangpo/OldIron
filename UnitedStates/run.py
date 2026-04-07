@@ -44,18 +44,36 @@ def _load_project_env() -> bool:
 
 
 def _ensure_runtime_dependencies() -> bool:
-    missing = [
-        package_name
-        for module_name, package_name in BASE_REQUIRED_MODULES
-        if importlib.util.find_spec(module_name) is None
-    ]
+    missing: list[str] = []
+    incompatible: list[str] = []
+    for module_name, package_name in BASE_REQUIRED_MODULES:
+        if importlib.util.find_spec(module_name) is None:
+            missing.append(package_name)
+            continue
+        if module_name == "openai" and not _openai_client_ready():
+            incompatible.append("openai>=1.0")
     if not missing:
-        return True
-    print("当前 Python 缺少 UnitedStates 运行依赖。")
+        if not incompatible:
+            return True
+    if missing:
+        print("当前 Python 缺少 UnitedStates 运行依赖。")
+    else:
+        print("当前 Python 的 UnitedStates 运行依赖版本不兼容。")
     print(f"解释器: {sys.executable}")
-    print(f"缺少: {', '.join(missing)}")
+    if missing:
+        print(f"缺少: {', '.join(missing)}")
+    if incompatible:
+        print(f"不兼容: {', '.join(incompatible)}")
     print(f"安装命令: {sys.executable} -m pip install -r {ROOT / 'requirements.txt'}")
     return False
+
+
+def _openai_client_ready() -> bool:
+    try:
+        import openai
+    except Exception:
+        return False
+    return hasattr(openai, "OpenAI")
 
 
 def _dispatch(argv: list[str]) -> int:

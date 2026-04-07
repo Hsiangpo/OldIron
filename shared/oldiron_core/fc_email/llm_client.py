@@ -82,7 +82,13 @@ class EmailUrlLlmClient:
         timeout_seconds: float,
         fallback_model: str = "",
     ) -> None:
-        from openai import OpenAI
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError(
+                "当前 Python 环境里的 openai 包版本不兼容，缺少 OpenAI 客户端入口。"
+                " 请改用项目 .venv，或升级 openai 到 1.x/2.x 新版。"
+            ) from exc
         import httpx
 
         timeout = max(timeout_seconds, 20.0)
