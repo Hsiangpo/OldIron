@@ -27,6 +27,10 @@ _BAD_EMAIL_TLDS = {
     "mp4", "webm", "mov", "pdf", "js", "css", "woff", "woff2", "ttf", "eot",
 }
 _BAD_EMAIL_HOST_HINTS = (
+    "mockconsole.prototype",
+    "prototype.render",
+    "prototype.read",
+    "rendertostring",
     "group.calendar.google.com",
     "example.jp",
     "example.co.jp",

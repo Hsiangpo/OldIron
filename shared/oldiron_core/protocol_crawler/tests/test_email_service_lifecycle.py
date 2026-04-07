@@ -100,6 +100,30 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
         emails = service._extract_rule_emails("https://example.co.jp", pages)
         self.assertEqual([], emails)
 
+    def test_extract_rule_emails_ignores_script_like_pseudo_emails(self) -> None:
+        service = FirecrawlEmailService(
+            FirecrawlEmailSettings(
+                llm_api_key="x",
+                llm_model="gpt-5.4-mini",
+            ),
+            key_pool=_DummyKeyPool(),
+            firecrawl_client=_DummyCrawler(),
+        )
+        html = """
+        <html>
+          <body>
+            <a href="mailto:contact@mazda.co.jp">contact@mazda.co.jp</a>
+            <script>
+              const a = "n@mockconsole.prototype";
+              const b = "n@t.prototype.render";
+            </script>
+          </body>
+        </html>
+        """
+        pages = [HtmlPageResult(url="https://example.co.jp/contact", html=html)]
+        emails = service._extract_rule_emails("https://example.co.jp", pages)
+        self.assertEqual(["contact@mazda.co.jp"], emails)
+
     def test_discover_emails_keeps_personal_mail_from_llm(self) -> None:
         service = FirecrawlEmailService(
             FirecrawlEmailSettings(
@@ -142,6 +166,8 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
             "exsample@alpha.co.jp",
             "uff09example@alpha.co.jp",
             "info@xxxxxx-bento.com",
+            "n@mockconsole.prototype",
+            "n@t.prototype.render",
             "http://soumu@icco2012.com",
             "https://kishubaiko.jp/info@kishubaiko.jp",
             "ceo.personal@gmail.com",

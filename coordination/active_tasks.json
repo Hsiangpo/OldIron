@@ -1,31 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T04:07:12Z",
-  "tasks": [
-    {
-      "task_id": "machine1-email-quality-hardening-followup-20260407",
-      "status": "in_progress",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "change_class": "shared_zone",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "shared/email-quality"
-      ],
-      "planned_files": [
-        "coordination/active_tasks.json",
-        "coordination/shared_locks.json",
-        "shared/oldiron_core/fc_email/email_service.py",
-        "shared/oldiron_core/protocol_crawler/tests/test_email_service_lifecycle.py"
-      ],
-      "shared_lock_ids": [
-        "lock-machine1-email-quality-hardening-followup-20260407-1"
-      ],
-      "github_ref": "not-created",
-      "started_at": "2026-04-07T04:07:12Z",
-      "last_heartbeat_at": "2026-04-07T04:07:12Z",
-      "notes": "Strip script-like HTML blocks before rule email extraction to avoid JS pseudo-email leakage."
-    }
-  ]
+  "updated_at": "2026-04-07T04:12:42Z",
+  "tasks": []
 }

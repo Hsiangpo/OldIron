@@ -71,6 +71,8 @@ _EMAIL_RE = re.compile(
     r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})",
     re.IGNORECASE,
 )
+_HTML_COMMENT_RE = re.compile(r"(?is)<!--.*?-->")
+_SCRIPT_LIKE_BLOCK_RE = re.compile(r"(?is)<(script|style|template)\b[^>]*>.*?</\1>")
 _NON_ALPHA_RE = re.compile(r"[^a-z0-9]+")
 _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif")
 _BAD_HOST_KEYWORDS = (
@@ -628,6 +630,8 @@ class FirecrawlEmailService:
         if not html_text.strip():
             return []
         normalized = html.unescape(html_text)
+        normalized = _HTML_COMMENT_RE.sub(" ", normalized)
+        normalized = _SCRIPT_LIKE_BLOCK_RE.sub(" ", normalized)
         normalized = normalized.replace("%40", "@").replace("%2E", ".")
         normalized = re.sub(r"(?i)\[(?:at)\]|\((?:at)\)|\s+at\s+", "@", normalized)
         normalized = re.sub(r"(?i)\[(?:dot)\]|\((?:dot)\)|\s+dot\s+", ".", normalized)
