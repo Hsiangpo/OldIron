@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from shared.oldiron_core.fc_email.normalization import join_emails
 
 def _now_text() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
@@ -244,7 +245,7 @@ class OnecareerStore:
         return [dict(row) for row in rows]
 
     def save_email_result(self, company_id: str, emails: list[str], representative: str = "") -> None:
-        email_str = "; ".join(_dedupe_emails(emails))
+        email_str = join_emails(emails)
 
         def _action(conn: sqlite3.Connection) -> None:
             if representative:
@@ -274,13 +275,4 @@ class OnecareerStore:
             """
         ).fetchall()
         return [dict(row) for row in rows]
-
-
-def _dedupe_emails(emails: list[str]) -> list[str]:
-    result: list[str] = []
-    for email in emails:
-        clean = str(email or "").strip()
-        if clean and clean not in result:
-            result.append(clean)
-    return result
 

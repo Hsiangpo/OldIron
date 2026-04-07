@@ -101,3 +101,53 @@ class MynaviStoreTests(unittest.TestCase):
                 self.assertEqual("代表取締役社長 ケン・テリオ", row[1])
             finally:
                 store.close()
+
+    def test_store_repairs_legacy_numeric_ids_into_canonical_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "mynavi_store.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.executescript(
+                """
+                CREATE TABLE companies (
+                    company_id TEXT PRIMARY KEY,
+                    company_name TEXT NOT NULL,
+                    representative TEXT DEFAULT '',
+                    website TEXT DEFAULT '',
+                    address TEXT DEFAULT '',
+                    industry TEXT DEFAULT '',
+                    detail_url TEXT DEFAULT '',
+                    source_job_url TEXT DEFAULT '',
+                    emails TEXT DEFAULT '',
+                    gmap_status TEXT DEFAULT 'pending',
+                    email_status TEXT DEFAULT 'pending',
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE checkpoints (
+                    scope TEXT PRIMARY KEY,
+                    last_page INTEGER DEFAULT 0,
+                    total_pages INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'pending'
+                );
+                INSERT INTO companies VALUES
+                    ('293420', 'いすゞビルメンテナンス株式会社', '岸下 裕武', 'https://www.isuzu-bm.co.jp', '神奈川県横浜市西区高島1丁目2番5号', '', '//tenshoku.mynavi.jp/company/293420/', '', 'info@isuzu-bm.co.jp', 'done', 'done', '2026-04-07 00:00:00'),
+                    ('382354', 'いすゞビルメンテナンス株式会社', '代表取締役社長 小森和夫', 'https://www.isuzu-bm.co.jp', '〒220-0011 神奈川県横浜市西区高島1丁目2番5号', '', '//tenshoku.mynavi.jp/company/382354/', '', 'info@isuzu-bm.co.jp', 'done', 'done', '2026-04-07 00:00:01');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            store = MynaviStore(db_path)
+            try:
+                conn = sqlite3.connect(str(db_path))
+                rows = conn.execute(
+                    "SELECT company_id, representative, emails, gmap_status, email_status FROM companies"
+                ).fetchall()
+                conn.close()
+                self.assertEqual(1, len(rows))
+                self.assertEqual("いすゞビルメンテナンス株式会社|isuzu-bm.co.jp", rows[0][0])
+                self.assertEqual("代表取締役社長 小森和夫", rows[0][1])
+                self.assertEqual("info@isuzu-bm.co.jp", rows[0][2])
+                self.assertEqual("done", rows[0][3])
+                self.assertEqual("done", rows[0][4])
+            finally:
+                store.close()

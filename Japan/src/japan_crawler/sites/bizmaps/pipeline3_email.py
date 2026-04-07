@@ -37,9 +37,6 @@ def run_pipeline_email(
     """
     store = BizmapsStore(output_dir / "bizmaps_store.db")
 
-    # 确保 emails 列存在
-    _ensure_email_columns(store)
-
     # 筛选需要处理的公司 — 有 website 但还没处理过邮箱的
     all_companies = _load_email_pending(store)
     if max_items > 0:
@@ -65,27 +62,6 @@ def run_pipeline_email(
     found = 0
     lock = threading.Lock()
 
-    def _worker(company: dict) -> tuple[str, str, list[str], str]:
-        """处理一家公司，返回 (company_name, address, emails, representative)。"""
-        name = company["company_name"]
-        addr = company.get("address", "")
-        website = company["website"]
-
-        # 每个线程独立构建 service（共享 crawler 和 settings）
-        svc = FirecrawlEmailService(settings, firecrawl_client=crawler)
-        try:
-            result = svc.discover_emails(
-                company_name=name,
-                homepage=website,
-                existing_representative=company.get("representative", ""),
-            )
-            emails = [e.strip().lower() for e in result.emails if e.strip()]
-            rep = result.representative or ""
-            return name, addr, emails, rep
-        except Exception as exc:
-            logger.debug("邮箱提取失败: %s — %s", name, exc)
-            return name, addr, [], ""
-
     batch_size = _resolve_batch_size(concurrency)
     local = threading.local()
     created_services: list[FirecrawlEmailService] = []
@@ -100,7 +76,7 @@ def run_pipeline_email(
                 created_services.append(svc)
         return svc
 
-    def _worker(company: dict) -> tuple[str, str, list[str], str]:
+    def _worker(company: dict) -> tuple[str, str, str, list[str], str]:
         name = company["company_name"]
         addr = company.get("address", "")
         website = company["website"]
@@ -113,10 +89,10 @@ def run_pipeline_email(
             )
             emails = [e.strip().lower() for e in result.emails if e.strip()]
             rep = result.representative or ""
-            return name, addr, emails, rep
+            return name, addr, website, emails, rep
         except Exception as exc:
             logger.debug("邮箱提取失败: %s — %s", name, exc)
-            return name, addr, [], ""
+            return name, addr, website, [], ""
 
     try:
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
@@ -126,10 +102,10 @@ def run_pipeline_email(
                 for future in as_completed(futures):
                     company = futures[future]
                     try:
-                        name, addr, emails, rep = future.result()
+                        name, addr, website, emails, rep = future.result()
                         with lock:
                             processed += 1
-                            _save_email_result(store, name, addr, emails, rep)
+                            store.save_email_result(name, addr, website, emails, rep)
                             if emails:
                                 found += 1
                             if processed <= 5 or processed % 20 == 0:
@@ -181,47 +157,6 @@ def _build_settings(output_dir: Path) -> FirecrawlEmailSettings:
     )
 
 
-def _ensure_email_columns(store: BizmapsStore) -> None:
-    """确保 companies 表有 emails 和 email_status 列。"""
-    conn = store._conn()
-    try:
-        conn.execute("ALTER TABLE companies ADD COLUMN emails TEXT DEFAULT ''")
-    except Exception:
-        pass  # 列已存在
-    try:
-        conn.execute("ALTER TABLE companies ADD COLUMN email_status TEXT DEFAULT 'pending'")
-    except Exception:
-        pass
-    conn.commit()
-
-
 def _load_email_pending(store: BizmapsStore) -> list[dict]:
     """加载需要邮箱提取的公司列表。"""
-    conn = store._conn()
-    rows = conn.execute("""
-        SELECT company_name, address, website, representative
-        FROM companies
-        WHERE website != '' AND website IS NOT NULL
-          AND (email_status = 'pending' OR email_status IS NULL)
-        ORDER BY id
-    """).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _save_email_result(store: BizmapsStore, company_name: str, address: str, emails: list[str], rep: str) -> None:
-    """保存邮箱结果。"""
-    conn = store._conn()
-    email_str = ",".join(emails) if emails else ""
-    status = "done" if True else "pending"
-    if rep:
-        # 如果 LLM 发现了更好的代表者信息，也更新
-        conn.execute(
-            "UPDATE companies SET emails = ?, email_status = ?, representative = ? WHERE company_name = ? AND address = ?",
-            (email_str, status, rep, company_name, address),
-        )
-    else:
-        conn.execute(
-            "UPDATE companies SET emails = ?, email_status = ? WHERE company_name = ? AND address = ?",
-            (email_str, status, company_name, address),
-        )
-    conn.commit()
+    return store.get_email_pending()

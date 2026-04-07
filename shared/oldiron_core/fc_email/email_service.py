@@ -21,6 +21,9 @@ from .domain_cache import FirecrawlDomainCache
 from .key_pool import FirecrawlKeyPool
 from .key_pool import KeyPoolConfig
 from .llm_client import EmailUrlLlmClient
+from .normalization import analyze_email_set
+from .normalization import extract_registrable_domain
+from .normalization import split_emails
 
 
 LOGGER = logging.getLogger(__name__)
@@ -127,7 +130,6 @@ _EMAIL_PRIORITY_LOCAL_PARTS = {
     "kojinjoho",
     "customer",
 }
-_MAX_CLEAN_EMAILS = 12
 _SKIP_PAGE_SUFFIXES = (
     ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp",
     ".css", ".js", ".woff", ".woff2", ".ttf", ".eot",
@@ -155,7 +157,7 @@ def extract_domain(website_url: str) -> str:
         host = host[4:]
     if ":" in host:
         host = host.split(":", 1)[0]
-    return _registrable_domain(host)
+    return extract_registrable_domain(host)
 
 
 def _keys_file_has_content(keys_file: Path) -> bool:
@@ -404,9 +406,7 @@ class FirecrawlEmailService:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("二级邮箱补充失败：company=%s homepage=%s error=%s", company_name or "-", start_url, exc)
             else:
-                emails = self._filter_same_domain_emails(start_url, fallback_emails)
-                if not emails:
-                    emails = self._clean_emails(list(fallback_emails or []))
+                emails = self._clean_emails(list(fallback_emails or []))
         representative = str(existing_representative or "").strip()
         extracted_company_name = str(company_name or "").strip()
         evidence_url = final_urls[0] if final_urls else start_url
@@ -440,9 +440,7 @@ class FirecrawlEmailService:
                 need_emails=need_llm_emails,
             )
             if need_llm_emails:
-                emails = self._filter_same_domain_emails(start_url, extracted.emails)
-                if not emails:
-                    emails = self._clean_emails(extracted.emails)
+                emails = self._clean_emails(extracted.emails)
             if need_llm_representative:
                 representative = str(extracted.representative or "").strip()
             if need_llm_representative and extracted.company_name:
@@ -591,44 +589,12 @@ class FirecrawlEmailService:
         target = urlparse(url).netloc.lower()
         return bool(target and (target == host or target.endswith(f".{host}") or host.endswith(f".{target}")))
 
-    def _filter_same_domain_emails(self, start_url: str, emails: list[str]) -> list[str]:
-        domain = extract_domain(start_url)
-        if not domain:
-            return []
-        matched: list[str] = []
-        suffix = domain.lower()
-        for email in emails:
-            value = str(email or "").strip().lower()
-            if not value or "@" not in value:
-                continue
-            email_domain = value.split("@", 1)[1]
-            if email_domain == suffix or email_domain.endswith(f".{suffix}"):
-                if value not in matched:
-                    matched.append(value)
-        return matched
-
     def _clean_emails(self, emails: list[str]) -> list[str]:
-        cleaned: list[str] = []
-        for email in emails:
-            value = self._normalize_email_candidate(email)
-            if not value or "@" not in value:
-                continue
-            local = value.split("@", 1)[0]
-            if local in _IGNORE_LOCAL_PARTS:
-                continue
-            domain = value.split("@", 1)[1]
-            suffix = domain.rsplit(".", 1)[-1] if "." in domain else ""
-            if suffix in _BAD_EMAIL_TLDS:
-                continue
-            if any(flag in domain for flag in _BAD_EMAIL_HOST_HINTS):
-                continue
-            if value not in cleaned:
-                cleaned.append(value)
-        prioritized = sorted(
+        cleaned = split_emails(emails)
+        return sorted(
             cleaned,
             key=lambda item: (-_email_priority_score(item), cleaned.index(item)),
         )
-        return prioritized[:_MAX_CLEAN_EMAILS]
 
     def _normalize_email_candidate(self, value: object) -> str:
         text = unquote(str(value or "")).strip().lower()
@@ -644,12 +610,17 @@ class FirecrawlEmailService:
     def _extract_rule_emails(self, start_url: str, pages: list[HtmlPageResult]) -> list[str]:
         candidates: list[str] = []
         for page in pages:
-            for email in self._extract_rule_emails_from_html(page.html):
+            page_emails = self._extract_rule_emails_from_html(page.html)
+            analysis = analyze_email_set(start_url, page_emails)
+            if analysis.suspicious_directory_like:
+                if analysis.same_domain_emails:
+                    page_emails = analysis.same_domain_emails
+                else:
+                    LOGGER.info("协议邮箱跳过疑似目录页：start=%s page=%s emails=%d domains=%d", start_url, page.url, len(analysis.emails), analysis.domain_count)
+                    continue
+            for email in self._clean_emails(page_emails):
                 if email not in candidates:
                     candidates.append(email)
-        same_domain = self._filter_same_domain_emails(start_url, candidates)
-        if same_domain:
-            return self._clean_emails(same_domain)
         return self._clean_emails(candidates)
 
     def _extract_rule_emails_from_html(self, raw_html: str) -> list[str]:

@@ -14,6 +14,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from shared.oldiron_core.fc_email.normalization import analyze_email_set
+from shared.oldiron_core.fc_email.normalization import join_emails
+
 
 class BizmapsStore:
     """线程安全的 bizmaps 数据存储。"""
@@ -22,6 +25,8 @@ class BizmapsStore:
         self._db_path = db_path
         self._local = threading.local()
         self._init_tables()
+        self.ensure_email_columns()
+        self.repair_email_quality()
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -71,6 +76,18 @@ class BizmapsStore:
                 conn.execute("ALTER TABLE checkpoints ADD COLUMN last_ph TEXT DEFAULT ''")
             except sqlite3.OperationalError:
                 pass  # 另一个线程已添加该列
+        conn.commit()
+
+    def ensure_email_columns(self) -> None:
+        conn = self._conn()
+        try:
+            conn.execute("ALTER TABLE companies ADD COLUMN emails TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE companies ADD COLUMN email_status TEXT DEFAULT 'pending'")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
 
     # ── 都道府県管理 ──
@@ -183,10 +200,77 @@ class BizmapsStore:
         conn = self._conn()
         rows = conn.execute("""
             SELECT company_name, representative, website, address,
-                   industry, phone, founded_year, capital, detail_url
+                   industry, phone, founded_year, capital, detail_url,
+                   COALESCE(emails, '') AS emails
             FROM companies ORDER BY id
         """).fetchall()
         return [dict(r) for r in rows]
+
+    def get_email_pending(self, limit: int = 0) -> list[dict[str, str]]:
+        conn = self._conn()
+        sql = """
+            SELECT company_name, address, website, representative
+            FROM companies
+            WHERE website != '' AND website IS NOT NULL
+              AND (email_status = 'pending' OR email_status IS NULL)
+            ORDER BY id
+        """
+        if limit > 0:
+            sql += f" LIMIT {int(limit)}"
+        rows = conn.execute(sql).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_email_result(self, company_name: str, address: str, website: str, emails: list[str], representative: str = "") -> None:
+        conn = self._conn()
+        normalized = join_emails(emails)
+        if representative:
+            conn.execute(
+                """
+                UPDATE companies
+                SET emails = ?, email_status = 'done', representative = ?
+                WHERE company_name = ? AND address = ? AND website = ?
+                """,
+                (normalized, representative, company_name, address, website),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE companies
+                SET emails = ?, email_status = 'done'
+                WHERE company_name = ? AND address = ? AND website = ?
+                """,
+                (normalized, company_name, address, website),
+            )
+        conn.commit()
+
+    def repair_email_quality(self) -> None:
+        conn = self._conn()
+        rows = conn.execute(
+            """
+            SELECT id, website, COALESCE(emails, '') AS emails
+            FROM companies
+            WHERE COALESCE(emails, '') != ''
+            """
+        ).fetchall()
+        changed = False
+        for row in rows:
+            analysis = analyze_email_set(str(row["website"] or ""), str(row["emails"] or ""))
+            if analysis.suspicious_directory_like:
+                conn.execute(
+                    "UPDATE companies SET emails = '', email_status = 'pending' WHERE id = ?",
+                    (row["id"],),
+                )
+                changed = True
+                continue
+            normalized = "; ".join(analysis.emails)
+            if normalized != str(row["emails"] or ""):
+                conn.execute(
+                    "UPDATE companies SET emails = ? WHERE id = ?",
+                    (normalized, row["id"]),
+                )
+                changed = True
+        if changed:
+            conn.commit()
 
     # ── 断点管理 ──
 

@@ -56,6 +56,68 @@ class StoreGuardrailTests(unittest.TestCase):
             finally:
                 store._conn().close()
 
+    def test_bizmaps_repairs_directory_like_email_sets_back_to_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "bizmaps.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.executescript(
+                """
+                CREATE TABLE prefs (
+                    pref_code TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    total INTEGER DEFAULT 0
+                );
+                CREATE TABLE companies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pref_code TEXT NOT NULL,
+                    company_name TEXT NOT NULL,
+                    representative TEXT DEFAULT '',
+                    website TEXT DEFAULT '',
+                    address TEXT DEFAULT '',
+                    industry TEXT DEFAULT '',
+                    phone TEXT DEFAULT '',
+                    founded_year TEXT DEFAULT '',
+                    capital TEXT DEFAULT '',
+                    detail_url TEXT DEFAULT '',
+                    emails TEXT DEFAULT '',
+                    email_status TEXT DEFAULT 'done',
+                    UNIQUE(company_name, address)
+                );
+                CREATE TABLE checkpoints (
+                    pref_code TEXT PRIMARY KEY,
+                    last_page INTEGER DEFAULT 0,
+                    total_pages INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'pending',
+                    last_ph TEXT DEFAULT ''
+                );
+                INSERT INTO companies (
+                    pref_code, company_name, representative, website, address, emails, email_status
+                ) VALUES (
+                    '01',
+                    'Acme',
+                    'Jane Doe',
+                    'https://example.co.jp/member-list',
+                    'Tokyo',
+                    'a@alpha.co.jp,b@beta.co.jp,c@gamma.co.jp,d@delta.co.jp,e@epsilon.co.jp,f@zeta.co.jp,g@eta.co.jp,h@theta.co.jp',
+                    'done'
+                );
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            store = BizmapsStore(db_path)
+            try:
+                conn = sqlite3.connect(str(db_path))
+                row = conn.execute(
+                    "SELECT emails, email_status FROM companies WHERE company_name = 'Acme' AND address = 'Tokyo'"
+                ).fetchone()
+                conn.close()
+                self.assertEqual("", row[0])
+                self.assertEqual("pending", row[1])
+            finally:
+                store._conn().close()
+
     def test_hellowork_dash_representative_does_not_overwrite_real_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "hellowork.db"
