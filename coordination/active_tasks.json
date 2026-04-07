@@ -1,5 +1,38 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T00:24:46Z",
-  "tasks": []
+  "updated_at": "2026-04-07T00:43:41Z",
+  "tasks": [
+    {
+      "task_id": "machine1-delivery-skip-zero-delta-20260407",
+      "status": "in_progress",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Japan/delivery",
+        "Brazil/delivery",
+        "UnitedStates/delivery"
+      ],
+      "planned_files": [
+        "coordination/active_tasks.json",
+        "Japan/src/japan_crawler/delivery.py",
+        "Brazil/src/brazil_crawler/delivery.py",
+        "UnitedStates/src/unitedstates_crawler/delivery.py",
+        "Japan/test/test_delivery.py",
+        "Brazil/tests/test_delivery.py",
+        "UnitedStates/tests/test_delivery.py"
+      ],
+      "shared_lock_ids": [
+        "lock-machine1-delivery-skip-zero-delta-20260407-1",
+        "lock-machine1-delivery-skip-zero-delta-20260407-2",
+        "lock-machine1-delivery-skip-zero-delta-20260407-3"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-07T00:43:41Z",
+      "last_heartbeat_at": "2026-04-07T00:43:41Z",
+      "notes": "Add per-site delivery rule to skip day files for zero-delta sites while reporting skipped sites in summary"
+    }
+  ]
 }
