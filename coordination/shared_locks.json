@@ -1,5 +1,19 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T03:57:17Z",
-  "locks": []
+  "updated_at": "2026-04-07T04:07:12Z",
+  "locks": [
+    {
+      "lock_id": "lock-machine1-email-quality-hardening-followup-20260407-1",
+      "status": "locked",
+      "path": "shared/oldiron_core/fc_email/email_service.py",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "task_id": "machine1-email-quality-hardening-followup-20260407",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-07T04:07:12Z",
+      "heartbeat_at": "2026-04-07T04:07:12Z",
+      "expires_at": "2026-04-07T05:07:12Z",
+      "notes": "Strip script-like HTML blocks before rule email extraction to avoid JS pseudo-email leakage."
+    }
+  ]
 }
