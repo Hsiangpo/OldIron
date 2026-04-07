@@ -43,6 +43,21 @@ class _DummyLlm:
         return self._result
 
 
+class _CaptureLlm:
+    def __init__(self) -> None:
+        self.last_pages: list[dict[str, str]] | None = None
+
+    def extract_contacts_from_html(self, **kwargs: object) -> HtmlContactExtraction:
+        self.last_pages = list(kwargs.get("pages") or [])
+        return HtmlContactExtraction(
+            company_name="Example",
+            representative="山田 太郎",
+            emails=["info@alpha.co.jp"],
+            evidence_url="https://example.co.jp/contact",
+            evidence_quote="山田 太郎",
+        )
+
+
 class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
     def test_close_does_not_close_injected_crawler_or_key_pool(self) -> None:
         crawler = _DummyCrawler()
@@ -153,7 +168,45 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
             homepage="https://example.co.jp",
             allow_llm_email_extraction=True,
         )
-        self.assertEqual(["info@alpha.co.jp", "ceo.personal@gmail.com"], result.emails)
+        self.assertEqual([], result.emails)
+        self.assertEqual("山田 太郎", result.representative)
+
+    def test_discover_emails_keeps_full_html_for_rule_path_and_only_truncates_llm_path(self) -> None:
+        service = FirecrawlEmailService(
+            FirecrawlEmailSettings(
+                llm_api_key="x",
+                llm_model="gpt-5.4-mini",
+            ),
+            key_pool=_DummyKeyPool(),
+            firecrawl_client=_DummyCrawler(),
+        )
+        long_html = "<html>" + ("A" * 300000) + " contact@alpha.co.jp </html>"
+        seen_rule_html_lengths: list[int] = []
+
+        service._map_site = lambda start_url: [start_url]  # type: ignore[method-assign]
+        service._select_urls_for_scrape = lambda **_: ["https://example.co.jp/contact"]  # type: ignore[method-assign]
+        service._scrape_html_pages = lambda urls: [  # type: ignore[method-assign]
+            HtmlPageResult(url=str(urls[0]), html=long_html)
+        ]
+
+        def _capture_rule_emails(start_url: str, pages: list[HtmlPageResult]) -> list[str]:
+            seen_rule_html_lengths.append(len(pages[0].html))
+            return []
+
+        service._extract_rule_emails = _capture_rule_emails  # type: ignore[method-assign]
+        llm = _CaptureLlm()
+        service._llm = llm  # type: ignore[assignment]
+
+        service.discover_emails(
+            company_name="Example",
+            homepage="https://example.co.jp",
+            allow_llm_email_extraction=True,
+        )
+
+        self.assertEqual([len(long_html)], seen_rule_html_lengths)
+        self.assertIsNotNone(llm.last_pages)
+        self.assertLess(len(llm.last_pages[0]["html"]), len(long_html))
+        self.assertIn("页面内容过长已截断", llm.last_pages[0]["html"])
 
     def test_split_emails_rejects_placeholder_and_url_embedded_noise(self) -> None:
         values = [

@@ -157,7 +157,7 @@ Use the standard 3-pipeline model unless the task is purely delivery-only:
 
 - **P1**: site collection
 - **P2**: Google Maps completion
-- **P3**: protocol + LLM extraction for emails / representative
+- **P3**: protocol rule extraction for emails + LLM extraction for representative
 
 Required runtime behavior:
 
@@ -210,6 +210,10 @@ Japan multi-machine delivery checklist:
 - Do not cap the number of kept emails
 - Only remove clearly fake / invalid / placeholder emails, or obvious directory-style noise that does not belong to the company itself
 - Never silently hardcode a new email filtering rule
+- Website email extraction is rule-based only; do not use LLM to extract website emails
+- If only emails are missing, run rule email extraction only
+- If only representative is missing, use LLM for representative only
+- If both emails and representative are missing, use rule email extraction for emails and LLM for representative only
 
 ## 8A. Real validation requirement
 
@@ -220,6 +224,9 @@ Japan multi-machine delivery checklist:
 ## 9. HTML -> Markdown -> LLM flow
 
 Before sending website content to the LLM, follow this exact order:
+
+- Rule-based email extraction must use full page content; do not truncate page content for the rule path
+- Markdown truncation applies only to the content that is actually sent to LLM
 
 1. Fetch raw HTML
 2. Remove `script`, `style`, `img`, `svg`, `video`, `audio`, `canvas`, `iframe`, `noscript`

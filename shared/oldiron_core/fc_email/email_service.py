@@ -387,6 +387,7 @@ class FirecrawlEmailService:
         allow_llm_email_extraction: bool,
         plan: _EmailPassPlan,
     ) -> EmailDiscoveryResult:
+        _ = allow_llm_email_extraction
         mapped_urls = self._map_site(start_url)
         all_urls = self._rank_all_urls(start_url, mapped_urls)
         final_urls = self._select_urls_for_scrape(
@@ -425,24 +426,20 @@ class FirecrawlEmailService:
             )
 
         need_llm_representative = not representative
-        need_llm_emails = allow_llm_email_extraction and not bool(emails)
-        if need_llm_representative or need_llm_emails:
+        if need_llm_representative:
+            llm_pages = _truncate_page_results_for_llm(pages)
             LOGGER.info(
-                "邮箱补充进入 LLM 抽取：company=%s homepage=%s pages=%d rep=%s email=%s",
+                "代表人补充进入 LLM 抽取：company=%s homepage=%s pages=%d",
                 company_name or "-",
                 start_url,
-                len(pages),
-                int(need_llm_representative),
-                int(need_llm_emails),
+                len(llm_pages),
             )
             extracted = self._llm.extract_contacts_from_html(
                 company_name=company_name,
                 homepage=start_url,
-                pages=[{"url": page.url, "html": page.html} for page in pages if page.html],
-                need_emails=need_llm_emails,
+                pages=[{"url": page.url, "html": page.html} for page in llm_pages if page.html],
+                need_emails=False,
             )
-            if need_llm_emails:
-                emails = self._clean_emails(extracted.emails)
             if need_llm_representative:
                 representative = str(extracted.representative or "").strip()
             if need_llm_representative and extracted.company_name:
@@ -450,7 +447,7 @@ class FirecrawlEmailService:
             evidence_url = str(extracted.evidence_url or evidence_url).strip()
             evidence_quote = str(extracted.evidence_quote or "").strip()
         else:
-            LOGGER.debug("邮箱补充跳过 LLM：已有代表人 company=%s representative=%s", company_name or "-", representative)
+            LOGGER.debug("官网补充跳过 LLM：已有代表人 company=%s representative=%s", company_name or "-", representative)
 
         return EmailDiscoveryResult(
             company_name=extracted_company_name,
@@ -558,7 +555,7 @@ class FirecrawlEmailService:
                 if exc.code in {"firecrawl_http_404", "firecrawl_5xx"}:
                     continue
                 raise
-            html = _truncate_page_html(page.url, page.html)
+            html = str(page.html or "")
             if html.strip():
                 pages.append(HtmlPageResult(url=page.url, html=html))
         return pages
@@ -784,6 +781,18 @@ def _truncate_page_html(url: str, raw_html: str) -> str:
 
 
 def _normalize_page_results(raw_pages: list[HtmlPageResult]) -> list[HtmlPageResult]:
+    pages: list[HtmlPageResult] = []
+    for page in raw_pages:
+        url = str(page.url or "").strip()
+        if not url or not _is_supported_page_url(url):
+            continue
+        html_text = str(page.html or "")
+        if html_text.strip():
+            pages.append(HtmlPageResult(url=url, html=html_text))
+    return pages
+
+
+def _truncate_page_results_for_llm(raw_pages: list[HtmlPageResult]) -> list[HtmlPageResult]:
     pages: list[HtmlPageResult] = []
     for page in raw_pages:
         url = str(page.url or "").strip()

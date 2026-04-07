@@ -35,8 +35,8 @@ class _FakeCrawler:
                 url=urls[0],
                 html="""
                 <html><body>
-                  <a href="mailto:hello@sampleco.co.jp">hello@sampleco.co.jp</a>
-                  <p>Support: support@sampleco.co.jp</p>
+                  <a href="mailto:hello@alphaco.co.jp">hello@alphaco.co.jp</a>
+                  <p>Support: support@alphaco.co.jp</p>
                 </body></html>
                 """,
             )
@@ -90,7 +90,7 @@ class _SuccessLlm:
         return HtmlContactExtraction(
             company_name="Example Co",
             representative="Jane Doe",
-            emails=["team@sampleco.co.jp"],
+            emails=["team@alphaco.co.jp"],
             evidence_url=kwargs["pages"][0]["url"],
             evidence_quote="Jane Doe",
         )
@@ -110,29 +110,9 @@ class _RepresentativeOnlyLlm:
         return HtmlContactExtraction(
             company_name="Example Co",
             representative="Jane Doe",
-            emails=["should-not-be-used@sampleco.co.jp"],
+            emails=["should-not-be-used@alphaco.co.jp"],
             evidence_url=kwargs["pages"][0]["url"],
             evidence_quote="Jane Doe",
-        )
-
-
-class _EmailFallbackLlm:
-    def __init__(self) -> None:
-        self.last_need_emails = None
-
-    def pick_candidate_urls(self, **kwargs):
-        return [kwargs["candidate_urls"][0]]
-
-    def extract_contacts_from_html(self, **kwargs):
-        from oldiron_core.fc_email.llm_client import HtmlContactExtraction
-
-        self.last_need_emails = kwargs.get("need_emails")
-        return HtmlContactExtraction(
-            company_name="Example Co",
-            representative="",
-            emails=["team@sampleco.co.jp"],
-            evidence_url=kwargs["pages"][0]["url"],
-            evidence_quote="Contact Example Co",
         )
 
 
@@ -172,7 +152,7 @@ class FcEmailTests(unittest.TestCase):
         finally:
             service.close()
         self.assertEqual("Jane Doe", result.representative)
-        self.assertEqual(["hello@sampleco.co.jp", "support@sampleco.co.jp"], result.emails)
+        self.assertEqual(["hello@alphaco.co.jp", "support@alphaco.co.jp"], result.emails)
 
     def test_dash_representative_is_treated_as_missing_and_uses_llm(self) -> None:
         settings = FirecrawlEmailSettings(
@@ -192,7 +172,7 @@ class FcEmailTests(unittest.TestCase):
         finally:
             service.close()
         self.assertEqual("Jane Doe", result.representative)
-        self.assertEqual(["hello@sampleco.co.jp", "support@sampleco.co.jp"], result.emails)
+        self.assertEqual(["hello@alphaco.co.jp", "support@alphaco.co.jp"], result.emails)
 
     def test_unsupported_asset_url_is_dropped_before_crawl(self) -> None:
         settings = FirecrawlEmailSettings(
@@ -251,7 +231,7 @@ class FcEmailTests(unittest.TestCase):
             service.close()
         self.assertFalse(llm.last_need_emails)
         self.assertEqual("Jane Doe", result.representative)
-        self.assertEqual(["hello@sampleco.co.jp", "support@sampleco.co.jp"], result.emails)
+        self.assertEqual(["hello@alphaco.co.jp", "support@alphaco.co.jp"], result.emails)
 
     def test_secondary_email_lookup_runs_before_llm_email_extraction(self) -> None:
         settings = FirecrawlEmailSettings(
@@ -267,15 +247,15 @@ class FcEmailTests(unittest.TestCase):
             result = service.discover_emails(
                 company_name="Example Co",
                 homepage="https://example.com",
-                secondary_email_lookup=lambda **kwargs: ["fallback@example.com"],  # noqa: ARG005
+                secondary_email_lookup=lambda **kwargs: ["fallback@alphaco.com"],  # noqa: ARG005
             )
         finally:
             service.close()
         self.assertFalse(llm.last_need_emails)
         self.assertEqual("Jane Doe", result.representative)
-        self.assertEqual(["fallback@example.com"], result.emails)
+        self.assertEqual(["fallback@alphaco.com"], result.emails)
 
-    def test_existing_representative_still_allows_llm_email_fallback(self) -> None:
+    def test_existing_representative_does_not_use_llm_when_only_email_missing(self) -> None:
         settings = FirecrawlEmailSettings(
             llm_api_key="dummy",
             llm_model="dummy",
@@ -283,8 +263,7 @@ class FcEmailTests(unittest.TestCase):
             crawl_backend="protocol",
         )
         service = FirecrawlEmailService(settings, firecrawl_client=_NoEmailCrawler())
-        llm = _EmailFallbackLlm()
-        service._llm = llm  # type: ignore[assignment]
+        service._llm = _FailIfCalledLlm()  # type: ignore[assignment]
         try:
             result = service.discover_emails(
                 company_name="Example Co",
@@ -293,11 +272,10 @@ class FcEmailTests(unittest.TestCase):
             )
         finally:
             service.close()
-        self.assertTrue(llm.last_need_emails)
         self.assertEqual("Jane Doe", result.representative)
-        self.assertEqual(["team@sampleco.co.jp"], result.emails)
+        self.assertEqual([], result.emails)
 
-    def test_disable_llm_email_extraction_keeps_llm_from_returning_emails(self) -> None:
+    def test_missing_representative_still_uses_llm_even_when_email_flag_disabled(self) -> None:
         settings = FirecrawlEmailSettings(
             llm_api_key="dummy",
             llm_model="dummy",

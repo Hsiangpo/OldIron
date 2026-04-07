@@ -134,6 +134,12 @@
   - do not filter by mailbox type; personal/free mailbox domains and corporate mailbox domains are both allowed
   - do not cap the number of kept emails
   - only remove clearly fake / invalid / placeholder emails, or obvious directory-style noise that does not belong to the company itself
+  - website email extraction is rule-based only for all countries
+  - if only emails are missing, run rule email extraction only; do not use LLM for emails
+  - if only representative is missing, use LLM for representative only
+  - if both emails and representative are missing, run rule email extraction for emails and use LLM for representative only
+  - when extracting emails by rules, do not truncate page content for the rule path
+  - truncate Markdown / prompt content only for the content that is actually sent to LLM
 - Country-specific overrides always win over the default delivery rule.
 - Do not extrapolate these overrides to future countries by yourself.
 - For future countries, if delivery mode or email policy is not explicitly recorded here, ask the user first and write the confirmed strategy into `AGENTS.md` before implementing.
