@@ -1,5 +1,33 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T02:56:31Z",
-  "tasks": []
+  "updated_at": "2026-04-07T03:20:13Z",
+  "tasks": [
+    {
+      "task_id": "machine1-email-quality-hardening-20260407",
+      "status": "in_progress",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "shared/email-quality"
+      ],
+      "planned_files": [
+        "coordination/active_tasks.json",
+        "shared/oldiron_core/fc_email/email_service.py",
+        "shared/oldiron_core/fc_email/normalization.py",
+        "Japan/src/japan_crawler/delivery.py",
+        "England/src/england_crawler/delivery.py"
+      ],
+      "shared_lock_ids": [
+        "lock-machine1-email-quality-hardening-20260407-1",
+        "lock-machine1-email-quality-hardening-20260407-2"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-07T03:20:13Z",
+      "last_heartbeat_at": "2026-04-07T03:20:13Z",
+      "notes": "Harden email extraction normalization and delivery-stage filtering for malformed/placeholder emails across countries."
+    }
+  ]
 }
