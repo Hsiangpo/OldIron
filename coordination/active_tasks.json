@@ -1,43 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T01:42:20Z",
-  "tasks": [
-    {
-      "task_id": "machine1-japan-quality-rootfix-20260407",
-      "status": "in_progress",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "change_class": "shared_zone",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "Japan/bizmaps",
-        "Japan/mynavi",
-        "Japan/pasonacareer",
-        "Japan/onecareer"
-      ],
-      "planned_files": [
-        "coordination/active_tasks.json",
-        "shared/oldiron_core/fc_email/email_service.py",
-        "shared/oldiron_core/fc_email/normalization.py",
-        "Japan/src/japan_crawler/sites/bizmaps/pipeline3_email.py",
-        "Japan/src/japan_crawler/sites/mynavi/store.py",
-        "Japan/src/japan_crawler/sites/onecareer/store.py",
-        "Japan/src/japan_crawler/sites/pasonacareer/store.py",
-        "Japan/test/test_mynavi_store.py",
-        "Japan/test/test_store_guardrails.py",
-        "AGENTS.md",
-        ".agents/skills/oldiron-crawler/SKILL.md"
-      ],
-      "shared_lock_ids": [
-        "lock-machine1-japan-quality-rootfix-20260407-1",
-        "lock-machine1-japan-quality-rootfix-20260407-2",
-        "lock-machine1-japan-quality-rootfix-20260407-3"
-      ],
-      "github_ref": "not-created",
-      "started_at": "2026-04-07T01:22:47Z",
-      "last_heartbeat_at": "2026-04-07T01:42:20Z",
-      "notes": "Root-fix Japan delivery quality at source: repair mynavi canonical company identity and clean stored emails without capping counts"
-    }
-  ]
+  "updated_at": "2026-04-07T01:54:53Z",
+  "tasks": []
 }
