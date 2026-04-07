@@ -1,5 +1,32 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T00:52:23Z",
-  "locks": []
+  "updated_at": "2026-04-07T01:22:47Z",
+  "locks": [
+    {
+      "lock_id": "lock-machine1-japan-quality-rootfix-20260407-1",
+      "status": "locked",
+      "path": "shared/oldiron_core/fc_email/email_service.py",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "task_id": "machine1-japan-quality-rootfix-20260407",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-07T01:22:47Z",
+      "heartbeat_at": "2026-04-07T01:22:47Z",
+      "expires_at": "2026-04-07T02:52:47Z",
+      "notes": "Root-fix Japan delivery quality at source: repair mynavi canonical company identity and clean stored emails without capping counts"
+    },
+    {
+      "lock_id": "lock-machine1-japan-quality-rootfix-20260407-2",
+      "status": "locked",
+      "path": "shared/oldiron_core/fc_email/normalization.py",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "task_id": "machine1-japan-quality-rootfix-20260407",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-07T01:22:47Z",
+      "heartbeat_at": "2026-04-07T01:22:47Z",
+      "expires_at": "2026-04-07T02:52:47Z",
+      "notes": "Root-fix Japan delivery quality at source: repair mynavi canonical company identity and clean stored emails without capping counts"
+    }
+  ]
 }
