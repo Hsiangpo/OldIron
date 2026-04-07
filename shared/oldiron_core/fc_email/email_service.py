@@ -545,12 +545,12 @@ class FirecrawlEmailService:
         if not filtered_urls:
             return []
         if hasattr(self._firecrawl, "scrape_html_pages"):
-            raw_pages = self._firecrawl.scrape_html_pages(filtered_urls)
+            raw_pages = self._scrape_full_html_pages(filtered_urls)
             return _normalize_page_results(raw_pages)
         pages: list[HtmlPageResult] = []
         for url in filtered_urls:
             try:
-                page = self._firecrawl.scrape_html(url)
+                page = self._scrape_full_html(url)
             except FirecrawlError as exc:
                 if exc.code in {"firecrawl_http_404", "firecrawl_5xx"}:
                     continue
@@ -559,6 +559,18 @@ class FirecrawlEmailService:
             if html.strip():
                 pages.append(HtmlPageResult(url=page.url, html=html))
         return pages
+
+    def _scrape_full_html_pages(self, urls: list[str]) -> object:
+        try:
+            return self._firecrawl.scrape_html_pages(urls, truncate_html=False)
+        except TypeError:
+            return self._firecrawl.scrape_html_pages(urls)
+
+    def _scrape_full_html(self, url: str) -> object:
+        try:
+            return self._firecrawl.scrape_html(url, truncate_html=False)
+        except TypeError:
+            return self._firecrawl.scrape_html(url)
 
     def _map_site(self, start_url: str) -> list[str]:
         if type(self._firecrawl).__name__ == "GoFirecrawlService":

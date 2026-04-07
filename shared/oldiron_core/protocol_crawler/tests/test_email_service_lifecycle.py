@@ -58,6 +58,16 @@ class _CaptureLlm:
         )
 
 
+class _CaptureFullHtmlCrawler:
+    def __init__(self, html: str) -> None:
+        self._html = html
+        self.last_truncate_html: bool | None = None
+
+    def scrape_html_pages(self, urls: list[str], *, truncate_html: bool = True) -> list[HtmlPageResult]:
+        self.last_truncate_html = truncate_html
+        return [HtmlPageResult(url=str(urls[0]), html=self._html)]
+
+
 class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
     def test_close_does_not_close_injected_crawler_or_key_pool(self) -> None:
         crawler = _DummyCrawler()
@@ -207,6 +217,23 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
         self.assertIsNotNone(llm.last_pages)
         self.assertLess(len(llm.last_pages[0]["html"]), len(long_html))
         self.assertIn("页面内容过长已截断", llm.last_pages[0]["html"])
+
+    def test_scrape_html_pages_requests_full_html_from_supported_crawler(self) -> None:
+        long_html = "<html>" + ("A" * 300000) + " contact@alpha.co.jp </html>"
+        crawler = _CaptureFullHtmlCrawler(long_html)
+        service = FirecrawlEmailService(
+            FirecrawlEmailSettings(
+                llm_api_key="x",
+                llm_model="gpt-5.4-mini",
+            ),
+            key_pool=_DummyKeyPool(),
+            firecrawl_client=crawler,
+        )
+
+        pages = service._scrape_html_pages(["https://example.co.jp/contact"])
+
+        self.assertEqual(False, crawler.last_truncate_html)
+        self.assertEqual(long_html, pages[0].html)
 
     def test_split_emails_rejects_placeholder_and_url_embedded_noise(self) -> None:
         values = [

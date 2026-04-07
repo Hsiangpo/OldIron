@@ -128,32 +128,34 @@ class SiteCrawlClient:
         LOGGER.info("协议爬虫首页链接提取：url=%s count=%s", url, len(links))
         return links
 
-    def scrape_html(self, url: str) -> HtmlPageResult:
+    def scrape_html(self, url: str, *, truncate_html: bool = True) -> HtmlPageResult:
         """抓取单个页面的完整 HTML。
 
         Args:
             url: 目标页面 URL
+            truncate_html: 是否按配置截断超长 HTML
 
         Returns:
             HtmlPageResult(url, html)
         """
-        html = self._fetch_html(url)
+        html = self._fetch_html(url, truncate_html=truncate_html)
         return HtmlPageResult(url=url, html=html)
 
-    def scrape_html_pages(self, urls: list[str]) -> list[HtmlPageResult]:
+    def scrape_html_pages(self, urls: list[str], *, truncate_html: bool = True) -> list[HtmlPageResult]:
         """批量抓取多个页面的 HTML（兼容 GoFirecrawlService 接口）。
 
         跳过抓取失败或空内容的页面。
 
         Args:
             urls: 目标页面 URL 列表
+            truncate_html: 是否按配置截断超长 HTML
 
         Returns:
             成功抓取的 HtmlPageResult 列表
         """
         pages: list[HtmlPageResult] = []
         for url in urls:
-            html = self._fetch_html(url)
+            html = self._fetch_html(url, truncate_html=truncate_html)
             if html.strip():
                 pages.append(HtmlPageResult(url=url, html=html))
         return pages
@@ -164,7 +166,7 @@ class SiteCrawlClient:
         except Exception:  # noqa: BLE001
             return None
 
-    def _fetch_html(self, url: str) -> str:
+    def _fetch_html(self, url: str, *, truncate_html: bool = True) -> str:
         """带重试的 HTTP GET 获取 HTML。"""
         attempts = max(self._config.max_retries, 0) + 1
         last_error: Exception | None = None
@@ -181,7 +183,9 @@ class SiteCrawlClient:
                         LOGGER.info("协议爬虫跳过非 HTML 内容：url=%s content_type=%s", url, content_type or "-")
                         return ""
                     text = resp.text or ""
-                    return _truncate_html_text(url, text, self._config.max_html_chars)
+                    if truncate_html:
+                        return _truncate_html_text(url, text, self._config.max_html_chars)
+                    return text
                 if resp.status_code == 429:
                     LOGGER.warning(
                         "协议爬虫 HTTP 429：url=%s attempt=%s/%s",

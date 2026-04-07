@@ -273,6 +273,21 @@ class TestSiteCrawlClient(unittest.TestCase):
         self.assertIn("内容过长已截断", html)
         self.assertLess(len(html), len(long_html))
 
+    def test_fetch_html_keeps_full_large_html_when_truncate_disabled(self) -> None:
+        client = SiteCrawlClient(SiteCrawlConfig(max_retries=0, max_html_chars=20))
+        long_html = "<html>" + ("a" * 60) + "</html>"
+        response = MagicMock(
+            status_code=200,
+            text=long_html,
+            headers={"Content-Type": "text/html"},
+        )
+        client._session.get = MagicMock(return_value=response)
+
+        html = client._fetch_html("https://example.com/page", truncate_html=False)
+
+        self.assertEqual(long_html, html)
+        self.assertNotIn("内容过长已截断", html)
+
     def test_html_page_result_fields(self) -> None:
         result = HtmlPageResult(url="https://test.com", html="<p>hi</p>")
         self.assertEqual("https://test.com", result.url)
