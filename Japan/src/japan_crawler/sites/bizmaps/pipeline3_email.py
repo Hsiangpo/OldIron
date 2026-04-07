@@ -1,7 +1,7 @@
-"""bizmaps Pipeline 3 — Protocol+LLM 官网邮箱提取。
+"""bizmaps Pipeline 3 — 官网规则补邮箱 + LLM 补代表人。
 
 对 Pipeline 1/2 中有 website 的公司，用协议爬虫抓取官网 HTML，
-然后通过 LLM 提取公开联系人邮箱。
+先用规则提取公开邮箱，再在缺代表人时用 LLM 补代表人。
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ def run_pipeline_email(
     max_items: int = 0,
     concurrency: int = DEFAULT_CONCURRENCY,
 ) -> dict[str, int]:
-    """Pipeline 3: Protocol+LLM 官网邮箱提取。
+    """Pipeline 3: 官网规则补邮箱 + LLM 补代表人。
 
-    从 SQLite 中读取有 website 但没有 email 的公司，逐个抓取官网并提取邮箱。
+    从 SQLite 中读取有 website 但缺邮箱的公司，逐个抓取官网并提取邮箱。
     """
     store = BizmapsStore(output_dir / "bizmaps_store.db")
 
@@ -45,9 +45,9 @@ def run_pipeline_email(
         logger.info("没有需要邮箱提取的公司")
         return {"processed": 0, "found": 0}
 
-    logger.info("Protocol+LLM 邮箱提取：待处理 %d 家, 并发=%d", len(all_companies), concurrency)
+    logger.info("官网规则邮箱提取：待处理 %d 家, 并发=%d", len(all_companies), concurrency)
 
-    # 构建 LLM + 协议爬虫客户端
+    # 构建共享邮箱服务与协议爬虫客户端
     settings = _build_settings(output_dir)
     settings.validate()
 

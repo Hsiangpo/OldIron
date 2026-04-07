@@ -1,7 +1,7 @@
-"""hellowork Pipeline 2 — Protocol+LLM 官网邮箱提取。
+"""hellowork Pipeline 2 — 官网规则补邮箱 + LLM 补代表人。
 
 对 Pipeline 1 中有 website 的企业，用协议爬虫抓取官网 HTML，
-然后通过 LLM 提取公开联系人邮箱。
+先用规则提取公开邮箱，再在缺代表人时用 LLM 补代表人。
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def run_pipeline_email(
     max_items: int = 0,
     concurrency: int = DEFAULT_CONCURRENCY,
 ) -> dict[str, int]:
-    """Pipeline 2: Protocol+LLM 官网邮箱提取。"""
+    """Pipeline 2: 官网规则补邮箱 + LLM 补代表人。"""
     store = HelloworkStore(output_dir / "hellowork_store.db")
 
     pending = store.get_email_pending(limit=max_items)
@@ -38,7 +38,7 @@ def run_pipeline_email(
         logger.info("没有需要邮箱提取的企业")
         return {"processed": 0, "found": 0}
 
-    logger.info("Protocol+LLM 邮箱提取：待处理 %d 家, 并发=%d", len(pending), concurrency)
+    logger.info("官网规则邮箱提取：待处理 %d 家, 并发=%d", len(pending), concurrency)
 
     settings = _build_settings(output_dir)
     settings.validate()

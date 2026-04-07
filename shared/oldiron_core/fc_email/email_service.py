@@ -1,4 +1,4 @@
-"""Firecrawl + 外部 LLM 联系信息服务。"""
+"""官网规则邮箱 + 外部 LLM 代表人补充服务。"""
 
 from __future__ import annotations
 
@@ -209,12 +209,12 @@ class FirecrawlEmailSettings:
         if self.llm_pick_limit > 0:
             self.llm_pick_count = self.llm_pick_limit
 
-    def validate(self) -> None:
+    def validate(self, *, require_llm: bool = False) -> None:
         # 协议爬虫不需要 Firecrawl key
         if self.crawl_backend != "protocol":
             if not self.keys_inline and not _keys_file_has_content(self.keys_file):
                 raise RuntimeError("Firecrawl 阶段缺少 FIRECRAWL_KEYS，请检查根目录 .env。")
-        if not self.llm_api_key or not self.llm_model:
+        if require_llm and (not self.llm_api_key or not self.llm_model):
             raise RuntimeError("Firecrawl 阶段缺少 LLM 配置，请检查 LLM_API_KEY / LLM_MODEL。")
 
 
@@ -241,7 +241,7 @@ class _EmailPassPlan:
 
 
 class FirecrawlEmailService:
-    """基于 Firecrawl 与外部 LLM 的邮箱发现服务。"""
+    """基于协议/Firecrawl 规则提邮箱、按需用 LLM 补代表人的服务。"""
 
     def __init__(
         self,
@@ -270,14 +270,7 @@ class FirecrawlEmailService:
                 ),
             )
             self._owns_firecrawl = True
-        self._llm = EmailUrlLlmClient(
-            api_key=settings.llm_api_key,
-            base_url=settings.llm_base_url,
-            model=settings.llm_model,
-            reasoning_effort=settings.llm_reasoning_effort,
-            api_style=settings.llm_api_style,
-            timeout_seconds=settings.llm_timeout_seconds,
-        )
+        self._llm: EmailUrlLlmClient | None = None
 
     def close(self) -> None:
         if self._owns_key_pool and self._key_pool is not None:
@@ -288,6 +281,21 @@ class FirecrawlEmailService:
             except Exception:  # noqa: BLE001
                 pass
         return None
+
+    def _get_llm_client(self) -> EmailUrlLlmClient:
+        """按需初始化 LLM，避免纯规则邮箱流程被无意义的 LLM 配置卡住。"""
+        if self._llm is not None:
+            return self._llm
+        self._settings.validate(require_llm=True)
+        self._llm = EmailUrlLlmClient(
+            api_key=self._settings.llm_api_key,
+            base_url=self._settings.llm_base_url,
+            model=self._settings.llm_model,
+            reasoning_effort=self._settings.llm_reasoning_effort,
+            api_style=self._settings.llm_api_style,
+            timeout_seconds=self._settings.llm_timeout_seconds,
+        )
+        return self._llm
 
     @staticmethod
     def ensure_keys_file(target_path: Path, inline_keys: list[str]) -> None:
@@ -387,6 +395,7 @@ class FirecrawlEmailService:
         allow_llm_email_extraction: bool,
         plan: _EmailPassPlan,
     ) -> EmailDiscoveryResult:
+        # 兼容旧调用参数；官网邮箱现在固定只走规则提取。
         _ = allow_llm_email_extraction
         mapped_urls = self._map_site(start_url)
         all_urls = self._rank_all_urls(start_url, mapped_urls)
@@ -434,7 +443,7 @@ class FirecrawlEmailService:
                 start_url,
                 len(llm_pages),
             )
-            extracted = self._llm.extract_contacts_from_html(
+            extracted = self._get_llm_client().extract_contacts_from_html(
                 company_name=company_name,
                 homepage=start_url,
                 pages=[{"url": page.url, "html": page.html} for page in llm_pages if page.html],
@@ -475,7 +484,7 @@ class FirecrawlEmailService:
         )
         if not use_llm or len(rule_shortlist) <= plan.extract_max_urls:
             return rule_shortlist[: plan.extract_max_urls]
-        ranked_urls = self._llm.pick_candidate_urls(
+        ranked_urls = self._get_llm_client().pick_candidate_urls(
             company_name=company_name,
             domain=extract_domain(start_url),
             homepage=start_url,

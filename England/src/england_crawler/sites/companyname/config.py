@@ -41,7 +41,7 @@ class CompanyNameConfig:
     gmap_workers: int = 128
     gmap_proxy: str = ""
 
-    # Protocol+LLM 邮箱发现（内部字段名保留 firecrawl_ 前缀以兼容数据库）
+    # 官网邮箱只走规则提取；内部字段名保留 firecrawl_ 前缀以兼容数据库
     firecrawl_workers: int = 128
     firecrawl_keys_inline: list[str] = field(default_factory=list)
     firecrawl_keys_file: str = ""
@@ -77,8 +77,9 @@ class CompanyNameConfig:
     snapshot_interval_seconds: float = 30.0
 
     def validate(self, *, skip_firecrawl: bool = False) -> None:
-        if not skip_firecrawl and not self.llm_api_key:
-            raise ValueError("LLM_API_KEY 未配置，无法进行邮箱补充")
+        # England 官网邮箱只走规则，代表人来自 Companies House，不强依赖 LLM 配置。
+        _ = skip_firecrawl
+        return None
 
     @classmethod
     def from_env(

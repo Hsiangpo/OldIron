@@ -249,7 +249,7 @@ class CompanyNamePipelineRunner:
             self._gmap_local.client = client
         return client
 
-    # ── Protocol+LLM 邮箱发现 Worker ──
+    # ── 协议规则邮箱发现 Worker ──
 
     def _email_worker(self) -> None:
         while not self.stop_event.is_set():
