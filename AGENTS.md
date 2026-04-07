@@ -129,6 +129,11 @@
 - Run command example: `python product.py England dayN` (root script delegates to the respective country module).
 - 默认交付规范：单个国家，所有站点，通过 `product.py` 打包落盘的时候，**默认**将所有站点的输出数据进行归并，按公司名严格**去重后才落盘生成最终交付文档**。
 - 文件存放规范：生成的最终交付文档必须放在各个国家内部的 `output/delivery/<国家英文名>_dayN(从001开始)` 文件夹下。例如：`SouthKorea/output/delivery/SouthKorea_day001/`。
+- Global website email rule:
+  - for every country, if an email is a real email found from the company's official website, keep it
+  - do not filter by mailbox type; personal/free mailbox domains and corporate mailbox domains are both allowed
+  - do not cap the number of kept emails
+  - only remove clearly fake / invalid / placeholder emails, or obvious directory-style noise that does not belong to the company itself
 - Country-specific overrides always win over the default delivery rule.
 - Do not extrapolate these overrides to future countries by yourself.
 - For future countries, if delivery mode or email policy is not explicitly recorded here, ask the user first and write the confirmed strategy into `AGENTS.md` before implementing.

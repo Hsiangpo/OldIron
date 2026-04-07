@@ -205,6 +205,10 @@ Japan multi-machine delivery checklist:
 
 - During crawling/storage: save all discovered emails to SQLite
 - During delivery: apply the user-selected filter policy or the country-specific override from `AGENTS.md`
+- For official company websites, keep every real email discovered from the site
+- Do not filter by mailbox type: personal/free mailbox domains and corporate mailbox domains must all be kept when the email is real
+- Do not cap the number of kept emails
+- Only remove clearly fake / invalid / placeholder emails, or obvious directory-style noise that does not belong to the company itself
 - Never silently hardcode a new email filtering rule
 
 ## 8A. Real validation requirement
