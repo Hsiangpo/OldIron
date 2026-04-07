@@ -1,19 +1,32 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T12:44:57Z",
+  "updated_at": "2026-04-07T12:49:00Z",
   "locks": [
     {
-      "lock_id": "lock-machine1-rule-vs-llm-truncation-20260407-1",
+      "lock_id": "lock-machine1-rule-only-email-20260407-1",
       "status": "locked",
       "path": "shared/oldiron_core/fc_email/email_service.py",
       "machine": "machine1-windows",
       "agent": "codex",
-      "task_id": "machine1-rule-vs-llm-truncation-20260407",
+      "task_id": "machine1-rule-only-email-20260407",
       "github_ref": "not-created",
-      "locked_at": "2026-04-07T12:44:57Z",
-      "heartbeat_at": "2026-04-07T12:44:57Z",
-      "expires_at": "2026-04-07T13:44:57Z",
-      "notes": "Only truncate content for LLM email extraction path; keep full page content for rule-based email extraction."
+      "locked_at": "2026-04-07T12:49:00Z",
+      "heartbeat_at": "2026-04-07T12:49:00Z",
+      "expires_at": "2026-04-07T13:49:00Z",
+      "notes": "Email extraction is rule-only globally; LLM is representative-only; rule email path must not truncate page content; record policy in AGENTS and oldiron-crawler skill."
+    },
+    {
+      "lock_id": "lock-machine1-rule-only-email-20260407-2",
+      "status": "locked",
+      "path": "AGENTS.md",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "task_id": "machine1-rule-only-email-20260407",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-07T12:49:00Z",
+      "heartbeat_at": "2026-04-07T12:49:00Z",
+      "expires_at": "2026-04-07T13:49:00Z",
+      "notes": "Email extraction is rule-only globally; LLM is representative-only; rule email path must not truncate page content; record policy in AGENTS and oldiron-crawler skill."
     }
   ]
 }

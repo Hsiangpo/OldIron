@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T12:44:57Z",
+  "updated_at": "2026-04-07T12:49:00Z",
   "tasks": [
     {
-      "task_id": "machine1-rule-vs-llm-truncation-20260407",
+      "task_id": "machine1-rule-only-email-20260407",
       "status": "in_progress",
       "machine": "machine1-windows",
       "agent": "codex",
@@ -17,15 +17,18 @@
         "coordination/active_tasks.json",
         "coordination/shared_locks.json",
         "shared/oldiron_core/fc_email/email_service.py",
-        "shared/oldiron_core/protocol_crawler/tests/test_email_service_lifecycle.py"
+        "shared/oldiron_core/protocol_crawler/tests/test_email_service_lifecycle.py",
+        "AGENTS.md",
+        ".agents/skills/oldiron-crawler/SKILL.md"
       ],
       "shared_lock_ids": [
-        "lock-machine1-rule-vs-llm-truncation-20260407-1"
+        "lock-machine1-rule-only-email-20260407-1",
+        "lock-machine1-rule-only-email-20260407-2"
       ],
       "github_ref": "not-created",
-      "started_at": "2026-04-07T12:44:57Z",
-      "last_heartbeat_at": "2026-04-07T12:44:57Z",
-      "notes": "Only truncate content for LLM email extraction path; keep full page content for rule-based email extraction."
+      "started_at": "2026-04-07T12:49:00Z",
+      "last_heartbeat_at": "2026-04-07T12:49:00Z",
+      "notes": "Email extraction is rule-only globally; LLM is representative-only; rule email path must not truncate page content; record policy in AGENTS and oldiron-crawler skill."
     }
   ]
 }
