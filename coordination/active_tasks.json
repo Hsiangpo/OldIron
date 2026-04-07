@@ -1,5 +1,29 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T17:27:15Z",
-  "tasks": []
+  "updated_at": "2026-04-07T17:46:45Z",
+  "tasks": [
+    {
+      "task_id": "openwork-pagination-fix-20260407",
+      "status": "in_progress",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Japan openwork fix invalid total-pages estimate and fast checkpoint fallback"
+      ],
+      "planned_files": [
+        "Japan/src/japan_crawler/sites/openwork/parser.py",
+        "Japan/src/japan_crawler/sites/openwork/pipeline.py",
+        "Japan/test/test_openwork_parser.py",
+        "Japan/test/test_openwork_runtime.py"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-04-07T17:46:45Z",
+      "last_heartbeat_at": "2026-04-07T17:46:45Z",
+      "notes": "OpenWork inflated total_pages from result count and wasted 10 minutes on dead resume pages; fix parser and resume probe"
+    }
+  ]
 }

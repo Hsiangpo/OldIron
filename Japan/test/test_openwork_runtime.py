@@ -198,6 +198,13 @@ class OpenworkRuntimeTests(unittest.TestCase):
         self.assertEqual("<html>ok</html>", html)
         self.assertEqual(3, client.calls)
 
+    def test_wait_for_list_page_html_respects_custom_retry_rounds(self) -> None:
+        client = _RetryListClient([None, None, "<html>ok</html>"])
+        with patch("japan_crawler.sites.openwork.pipeline.time.sleep", return_value=None):
+            html = _wait_for_list_page_html(client, 9, max_rounds=2)
+        self.assertIsNone(html)
+        self.assertEqual(2, client.calls)
+
 
 if __name__ == "__main__":
     unittest.main()

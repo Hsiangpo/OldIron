@@ -34,6 +34,12 @@ LIST_HTML = """
 </body></html>
 """
 
+LIST_HTML_NO_LINKS = """
+<html><body>
+<div>120 件中 1～50件を表示</div>
+</body></html>
+"""
+
 DETAIL_HTML = """
 <html><body>
 <a class="noLink v-m">株式会社リクルート</a>
@@ -57,7 +63,10 @@ class OpenworkParserTests(unittest.TestCase):
 
     def test_parse_total_results_and_pages(self) -> None:
         self.assertEqual(193415, parse_total_results(LIST_HTML))
-        self.assertEqual(3869, parse_total_pages(LIST_HTML))
+        self.assertEqual(6, parse_total_pages(LIST_HTML))
+
+    def test_parse_total_pages_falls_back_to_count_when_no_links(self) -> None:
+        self.assertEqual(3, parse_total_pages(LIST_HTML_NO_LINKS))
 
     def test_parse_company_detail(self) -> None:
         detail = parse_company_detail(DETAIL_HTML)

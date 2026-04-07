@@ -16,6 +16,7 @@ LOGGER = logging.getLogger("openwork.pipeline")
 _CHECKPOINT_SCOPE = "company_list"
 _LIST_PAGE_RETRY_SECONDS = 15
 _LIST_PAGE_RETRY_ROUNDS = 40
+_RESUME_PROBE_RETRY_ROUNDS = 2
 
 
 def run_pipeline_list(
@@ -39,7 +40,11 @@ def run_pipeline_list(
     if max_pages > 0 and start_page > max_pages:
         LOGGER.warning("OpenWork 断点页 %d 超出测试页上限 %d，回退到第 1 页", start_page, max_pages)
         start_page = 1
-    first_html = _wait_for_list_page_html(client, start_page)
+    first_html = _wait_for_list_page_html(
+        client,
+        start_page,
+        max_rounds=_RESUME_PROBE_RETRY_ROUNDS if start_page > 1 else _LIST_PAGE_RETRY_ROUNDS,
+    )
     if first_html is None and start_page > 1:
         LOGGER.warning("OpenWork 断点页 %d 获取失败，回退到第 1 页重建断点", start_page)
         start_page = 1
@@ -88,18 +93,24 @@ def _expand_total_pages(page_html: str, current_total: int, max_pages: int) -> i
     return total_pages
 
 
-def _wait_for_list_page_html(client: OpenworkClient, page: int) -> str | None:
-    for attempt in range(1, _LIST_PAGE_RETRY_ROUNDS + 1):
+def _wait_for_list_page_html(
+    client: OpenworkClient,
+    page: int,
+    *,
+    max_rounds: int = _LIST_PAGE_RETRY_ROUNDS,
+) -> str | None:
+    total_rounds = max(int(max_rounds or 1), 1)
+    for attempt in range(1, total_rounds + 1):
         page_html = client.fetch_list_page(page)
         if page_html is not None:
             return page_html
-        if attempt >= _LIST_PAGE_RETRY_ROUNDS:
+        if attempt >= total_rounds:
             break
         LOGGER.warning(
             "OpenWork 列表页 %d 暂不可用，第 %d/%d 次等待 %ds 后重试",
             page,
             attempt,
-            _LIST_PAGE_RETRY_ROUNDS,
+            total_rounds,
             _LIST_PAGE_RETRY_SECONDS,
         )
         time.sleep(_LIST_PAGE_RETRY_SECONDS)
