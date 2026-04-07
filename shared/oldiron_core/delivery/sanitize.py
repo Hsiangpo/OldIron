@@ -9,6 +9,8 @@ from __future__ import annotations
 import html as _html_mod
 import re
 
+from oldiron_core.fc_email.normalization import split_emails
+
 # ---------- 公司法人后缀正则，用于检测代表人字段误填公司名 ----------
 _CORP_SUFFIX_RE = re.compile(
     r"\b("
@@ -61,16 +63,7 @@ def sanitize_record(
         entry["representative"] = ""
 
     # --- 4. 邮箱清洗 ---
-    cleaned_emails: list[str] = []
-    for em in emails_list:
-        em = _INVISIBLE_RE.sub("", em).strip()  # 去零宽字符
-        if not em or "@" not in em:
-            continue
-        user_part = em.split("@")[0]
-        if "/" in user_part:
-            continue  # 丢弃 user 部分含斜杠的
-        cleaned_emails.append(em)
-    entry["emails"] = "; ".join(cleaned_emails)
+    entry["emails"] = "; ".join(_clean_delivery_emails(emails_list))
 
     # --- 5. 电话清洗 ---
     phone = str(entry.get("phone", "")).strip()
@@ -90,3 +83,10 @@ def sanitize_record(
         return None
 
     return entry
+
+
+def _clean_delivery_emails(emails_list: list[str]) -> list[str]:
+    raw_values = [str(value or "").strip() for value in emails_list if str(value or "").strip()]
+    if not raw_values:
+        return []
+    return split_emails("; ".join(raw_values))

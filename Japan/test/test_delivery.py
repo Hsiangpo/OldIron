@@ -160,7 +160,7 @@ class JapanDeliveryTests(unittest.TestCase):
             self.assertEqual("sales@alpha.co.jp; support@alpha.co.jp", rows[0]["emails"])
             self.assertEqual("https://example.com/a", rows[0]["detail_url"])
 
-    def test_strict_sites_drop_unrelated_email_domains(self) -> None:
+    def test_delivery_keeps_real_cross_domain_emails_but_drops_placeholders(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             output_root = root / "output"
@@ -180,8 +180,7 @@ class JapanDeliveryTests(unittest.TestCase):
                     emails TEXT
                 );
                 INSERT INTO companies (company_id, company_name, representative, website, address, industry, detail_url, emails) VALUES
-                    ('oc-1', 'AIGグループ', '代表者A', 'http://www-154.aig.com', 'Tokyo', '金融', '/companies/317', 'aviationworklist@aig.com; paul.smith@talbotuw.com'),
-                    ('oc-2', 'J.P.モルガン', '代表者B', 'https://toushin-plaza.jp', 'Tokyo', '金融', '/companies/104', 'info@fan-sec.co.jp');
+                    ('oc-1', 'AIGグループ', '代表者A', 'http://www-154.aig.com', 'Tokyo', '金融', '/companies/317', 'aviationworklist@aig.com; paul.smith@talbotuw.com; xxxx@gmail.com');
                 """
             )
             conn.commit()
@@ -196,7 +195,10 @@ class JapanDeliveryTests(unittest.TestCase):
             with csv_path.open(encoding="utf-8-sig", newline="") as fp:
                 rows = list(csv.DictReader(fp))
             self.assertEqual(1, len(rows))
-            self.assertEqual("aviationworklist@aig.com", rows[0]["emails"])
+            self.assertEqual(
+                "aviationworklist@aig.com; paul.smith@talbotuw.com",
+                rows[0]["emails"],
+            )
 
     def test_delivery_merges_same_company_when_domain_and_representative_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -259,8 +261,8 @@ class JapanDeliveryTests(unittest.TestCase):
                     emails TEXT
                 );
                 INSERT INTO companies (company_name, representative, website, address, detail_url, emails) VALUES
-                    ('Alpha', 'Jane', 'https://alpha.example', '', 'https://example.com/a', 'alpha@gmail.jp'),
-                    ('Alpha', 'Jane', 'https://alpha.example', '', 'https://example.com/a', 'alpha@gmail.jp');
+                    ('Alpha', 'Jane', 'https://alpha.example', '', 'https://example.com/a', 'alpha@gmail.com'),
+                    ('Alpha', 'Jane', 'https://alpha.example', '', 'https://example.com/a', 'alpha@gmail.com');
                 """
             )
             conn.commit()
@@ -275,7 +277,61 @@ class JapanDeliveryTests(unittest.TestCase):
             with csv_path.open(encoding="utf-8-sig", newline="") as fp:
                 rows = list(csv.DictReader(fp))
             self.assertEqual(1, len(rows))
-            self.assertEqual("alpha@gmail.jp", rows[0]["emails"])
+            self.assertEqual("alpha@gmail.com", rows[0]["emails"])
+
+    def test_delivery_keeps_all_real_emails_without_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            site_dir = output_root / "mynavi"
+            site_dir.mkdir(parents=True)
+            emails = "; ".join(f"team{i}@alpha.co.jp" for i in range(1, 12))
+            conn = sqlite3.connect(str(site_dir / "mynavi_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE companies (
+                    company_id TEXT PRIMARY KEY,
+                    company_name TEXT,
+                    representative TEXT,
+                    website TEXT,
+                    address TEXT,
+                    industry TEXT,
+                    detail_url TEXT,
+                    source_job_url TEXT,
+                    emails TEXT
+                );
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO companies (
+                    company_id, company_name, representative, website, address, industry, detail_url, source_job_url, emails
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "324993",
+                    "多邮箱株式会社",
+                    "代表取締役 山田太郎",
+                    "https://www.alpha.co.jp",
+                    "Tokyo",
+                    "IT",
+                    "/company/324993",
+                    "/job/1",
+                    emails,
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            delivery_root = output_root / "delivery"
+            summary = build_delivery_bundle(output_root, delivery_root, "day1")
+            self.assertEqual(1, summary["delta_companies"])
+
+            csv_path = delivery_root / "Japan_day001" / "mynavi.csv"
+            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(1, len(rows))
+            self.assertEqual(11, len(rows[0]["emails"].split("; ")))
 
     def test_same_record_with_empty_address_is_not_redelivered_on_next_day(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

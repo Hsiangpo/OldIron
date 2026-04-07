@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 
 _EMAIL_RE = re.compile(r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})", re.IGNORECASE)
+_INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad\u2060]")
 _MULTI_LABEL_PUBLIC_SUFFIXES = {
     "co.jp",
     "or.jp",
@@ -26,9 +27,16 @@ _BAD_EMAIL_TLDS = {
     "mp4", "webm", "mov", "pdf", "js", "css", "woff", "woff2", "ttf", "eot",
 }
 _BAD_EMAIL_HOST_HINTS = (
+    "group.calendar.google.com",
+    "example.jp",
+    "example.co.jp",
     "example.com",
     "example.org",
     "example.net",
+    "gmaii.com",
+    "gmai.com",
+    "gmail.jp",
+    "48g9-.bybgnptut",
     "sample.com",
     "sample.co.jp",
     "mysite.com",
@@ -42,6 +50,7 @@ _IGNORE_LOCAL_PARTS = {
     "x",
     "xx",
     "xxx",
+    "name",
     "test",
     "example",
     "sample",
@@ -52,6 +61,42 @@ _IGNORE_LOCAL_PARTS = {
     "no-reply",
     "donotreply",
     "do-not-reply",
+}
+_PLACEHOLDER_EXACT_PARTS = {
+    "aaa",
+    "aaaa",
+    "aaaaa",
+    "dummy",
+    "example",
+    "hogehoge",
+    "hoge",
+    "name",
+    "sample",
+    "test",
+    "xxx",
+    "xxxx",
+    "xxxxx",
+    "xxxxxx",
+    "yourdomain",
+    "yourdmain",
+}
+_PLACEHOLDER_DOMAIN_WORDS = {
+    "aaa",
+    "dummy",
+    "email",
+    "example",
+    "sample",
+    "test",
+    "yourdomain",
+    "yourdmain",
+}
+_PLACEHOLDER_STEM_WORDS = {
+    "dummy",
+    "email",
+    "example",
+    "name",
+    "sample",
+    "test",
 }
 _EMAIL_PRIORITY_LOCAL_PARTS = {
     "contact",
@@ -111,7 +156,7 @@ def extract_registrable_domain(value: str) -> str:
 
 def normalize_email_candidate(value: object) -> str:
     """标准化单个邮箱候选值。"""
-    text = unquote(str(value or "")).strip().lower()
+    text = _INVISIBLE_RE.sub("", unquote(str(value or ""))).strip().lower()
     if not text:
         return ""
     text = text.replace("mailto:", "")
@@ -122,9 +167,15 @@ def normalize_email_candidate(value: object) -> str:
     if match is None:
         return ""
     email = str(match.group(1) or "").strip().lower().rstrip(".,);:]}>")
+    if _email_appears_inside_url_token(text, email):
+        return ""
     if "@" not in email:
         return ""
     local, domain = email.split("@", 1)
+    if local.startswith(".") or local.endswith(".") or ".." in local:
+        return ""
+    if domain.startswith(".") or domain.endswith(".") or ".." in domain:
+        return ""
     if local in _IGNORE_LOCAL_PARTS:
         return ""
     suffix = domain.rsplit(".", 1)[-1] if "." in domain else ""
@@ -133,6 +184,12 @@ def normalize_email_candidate(value: object) -> str:
     if any(flag in domain for flag in _BAD_EMAIL_HOST_HINTS):
         return ""
     return email
+
+
+def is_real_email_candidate(value: object) -> bool:
+    """判断邮箱候选值是否像真实邮箱。"""
+    email = normalize_email_candidate(value)
+    return bool(email and not _is_placeholder_email(email))
 
 
 def split_emails(values: Iterable[str] | str) -> list[str]:
@@ -145,7 +202,7 @@ def split_emails(values: Iterable[str] | str) -> list[str]:
     result: list[str] = []
     for raw in items:
         email = normalize_email_candidate(raw)
-        if email and email not in result:
+        if email and not _is_placeholder_email(email) and email not in result:
             result.append(email)
     return result
 
@@ -182,6 +239,104 @@ def email_matches_website(website: str, email: str) -> bool:
 def join_emails(values: Iterable[str] | str) -> str:
     """把邮箱列表拼成统一分隔文本。"""
     return "; ".join(split_emails(values))
+
+
+def _email_appears_inside_url_token(text: str, email: str) -> bool:
+    for token in re.split(r"\s+", str(text or "").strip()):
+        if "://" not in token:
+            continue
+        if email in token:
+            return True
+    return False
+
+
+def _is_placeholder_email(email: str) -> bool:
+    value = str(email or "").strip().lower()
+    if "@" not in value:
+        return True
+    local, domain = value.split("@", 1)
+    return _local_part_is_placeholder(local) or _domain_is_placeholder(domain)
+
+
+def _local_part_is_placeholder(local: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "", str(local or "").strip().lower())
+    if not normalized:
+        return True
+    if normalized in _PLACEHOLDER_EXACT_PARTS:
+        return True
+    if _matches_placeholder_stem(normalized):
+        return True
+    if re.fullmatch(r"x{4,}", normalized):
+        return True
+    if re.fullmatch(r"a{3,}", normalized):
+        return True
+    if re.fullmatch(r"0{3,}", normalized):
+        return True
+    if re.search(r"x{4,}|0{4,}", normalized):
+        return True
+    parts = [part for part in re.split(r"[._%+\-]+", str(local or "").strip().lower()) if part]
+    for part in parts:
+        if part in _PLACEHOLDER_EXACT_PARTS:
+            return True
+        if _matches_placeholder_stem(re.sub(r"[^a-z0-9]+", "", part)):
+            return True
+        if re.fullmatch(r"x{2,}", part):
+            return True
+        if re.fullmatch(r"a{3,}", part):
+            return True
+    return False
+
+
+def _domain_is_placeholder(domain: str) -> bool:
+    labels = [label for label in str(domain or "").strip().lower().split(".") if label]
+    if len(labels) < 2:
+        return True
+    if ".".join(labels[-2:]) in _MULTI_LABEL_PUBLIC_SUFFIXES and len(labels) < 3:
+        return True
+    core_labels = _core_domain_labels(labels)
+    if not core_labels:
+        return True
+    for label in core_labels:
+        normalized = re.sub(r"[^a-z0-9]+", "", label)
+        if not normalized:
+            return True
+        if normalized in _PLACEHOLDER_DOMAIN_WORDS:
+            return True
+        if any(
+            normalized.startswith(word) or normalized.endswith(word)
+            for word in _PLACEHOLDER_DOMAIN_WORDS
+        ):
+            return True
+        if re.search(r"x{4,}|0{4,}", normalized):
+            return True
+        if re.fullmatch(r"x{2,}", normalized):
+            return True
+        if re.fullmatch(r"a{3,}", normalized):
+            return True
+        if re.fullmatch(r"0{2,}", normalized):
+            return True
+    return False
+
+
+def _core_domain_labels(labels: list[str]) -> list[str]:
+    if len(labels) < 2:
+        return []
+    suffix2 = ".".join(labels[-2:])
+    if suffix2 in _MULTI_LABEL_PUBLIC_SUFFIXES:
+        return labels[:-2]
+    return labels[:-1]
+
+
+def _matches_placeholder_stem(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return False
+    for stem in _PLACEHOLDER_STEM_WORDS:
+        if normalized == stem:
+            return True
+        if len(normalized) <= len(stem) + 8 and (normalized.startswith(stem) or normalized.endswith(stem)):
+            return True
+    return False
 
 
 def _prioritize_emails(emails: list[str]) -> list[str]:

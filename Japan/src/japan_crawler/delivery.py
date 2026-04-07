@@ -18,19 +18,10 @@ if str(SHARED_ROOT) not in sys.path:
     sys.path.insert(0, str(SHARED_ROOT))
 
 from oldiron_core.delivery.engine import validate_day_sequence
+from oldiron_core.delivery.sanitize import sanitize_record
+from oldiron_core.fc_email.normalization import split_emails as normalize_split_emails
 _SITE_FILTER_ENV = "JAPAN_DELIVERY_SITES"
 _SUMMARY_ONLY_ENV = "JAPAN_DELIVERY_SUMMARY_ONLY"
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_SUSPICIOUS_EMAIL_DOMAINS = {
-    "group.calendar.google.com",
-    "example.jp",
-    "example.co.jp",
-    "gmaii.com",
-    "gmai.com",
-    "gmail.jp",
-    "48g9-.bybgnptut",
-}
-_STRICT_EMAIL_DOMAIN_SITES = {"mynavi", "onecareer"}
 _MULTI_LABEL_PUBLIC_SUFFIXES = {
     "co.jp",
     "or.jp",
@@ -41,27 +32,6 @@ _MULTI_LABEL_PUBLIC_SUFFIXES = {
     "org.uk",
     "gov.uk",
     "ac.uk",
-}
-_PRIORITY_EMAIL_LOCAL_PARTS = {
-    "contact",
-    "customer",
-    "hello",
-    "help",
-    "hr",
-    "info",
-    "inquiry",
-    "office",
-    "privacy",
-    "pr",
-    "press",
-    "recruit",
-    "recruiting",
-    "sales",
-    "service",
-    "support",
-    "saiyo",
-    "soumu",
-    "kojinjoho",
 }
 _REPRESENTATIVE_TITLE_PATTERNS = (
     r"代表取締役社長",
@@ -383,43 +353,18 @@ def _prepare_delivery_records(site_name: str, records: list[dict[str, str]]) -> 
     prepared: list[dict[str, str]] = []
     for record in records:
         copied = dict(record)
-        copied["emails"] = _normalize_delivery_emails(
-            site_name,
-            str(record.get("website", "") or ""),
-            str(record.get("emails", "") or ""),
+        sanitized = sanitize_record(
+            copied,
+            _split_emails(str(record.get("emails", "") or "")),
         )
-        prepared.append(copied)
+        if sanitized is None:
+            continue
+        prepared.append(sanitized)
     return prepared
 
 
-def _normalize_delivery_emails(site_name: str, website: str, emails_text: str) -> str:
-    tokens = _split_emails(emails_text)
-    if site_name != "xlsximport":
-        tokens = [email for email in tokens if _is_delivery_email_allowed(email)]
-    if site_name in _STRICT_EMAIL_DOMAIN_SITES:
-        tokens = [email for email in tokens if _email_matches_website_domain(website, email)]
-        tokens = _prioritize_emails(tokens)[:10]
-    return "; ".join(tokens)
-
-
 def _split_emails(emails_text: str) -> list[str]:
-    result: list[str] = []
-    for raw in str(emails_text or "").replace(",", ";").split(";"):
-        value = raw.strip().lower()
-        if value and value not in result:
-            result.append(value)
-    return result
-
-
-def _is_delivery_email_allowed(email: str) -> bool:
-    if not _EMAIL_RE.fullmatch(email):
-        return False
-    domain = email.split("@", 1)[1]
-    if domain in _SUSPICIOUS_EMAIL_DOMAINS:
-        return False
-    if domain.startswith("example."):
-        return False
-    return True
+    return normalize_split_emails(str(emails_text or ""))
 
 
 def _is_delivery_qualified(record: dict[str, str]) -> bool:
@@ -579,51 +524,3 @@ def _registrable_domain(url: str) -> str:
     if suffix2 in _MULTI_LABEL_PUBLIC_SUFFIXES and len(labels) >= 3:
         return ".".join(labels[-3:])
     return suffix2
-
-
-def _domain_label(domain: str) -> str:
-    labels = [label for label in str(domain or "").split(".") if label]
-    if len(labels) < 2:
-        return str(domain or "")
-    suffix2 = ".".join(labels[-2:])
-    if suffix2 in _MULTI_LABEL_PUBLIC_SUFFIXES and len(labels) >= 3:
-        return labels[-3]
-    return labels[-2]
-
-
-def _email_matches_website_domain(website: str, email: str) -> bool:
-    website_domain = _registrable_domain(website)
-    if not website_domain:
-        return True
-    value = str(email or "").strip().lower()
-    if "@" not in value:
-        return False
-    email_domain = _registrable_domain(value.split("@", 1)[1])
-    if not email_domain:
-        return False
-    if website_domain == email_domain:
-        return True
-    website_label = _domain_label(website_domain)
-    email_label = _domain_label(email_domain)
-    if len(website_label) >= 4 and website_label in email_label:
-        return True
-    if len(email_label) >= 4 and email_label in website_label:
-        return True
-    return False
-
-
-def _prioritize_emails(emails: list[str]) -> list[str]:
-    unique = _split_emails(";".join(emails))
-    return sorted(unique, key=lambda item: (-_email_priority(item), unique.index(item)))
-
-
-def _email_priority(email: str) -> int:
-    local = str(email or "").split("@", 1)[0].strip().lower()
-    normalized = re.sub(r"[^a-z0-9]+", "", local)
-    if local in _PRIORITY_EMAIL_LOCAL_PARTS or normalized in _PRIORITY_EMAIL_LOCAL_PARTS:
-        return 100
-    if any(token in normalized for token in _PRIORITY_EMAIL_LOCAL_PARTS):
-        return 60
-    if re.fullmatch(r"[a-z]+", normalized):
-        return 20
-    return 10

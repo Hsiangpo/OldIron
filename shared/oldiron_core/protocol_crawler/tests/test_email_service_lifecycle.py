@@ -16,6 +16,7 @@ from shared.oldiron_core.fc_email.email_service import FirecrawlEmailSettings
 from shared.oldiron_core.fc_email.email_service import extract_domain
 from shared.oldiron_core.fc_email.client import HtmlPageResult
 from shared.oldiron_core.fc_email.llm_client import HtmlContactExtraction
+from shared.oldiron_core.fc_email.normalization import split_emails
 
 
 class _DummyCrawler:
@@ -74,11 +75,11 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
         pages = [
             HtmlPageResult(
                 url="https://example.co.jp/contact",
-                html="<html>info@example.co.jp ceo.personal@gmail.com</html>",
+                html="<html>info@alpha.co.jp ceo.personal@gmail.com</html>",
             )
         ]
         emails = service._extract_rule_emails("https://example.co.jp", pages)
-        self.assertEqual(["info@example.co.jp", "ceo.personal@gmail.com"], emails)
+        self.assertEqual(["info@alpha.co.jp", "ceo.personal@gmail.com"], emails)
 
     def test_extract_rule_emails_skips_directory_like_noise_page(self) -> None:
         service = FirecrawlEmailService(
@@ -118,7 +119,7 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
             HtmlContactExtraction(
                 company_name="Example",
                 representative="山田 太郎",
-                emails=["info@example.co.jp", "ceo.personal@gmail.com"],
+                emails=["info@alpha.co.jp", "ceo.personal@gmail.com"],
                 evidence_url="https://example.co.jp/contact",
                 evidence_quote="山田 太郎",
             )
@@ -128,7 +129,27 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
             homepage="https://example.co.jp",
             allow_llm_email_extraction=True,
         )
-        self.assertEqual(["info@example.co.jp", "ceo.personal@gmail.com"], result.emails)
+        self.assertEqual(["info@alpha.co.jp", "ceo.personal@gmail.com"], result.emails)
+
+    def test_split_emails_rejects_placeholder_and_url_embedded_noise(self) -> None:
+        values = [
+            "info@alpha.co.jp",
+            "xxxxx@yourdmain.co.jp",
+            "name@email.com",
+            "contact@sample-corp.co.jp",
+            "abcd@examplemail.jp",
+            "fsample@alpha.co.jp",
+            "exsample@alpha.co.jp",
+            "uff09example@alpha.co.jp",
+            "info@xxxxxx-bento.com",
+            "http://soumu@icco2012.com",
+            "https://kishubaiko.jp/info@kishubaiko.jp",
+            "ceo.personal@gmail.com",
+        ]
+        self.assertEqual(
+            ["info@alpha.co.jp", "ceo.personal@gmail.com"],
+            split_emails(values),
+        )
 
 
 if __name__ == "__main__":

@@ -1,32 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-07T03:20:13Z",
-  "locks": [
-    {
-      "lock_id": "lock-machine1-email-quality-hardening-20260407-1",
-      "status": "locked",
-      "path": "shared/oldiron_core/fc_email/email_service.py",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "task_id": "machine1-email-quality-hardening-20260407",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-07T03:20:13Z",
-      "heartbeat_at": "2026-04-07T03:20:13Z",
-      "expires_at": "2026-04-07T03:40:13Z",
-      "notes": "Harden email extraction normalization and delivery-stage filtering for malformed/placeholder emails across countries."
-    },
-    {
-      "lock_id": "lock-machine1-email-quality-hardening-20260407-2",
-      "status": "locked",
-      "path": "shared/oldiron_core/fc_email/normalization.py",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "task_id": "machine1-email-quality-hardening-20260407",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-07T03:20:13Z",
-      "heartbeat_at": "2026-04-07T03:20:13Z",
-      "expires_at": "2026-04-07T03:40:13Z",
-      "notes": "Harden email extraction normalization and delivery-stage filtering for malformed/placeholder emails across countries."
-    }
-  ]
+  "updated_at": "2026-04-07T03:57:17Z",
+  "locks": []
 }
