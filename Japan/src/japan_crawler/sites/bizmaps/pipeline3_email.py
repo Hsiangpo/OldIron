@@ -16,13 +16,14 @@ from oldiron_core.fc_email.email_service import (
     FirecrawlEmailService,
     FirecrawlEmailSettings,
 )
+from oldiron_core.protocol_crawler import SiteCrawlClient
+from oldiron_core.protocol_crawler import SiteCrawlConfig
 from .store import BizmapsStore
 
 logger = logging.getLogger("bizmaps.pipeline3")
 
 DEFAULT_CONCURRENCY = 64
-DEFAULT_COMMIT_INTERVAL = 20
-DEFAULT_BATCH_SIZE = 512
+DEFAULT_BATCH_SIZE = 24
 
 
 def run_pipeline_email(
@@ -37,44 +38,38 @@ def run_pipeline_email(
     """
     store = BizmapsStore(output_dir / "bizmaps_store.db")
 
-    # 筛选需要处理的公司 — 有 website 但还没处理过邮箱的
-    all_companies = _load_email_pending(store)
-    if max_items > 0:
-        all_companies = all_companies[:max_items]
-    if not all_companies:
+    batch_limit = _email_batch_limit(max_items, concurrency)
+    pending = store.get_email_pending(batch_limit)
+    if not pending:
         logger.info("没有需要邮箱提取的公司")
         return {"processed": 0, "found": 0}
 
-    logger.info("官网规则邮箱提取：待处理 %d 家, 并发=%d", len(all_companies), concurrency)
+    logger.info("官网规则邮箱提取：待处理 %d 家, 并发=%d, 批量=%d", len(pending), concurrency, batch_limit)
 
-    # 构建共享邮箱服务与协议爬虫客户端
     settings = _build_settings(output_dir)
     settings.validate()
 
-    # 使用协议爬虫客户端而不是 Firecrawl API
-    from oldiron_core.protocol_crawler import SiteCrawlClient, SiteCrawlConfig
-    crawler = SiteCrawlClient(SiteCrawlConfig(
-        proxy_url=os.getenv("HTTP_PROXY", "http://127.0.0.1:7897"),
-        timeout_seconds=20.0,
-    ))
-
     processed = 0
     found = 0
-    lock = threading.Lock()
-
-    batch_size = _resolve_batch_size(concurrency)
-    local = threading.local()
-    created_services: list[FirecrawlEmailService] = []
-    service_lock = threading.Lock()
+    thread_local = threading.local()
+    cleanup_lock = threading.Lock()
+    resources: list[tuple[FirecrawlEmailService, SiteCrawlClient]] = []
 
     def _get_service() -> FirecrawlEmailService:
-        svc = getattr(local, "service", None)
-        if svc is None:
-            svc = FirecrawlEmailService(settings, firecrawl_client=crawler)
-            local.service = svc
-            with service_lock:
-                created_services.append(svc)
-        return svc
+        service = getattr(thread_local, "service", None)
+        if service is not None:
+            return service
+        crawler = SiteCrawlClient(
+            SiteCrawlConfig(
+                proxy_url=os.getenv("HTTP_PROXY", "http://127.0.0.1:7897"),
+                timeout_seconds=20.0,
+            )
+        )
+        service = FirecrawlEmailService(settings, firecrawl_client=crawler)
+        thread_local.service = service
+        with cleanup_lock:
+            resources.append((service, crawler))
+        return service
 
     def _worker(company: dict) -> tuple[str, str, str, list[str], str]:
         name = company["company_name"]
@@ -95,49 +90,51 @@ def run_pipeline_email(
             return name, addr, website, [], ""
 
     try:
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            for batch_index, batch in enumerate(_iter_batches(all_companies, batch_size), start=1):
-                logger.info("Email 批次 %d：大小 %d", batch_index, len(batch))
-                futures = {executor.submit(_worker, c): c for c in batch}
-                for future in as_completed(futures):
-                    company = futures[future]
-                    try:
-                        name, addr, website, emails, rep = future.result()
-                        with lock:
-                            processed += 1
-                            store.save_email_result(name, addr, website, emails, rep)
-                            if emails:
-                                found += 1
-                            if processed <= 5 or processed % 20 == 0:
-                                logger.info(
-                                    "[Email %d/%d] %.1f%% %s → %s",
-                                    processed, len(all_companies),
-                                    processed / len(all_companies) * 100,
-                                    name[:30],
-                                    ", ".join(emails[:2]) if emails else "-",
-                                )
-                    except Exception as exc:
-                        with lock:
-                            processed += 1
-                        logger.warning("邮箱工作线程异常: %s", exc)
-    except KeyboardInterrupt:
-        logger.info("邮箱提取用户中断")
+        with ThreadPoolExecutor(max_workers=max(int(concurrency or 1), 1)) as executor:
+            futures = {executor.submit(_worker, item): item for item in pending}
+            for future in as_completed(futures):
+                company = futures[future]
+                try:
+                    name, addr, website, emails, rep = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("邮箱提取失败：%s | %s", company["company_name"], exc)
+                    name = company["company_name"]
+                    addr = company.get("address", "")
+                    website = company["website"]
+                    emails = []
+                    rep = ""
+                store.save_email_result(name, addr, website, emails, rep)
+                processed += 1
+                if emails:
+                    found += 1
+                if processed <= 5 or processed % 20 == 0:
+                    logger.info(
+                        "[Email %d/%d] %.1f%% %s → %s",
+                        processed, len(pending),
+                        processed / len(pending) * 100,
+                        name[:30],
+                        ", ".join(emails[:2]) if emails else "-",
+                    )
     finally:
-        for svc in created_services:
-            svc.close()
+        for service, crawler in resources:
+            try:
+                service.close()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                crawler.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     logger.info("Pipeline 3 完成：处理 %d 家, 找到邮箱 %d 家", processed, found)
     return {"processed": processed, "found": found}
 
 
-def _resolve_batch_size(concurrency: int) -> int:
-    return max(int(concurrency or 1) * 4, DEFAULT_BATCH_SIZE)
-
-
-def _iter_batches(items: list[dict], batch_size: int):
-    size = max(int(batch_size or 1), 1)
-    for index in range(0, len(items), size):
-        yield items[index:index + size]
+def _email_batch_limit(max_items: int, concurrency: int) -> int:
+    if max_items > 0:
+        return max_items
+    configured = int(os.getenv("BIZMAPS_EMAIL_BATCH_SIZE", str(DEFAULT_BATCH_SIZE)) or DEFAULT_BATCH_SIZE)
+    return min(max(int(concurrency or 1), 1), max(configured, 1))
 
 
 def _build_settings(output_dir: Path) -> FirecrawlEmailSettings:
@@ -155,8 +152,3 @@ def _build_settings(output_dir: Path) -> FirecrawlEmailSettings:
         llm_pick_count=int(os.getenv("FIRECRAWL_LLM_PICK_COUNT", "5")),
         extract_max_urls=int(os.getenv("FIRECRAWL_EXTRACT_MAX_URLS", "5")),
     )
-
-
-def _load_email_pending(store: BizmapsStore) -> list[dict]:
-    """加载需要邮箱提取的公司列表。"""
-    return store.get_email_pending()
