@@ -173,6 +173,19 @@ class OnecareerStore:
         row = conn.execute("SELECT COUNT(*) AS cnt FROM companies").fetchone()
         return int(row["cnt"] if row else 0)
 
+    def is_collection_complete(self) -> bool:
+        conn = self._conn()
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS total_count,
+                   SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count
+            FROM checkpoints
+            """
+        ).fetchone()
+        total_count = int(row["total_count"] if row and row["total_count"] is not None else 0)
+        done_count = int(row["done_count"] if row and row["done_count"] is not None else 0)
+        return total_count > 0 and total_count == done_count
+
     def get_checkpoint(self, scope: str) -> dict[str, Any] | None:
         conn = self._conn()
         row = conn.execute(

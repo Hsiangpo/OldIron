@@ -16,6 +16,7 @@ from .store import OnecareerStore
 
 LOGGER = logging.getLogger("onecareer.pipeline3")
 _DEFAULT_BATCH_SIZE = 24
+_MAX_SAFE_CONCURRENCY = 4
 
 
 def run_pipeline_email(
@@ -25,7 +26,10 @@ def run_pipeline_email(
     concurrency: int = 128,
 ) -> dict[str, int]:
     store = OnecareerStore(output_dir / "onecareer_store.db")
-    batch_limit = _email_batch_limit(max_items, concurrency)
+    worker_count = _effective_email_concurrency(concurrency)
+    if worker_count != max(int(concurrency or 1), 1):
+        LOGGER.info("OneCareer 邮箱提取并发已收敛：请求=%d 实际=%d", int(concurrency or 1), worker_count)
+    batch_limit = _email_batch_limit(max_items, worker_count)
     pending = store.get_email_pending(batch_limit)
     if not pending:
         LOGGER.info("没有需要提取邮箱的公司")
@@ -33,7 +37,7 @@ def run_pipeline_email(
 
     settings = _build_settings(output_dir)
     settings.validate()
-    LOGGER.info("OneCareer 邮箱提取：待处理 %d 家，并发=%d，批量=%d", len(pending), concurrency, batch_limit)
+    LOGGER.info("OneCareer 邮箱提取：待处理 %d 家，并发=%d，批量=%d", len(pending), worker_count, batch_limit)
 
     thread_local = threading.local()
     cleanup_lock = threading.Lock()
@@ -67,7 +71,7 @@ def run_pipeline_email(
     processed = 0
     found = 0
     try:
-        with ThreadPoolExecutor(max_workers=max(int(concurrency or 1), 1)) as executor:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {executor.submit(_worker, item): item for item in pending}
             for future in as_completed(futures):
                 company = futures[future]
@@ -98,6 +102,12 @@ def _email_batch_limit(max_items: int, concurrency: int) -> int:
         return max_items
     configured = int(os.getenv("ONECAREER_EMAIL_BATCH_SIZE", str(_DEFAULT_BATCH_SIZE)) or _DEFAULT_BATCH_SIZE)
     return min(max(int(concurrency or 1), 1), max(configured, 1))
+
+
+def _effective_email_concurrency(concurrency: int) -> int:
+    requested = max(int(concurrency or 1), 1)
+    configured_cap = int(os.getenv("ONECAREER_EMAIL_MAX_CONCURRENCY", str(_MAX_SAFE_CONCURRENCY)) or _MAX_SAFE_CONCURRENCY)
+    return min(requested, max(configured_cap, 1))
 
 
 def _build_settings(output_dir: Path) -> FirecrawlEmailSettings:

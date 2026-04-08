@@ -47,7 +47,7 @@ def run_onecareer(argv: list[str]) -> int:
     parser.add_argument("--max-items", type=int, default=0, help="P2/P3 最大处理公司数（0=全部）")
     parser.add_argument("--detail-workers", type=int, default=12, help="P1 详情页并发数")
     parser.add_argument("--gmap-workers", type=int, default=16, help="P2 GMap 并发数")
-    parser.add_argument("--email-workers", type=int, default=128, help="P3 邮箱提取并发数")
+    parser.add_argument("--email-workers", type=int, default=4, help="P3 邮箱提取并发数")
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args(argv)
 
@@ -98,9 +98,31 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
     stop_event = threading.Event()
     results: dict[str, dict] = {}
     errors: list[str] = []
+    resume_store = None
+    skip_p1 = False
+    try:
+        from .store import OnecareerStore
+
+        resume_store = OnecareerStore(output_dir / "onecareer_store.db")
+        skip_p1 = resume_store.is_collection_complete()
+        if skip_p1:
+            results["pipeline1_list"] = {
+                "categories_done": 0,
+                "new_companies": 0,
+                "total_companies": resume_store.get_company_count(),
+                "requests": 0,
+                "errors": 0,
+                "skipped": 1,
+            }
+    finally:
+        if resume_store is not None:
+            resume_store.close()
 
     def _p1_worker() -> None:
         try:
+            if skip_p1:
+                LOGGER.info("OneCareer P1 已完成，断点续跑时跳过列表链路，直接继续 P2/P3。")
+                return
             from .pipeline import run_pipeline_list
 
             stats = run_pipeline_list(
@@ -160,10 +182,13 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
     from .pipeline3_email import run_pipeline_email
 
     threads = [
-        threading.Thread(target=_p1_worker, name="onecareer-p1", daemon=True),
         threading.Thread(target=_loop_runner, args=("pipeline2_gmap", run_pipeline_gmap, args.gmap_workers), daemon=True),
         threading.Thread(target=_loop_runner, args=("pipeline3_email", run_pipeline_email, args.email_workers), daemon=True),
     ]
+    if skip_p1:
+        p1_done.set()
+    else:
+        threads.insert(0, threading.Thread(target=_p1_worker, name="onecareer-p1", daemon=True))
     for thread in threads:
         thread.start()
     for thread in threads:
