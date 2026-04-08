@@ -23,7 +23,7 @@ from .store import BizmapsStore
 logger = logging.getLogger("bizmaps.pipeline3")
 
 DEFAULT_CONCURRENCY = 64
-DEFAULT_BATCH_SIZE = 24
+DEFAULT_BATCH_SIZE = 64
 
 
 def run_pipeline_email(

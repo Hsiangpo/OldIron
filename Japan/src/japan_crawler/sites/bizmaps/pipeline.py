@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .client import BizmapsClient, PER_PAGE
@@ -23,6 +24,7 @@ from .parser import (
 from .store import BizmapsStore
 
 logger = logging.getLogger("bizmaps.pipeline")
+DEFAULT_PREF_WORKERS = 8
 
 
 def run_pipeline_list(
@@ -31,6 +33,7 @@ def run_pipeline_list(
     request_delay: float = 1.5,
     proxy: str | None = None,
     max_prefs: int = 0,
+    concurrency: int = DEFAULT_PREF_WORKERS,
 ) -> dict[str, int]:
     """执行 Pipeline 1：列表页全量采集。
 
@@ -61,39 +64,122 @@ def run_pipeline_list(
     pending = store.get_pending_prefs()
     if max_prefs > 0:
         pending = pending[:max_prefs]
+    worker_count = min(max(int(concurrency or 1), 1), max(len(pending), 1))
+    logger.info("P1 列表抓取：待处理都道府県 %d 个, 并发=%d", len(pending), worker_count)
 
     total_new = 0
     total_done = 0
+    total_requests = int(client.stats["requests"])
+    total_errors = int(client.stats["errors"])
 
-    for pref in pending:
-        result = _run_prefecture(client, store, pref, force_restart=False)
-        total_new += result["new"]
-        if result["completed"]:
-            total_done += 1
+    pending_stats = _run_prefecture_batch(
+        store,
+        pending,
+        request_delay=request_delay,
+        proxy=proxy,
+        concurrency=worker_count,
+        force_restart=False,
+    )
+    total_new += pending_stats["new"]
+    total_done += pending_stats["done"]
+    total_requests += pending_stats["requests"]
+    total_errors += pending_stats["errors"]
 
     retryable_errors = store.get_prefs_by_status("error")
     if max_prefs > 0:
         retryable_errors = retryable_errors[:max_prefs]
     if retryable_errors:
         logger.info("检测到 %d 个 error 都道府県，重置后自动补跑一次", len(retryable_errors))
-    for pref in retryable_errors:
-        result = _run_prefecture(client, store, pref, force_restart=True)
-        total_new += result["new"]
-        if result["completed"]:
-            total_done += 1
+    retry_stats = _run_prefecture_batch(
+        store,
+        retryable_errors,
+        request_delay=request_delay,
+        proxy=proxy,
+        concurrency=worker_count,
+        force_restart=True,
+    )
+    total_new += retry_stats["new"]
+    total_done += retry_stats["done"]
+    total_requests += retry_stats["requests"]
+    total_errors += retry_stats["errors"]
 
     total_companies = store.get_company_count()
-    stats = client.stats
     logger.info(
         "Pipeline 1 小结: %d 个都道府県完成, 新增 %d 家, 库内总计 %d 家, 请求 %d 次, 错误 %d 次",
-        total_done, total_new, total_companies, stats["requests"], stats["errors"],
+        total_done, total_new, total_companies, total_requests, total_errors,
     )
     return {
         "prefs_done": total_done,
         "new_companies": total_new,
         "total_companies": total_companies,
-        **stats,
+        "requests": total_requests,
+        "errors": total_errors,
     }
+
+
+def _run_prefecture_batch(
+    store: BizmapsStore,
+    prefs: list[dict[str, object]],
+    *,
+    request_delay: float,
+    proxy: str | None,
+    concurrency: int,
+    force_restart: bool,
+) -> dict[str, int]:
+    """按都道府県并发执行采集，汇总请求与入库统计。"""
+    if not prefs:
+        return {"new": 0, "done": 0, "requests": 0, "errors": 0}
+
+    stats = {"new": 0, "done": 0, "requests": 0, "errors": 0}
+    worker_count = min(max(int(concurrency or 1), 1), len(prefs))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(
+                _run_prefecture_worker,
+                store,
+                pref,
+                request_delay=request_delay,
+                proxy=proxy,
+                force_restart=force_restart,
+            ): pref
+            for pref in prefs
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            stats["new"] += result["new"]
+            stats["done"] += result["done"]
+            stats["requests"] += result["requests"]
+            stats["errors"] += result["errors"]
+    return stats
+
+
+def _run_prefecture_worker(
+    store: BizmapsStore,
+    pref: dict[str, object],
+    *,
+    request_delay: float,
+    proxy: str | None,
+    force_restart: bool,
+) -> dict[str, int]:
+    """单个都道府県任务包装，给并发调度层返回统一统计。"""
+    client = BizmapsClient(request_delay=request_delay, proxy=proxy)
+    pref_name = str(pref.get("name") or pref.get("pref_code") or "")
+    try:
+        result = _run_prefecture(client, store, pref, force_restart=force_restart)
+        return {
+            "new": int(result["new"]),
+            "done": 1 if result["completed"] else 0,
+            "requests": int(client.stats["requests"]),
+            "errors": int(client.stats["errors"]),
+        }
+    except Exception:
+        logger.exception("都道府県采集线程异常：%s", pref_name)
+        return {
+            "new": 0,
+            "done": 0,
+            "requests": int(client.stats["requests"]),
+            "errors": int(client.stats["errors"]) + 1,
+        }
 
 
 def _run_prefecture(

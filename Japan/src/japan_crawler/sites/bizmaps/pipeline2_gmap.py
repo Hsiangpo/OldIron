@@ -30,7 +30,7 @@ BLOCKED_HOST_HINTS = (
     "hotpepper.jp", "gnavi.co.jp", "rakuten.co.jp", "amazon.co.jp",
 )
 
-DEFAULT_CONCURRENCY = 16
+DEFAULT_CONCURRENCY = 64
 DEFAULT_COMMIT_INTERVAL = 50
 
 

@@ -42,16 +42,20 @@ def run_bizmaps(argv: list[str]) -> int:
         help="P1 最大采集都道府県数（0=全部47个）",
     )
     parser.add_argument(
+        "--list-workers", type=int, default=8,
+        help="P1 列表抓取并发数（默认 8）",
+    )
+    parser.add_argument(
         "--max-items", type=int, default=0,
         help="P2/P3 最大处理公司数（0=全部）",
     )
     parser.add_argument(
-        "--gmap-workers", type=int, default=16,
-        help="P2 GMap 并发数（默认 16）",
+        "--gmap-workers", type=int, default=64,
+        help="P2 GMap 并发数（默认 64）",
     )
     parser.add_argument(
-        "--email-workers", type=int, default=128,
-        help="P3 邮箱提取并发数（默认 128）",
+        "--email-workers", type=int, default=64,
+        help="P3 邮箱提取并发数（默认 64）",
     )
     parser.add_argument(
         "--log-level", type=str, default="INFO",
@@ -87,6 +91,7 @@ def run_bizmaps(argv: list[str]) -> int:
                 request_delay=args.delay,
                 proxy=proxy,
                 max_prefs=args.max_prefs,
+                concurrency=args.list_workers,
             )
             results["pipeline1_list"] = stats
 
@@ -147,6 +152,7 @@ def _run_all_concurrent(output_dir: Path, proxy: str, args) -> int:
                 request_delay=args.delay,
                 proxy=proxy,
                 max_prefs=args.max_prefs,
+                concurrency=args.list_workers,
             )
             results["pipeline1_list"] = stats
             logger.info("P1（列表抓取）完成: %s", stats)
