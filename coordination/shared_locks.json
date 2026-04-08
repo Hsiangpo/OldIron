@@ -1,19 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T15:50:42Z",
-  "locks": [
-    {
-      "lock_id": "lock-20260408-llm-doc-fix-1",
-      "status": "locked",
-      "path": "AGENTS.md",
-      "machine": "macos-local",
-      "agent": "Codex",
-      "task_id": "20260408-llm-doc-fix",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-08T15:50:42Z",
-      "heartbeat_at": "2026-04-08T15:50:42Z",
-      "expires_at": "2026-04-08T16:35:42Z",
-      "notes": "Remove misleading hardcoded active LLM provider statements from docs/examples"
-    }
-  ]
+  "updated_at": "2026-04-08T15:53:43Z",
+  "locks": []
 }
