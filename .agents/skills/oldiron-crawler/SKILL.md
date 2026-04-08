@@ -81,6 +81,11 @@ At the start of substantial work:
      - the user's latest explicit provider-switch instruction
      - that machine's current local country `.env`
    - if repository docs/examples/defaults disagree, do not present any one of them as the active provider until the user confirms the intended one
+   - current active approved provider in this repo is:
+     - `LLM_BASE_URL=https://gpt-agent.cc/v1`
+     - `LLM_MODEL=claude-sonnet-4-6`
+     - `LLM_REASONING_EFFORT=`
+     - `LLM_API_STYLE=chat`
    - do not write `LLM_API_KEY` into tracked files; keep it only in local `.env`
 4. If protocol exploration is needed, ensure the workflow follows the repository's crawler tooling expectations.
 5. Read `coordination/active_tasks.json` and `coordination/shared_locks.json` before substantial edits.

@@ -13,6 +13,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from oldiron_core.fc_email.email_service import (
+    DEFAULT_LLM_API_STYLE,
+    DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_REASONING_EFFORT,
     FirecrawlEmailService,
     FirecrawlEmailSettings,
 )
@@ -140,10 +144,10 @@ def _build_settings(output_dir: Path) -> FirecrawlEmailSettings:
         project_root=output_dir.parent,
         crawl_backend="protocol",
         llm_api_key=os.getenv("LLM_API_KEY", ""),
-        llm_base_url=os.getenv("LLM_BASE_URL", "https://cc.gpteam.top/v1"),
-        llm_model=os.getenv("LLM_MODEL", "gpt-5.1-codex-mini"),
-        llm_reasoning_effort=os.getenv("LLM_REASONING_EFFORT", "medium"),
-        llm_api_style=os.getenv("LLM_API_STYLE", "auto"),
+        llm_base_url=os.getenv("LLM_BASE_URL", DEFAULT_LLM_BASE_URL),
+        llm_model=os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL),
+        llm_reasoning_effort=os.getenv("LLM_REASONING_EFFORT", DEFAULT_LLM_REASONING_EFFORT),
+        llm_api_style=os.getenv("LLM_API_STYLE", DEFAULT_LLM_API_STYLE),
         llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
         prefilter_limit=int(os.getenv("FIRECRAWL_PREFILTER_LIMIT", "12")),
         llm_pick_count=int(os.getenv("FIRECRAWL_LLM_PICK_COUNT", "5")),

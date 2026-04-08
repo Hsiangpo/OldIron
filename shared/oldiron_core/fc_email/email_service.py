@@ -27,6 +27,10 @@ from .normalization import split_emails
 
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_LLM_BASE_URL = "https://gpt-agent.cc/v1"
+DEFAULT_LLM_MODEL = "claude-sonnet-4-6"
+DEFAULT_LLM_REASONING_EFFORT = ""
+DEFAULT_LLM_API_STYLE = "chat"
 
 _URL_KEYWORDS = {
     "contact": 100,
@@ -223,10 +227,10 @@ class FirecrawlEmailSettings:
     key_cooldown_seconds: int = 90
     key_failure_threshold: int = 5
     llm_api_key: str = ""
-    llm_base_url: str = "https://cc.gpteam.top/v1"
-    llm_model: str = "gpt-5.1-codex-mini"
-    llm_reasoning_effort: str = "medium"
-    llm_api_style: str = "auto"
+    llm_base_url: str = DEFAULT_LLM_BASE_URL
+    llm_model: str = DEFAULT_LLM_MODEL
+    llm_reasoning_effort: str = DEFAULT_LLM_REASONING_EFFORT
+    llm_api_style: str = DEFAULT_LLM_API_STYLE
     llm_timeout_seconds: float = 120.0
     learned_keyword_file: Path = Path("output/cache/high_value_url_keywords.json")
     map_limit: int = 200

@@ -6,6 +6,11 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from shared.oldiron_core.fc_email.email_service import DEFAULT_LLM_API_STYLE
+from shared.oldiron_core.fc_email.email_service import DEFAULT_LLM_BASE_URL
+from shared.oldiron_core.fc_email.email_service import DEFAULT_LLM_MODEL
+from shared.oldiron_core.fc_email.email_service import DEFAULT_LLM_REASONING_EFFORT
+
 
 def _env_str(key: str, default: str = "") -> str:
     return os.environ.get(key, default).strip()
@@ -61,10 +66,10 @@ class CompanyNameConfig:
 
     # LLM
     llm_api_key: str = ""
-    llm_base_url: str = "https://cc.gpteam.top/v1"
-    llm_model: str = "gpt-5.1-codex-mini"
-    llm_reasoning_effort: str = "medium"
-    llm_api_style: str = "auto"
+    llm_base_url: str = DEFAULT_LLM_BASE_URL
+    llm_model: str = DEFAULT_LLM_MODEL
+    llm_reasoning_effort: str = DEFAULT_LLM_REASONING_EFFORT
+    llm_api_style: str = DEFAULT_LLM_API_STYLE
     llm_timeout_seconds: float = 120.0
 
     # 协议爬虫
@@ -117,10 +122,10 @@ class CompanyNameConfig:
             firecrawl_zero_retry_seconds=_env_float("FIRECRAWL_ZERO_RETRY_SECONDS", 43200.0),
             firecrawl_contact_form_retry_seconds=_env_float("FIRECRAWL_CONTACT_FORM_RETRY_SECONDS", 259200.0),
             llm_api_key=_env_str("LLM_API_KEY"),
-            llm_base_url=_env_str("LLM_BASE_URL", "https://cc.gpteam.top/v1"),
-            llm_model=_env_str("LLM_MODEL", "gpt-5.1-codex-mini"),
-            llm_reasoning_effort=_env_str("LLM_REASONING_EFFORT", "medium"),
-            llm_api_style=_env_str("LLM_API_STYLE", "auto"),
+            llm_base_url=_env_str("LLM_BASE_URL", DEFAULT_LLM_BASE_URL),
+            llm_model=_env_str("LLM_MODEL", DEFAULT_LLM_MODEL),
+            llm_reasoning_effort=_env_str("LLM_REASONING_EFFORT", DEFAULT_LLM_REASONING_EFFORT),
+            llm_api_style=_env_str("LLM_API_STYLE", DEFAULT_LLM_API_STYLE),
             llm_timeout_seconds=_env_float("LLM_TIMEOUT_SECONDS", 120.0),
             crawl_backend=_env_str("CRAWL_BACKEND", "protocol"),
         )

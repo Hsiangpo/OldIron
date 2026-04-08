@@ -38,6 +38,11 @@
     - the user's latest explicit provider-switch instruction
     - that machine's current local country `.env`
   - if docs/examples/defaults disagree, stop claiming a repo-wide active provider until the user confirms the intended one
+  - current active provider on this repo is:
+    - `LLM_BASE_URL=https://gpt-agent.cc/v1`
+    - `LLM_MODEL=claude-sonnet-4-6`
+    - `LLM_REASONING_EFFORT=`
+    - `LLM_API_STYLE=chat`
   - after a provider switch, update all affected runtime `.env` files on every runtime machine before resuming processes
 - Cross-machine sync rule:
   - Code, docs, tests, and normal source changes must be synced by Git only.
