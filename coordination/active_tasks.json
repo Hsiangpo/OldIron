@@ -1,5 +1,36 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T11:34:50Z",
-  "tasks": []
+  "updated_at": "2026-04-08T11:36:39Z",
+  "tasks": [
+    {
+      "task_id": "20260408-dnb-urllib3",
+      "status": "in_progress",
+      "machine": "macos-local",
+      "agent": "Codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "UnitedStates",
+        "Brazil",
+        "Denmark",
+        "Japan",
+        "England",
+        "Finland"
+      ],
+      "planned_files": [
+        "UnitedStates/requirements.txt",
+        "Brazil/requirements.txt",
+        "Denmark/requirements.txt",
+        "Japan/requirements.txt",
+        "England/requirements.txt",
+        "Finland/requirements.txt"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-04-08T11:36:39Z",
+      "last_heartbeat_at": "2026-04-08T11:36:39Z",
+      "notes": "Add urllib3 runtime dependency for shared LLM client import"
+    }
+  ]
 }
