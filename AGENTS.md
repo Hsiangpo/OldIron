@@ -33,6 +33,15 @@
   - this repo may switch between approved LLM providers over time; do not hardcode the assumption that only one provider exists
   - the active provider must be recorded in both `AGENTS.md` and the relevant skill doc when the user explicitly confirms a repo-wide switch
   - API keys must stay only in local `.env` files; never write LLM API keys into tracked docs, code comments, commits, or delivery outputs
+  - current user-confirmed repo-wide provider target is:
+    - `LLM_BASE_URL=https://gpt-agent.cc/v1`
+    - `LLM_MODEL=claude-sonnet-4-6`
+    - `LLM_REASONING_EFFORT=` (empty)
+    - `LLM_API_STYLE=auto`
+  - live validation status:
+    - the provider path is connected in code
+    - UnitedStates local `.env` was switched and returned a real success payload
+    - Brazil local `.env` was switched and returned a real success payload
   - do not treat committed docs, `.env.example`, README snippets, or code fallback defaults as the source of truth for the current runtime provider
   - for a machine that is actually running crawler processes, the source of truth is:
     - the user's latest explicit provider-switch instruction

@@ -30,7 +30,7 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_LLM_BASE_URL = "https://gpt-agent.cc/v1"
 DEFAULT_LLM_MODEL = "claude-sonnet-4-6"
 DEFAULT_LLM_REASONING_EFFORT = ""
-DEFAULT_LLM_API_STYLE = "chat"
+DEFAULT_LLM_API_STYLE = "auto"
 
 _URL_KEYWORDS = {
     "contact": 100,

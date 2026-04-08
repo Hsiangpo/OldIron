@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T16:08:45Z",
+  "updated_at": "2026-04-08T16:15:23Z",
   "locks": [
     {
       "lock_id": "lock-20260408-llm-provider-confirm-1",
@@ -11,8 +11,8 @@
       "task_id": "20260408-llm-provider-confirm",
       "github_ref": "not-created",
       "locked_at": "2026-04-08T16:08:45Z",
-      "heartbeat_at": "2026-04-08T16:08:45Z",
-      "expires_at": "2026-04-08T16:53:45Z",
+      "heartbeat_at": "2026-04-08T16:15:23Z",
+      "expires_at": "2026-04-08T16:35:23Z",
       "notes": "Record confirmed repo-wide LLM provider after live validation"
     }
   ]

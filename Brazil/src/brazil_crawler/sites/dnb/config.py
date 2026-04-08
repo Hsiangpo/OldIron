@@ -6,6 +6,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from shared.oldiron_core.fc_email.email_service import DEFAULT_LLM_API_STYLE
+from shared.oldiron_core.fc_email.email_service import DEFAULT_LLM_BASE_URL
+from shared.oldiron_core.fc_email.email_service import DEFAULT_LLM_MODEL
+from shared.oldiron_core.fc_email.email_service import DEFAULT_LLM_REASONING_EFFORT
+
 
 @dataclass(slots=True)
 class DnbBrConfig:
@@ -27,8 +32,8 @@ class DnbBrConfig:
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_model: str = ""
-    llm_reasoning_effort: str = "medium"
-    llm_api_style: str = "auto"
+    llm_reasoning_effort: str = DEFAULT_LLM_REASONING_EFFORT
+    llm_api_style: str = DEFAULT_LLM_API_STYLE
     llm_timeout_seconds: float = 120.0
 
     @classmethod
@@ -61,10 +66,10 @@ class DnbBrConfig:
                 if item.strip()
             ),
             llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
-            llm_base_url=os.getenv("LLM_BASE_URL", "https://api.gpteamservices.com/v1").strip(),
-            llm_model=os.getenv("LLM_MODEL", "gpt-5.4-mini").strip(),
-            llm_reasoning_effort=os.getenv("LLM_REASONING_EFFORT", "medium").strip(),
-            llm_api_style=os.getenv("LLM_API_STYLE", "auto").strip() or "auto",
+            llm_base_url=os.getenv("LLM_BASE_URL", DEFAULT_LLM_BASE_URL).strip(),
+            llm_model=os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL).strip(),
+            llm_reasoning_effort=os.getenv("LLM_REASONING_EFFORT", DEFAULT_LLM_REASONING_EFFORT).strip(),
+            llm_api_style=os.getenv("LLM_API_STYLE", DEFAULT_LLM_API_STYLE).strip() or DEFAULT_LLM_API_STYLE,
             llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
         )
 
