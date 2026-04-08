@@ -85,3 +85,4 @@ def _site_worker(store: DnbUsStore, settings: FirecrawlEmailSettings, stop_event
                     LOGGER.error("DNB 官网 fail_site_task 也失败了：%s | %s", task.duns, fail_exc)
     finally:
         service.close()
+        crawler.close()

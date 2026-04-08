@@ -192,6 +192,31 @@ class TestSitemap(unittest.TestCase):
 # ──────────────────────────────────────────────────────
 
 class TestSiteCrawlClient(unittest.TestCase):
+    @patch("oldiron_core.protocol_crawler.client._is_unavailable_local_proxy")
+    def test_init_disables_unavailable_local_proxy(self, mock_proxy_down) -> None:
+        mock_proxy_down.return_value = True
+        client = SiteCrawlClient(SiteCrawlConfig(proxy_url="http://127.0.0.1:7897"))
+
+        self.assertFalse(client._using_proxy)
+
+    @patch("oldiron_core.protocol_crawler.client._is_unavailable_local_proxy")
+    def test_dead_local_proxy_error_switches_to_direct(self, mock_proxy_down) -> None:
+        mock_proxy_down.return_value = False
+        client = SiteCrawlClient(SiteCrawlConfig(proxy_url="http://127.0.0.1:7897"))
+        reset_calls: list[bool] = []
+
+        def _capture_reset(*, use_proxy: bool) -> None:
+            client._using_proxy = use_proxy
+            reset_calls.append(use_proxy)
+
+        client._reset_session = _capture_reset  # type: ignore[method-assign]
+        switched = client._disable_unavailable_local_proxy(
+            RuntimeError("curl: (7) Failed to connect to 127.0.0.1 port 7897")
+        )
+
+        self.assertTrue(switched)
+        self.assertEqual([False], reset_calls)
+
     @patch("oldiron_core.protocol_crawler.client.discover_sitemap_urls")
     @patch("oldiron_core.protocol_crawler.client.extract_same_site_links")
     def test_map_site_uses_sitemap_first(self, mock_links, mock_sitemap) -> None:

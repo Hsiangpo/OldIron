@@ -1,45 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T11:30:29Z",
-  "locks": [
-    {
-      "lock_id": "lock-20260408-dnb-nofile-1",
-      "status": "locked",
-      "path": "shared/oldiron_core/fc_email/email_service.py",
-      "machine": "macos-local",
-      "agent": "Codex",
-      "task_id": "20260408-dnb-nofile",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-08T11:30:29Z",
-      "heartbeat_at": "2026-04-08T11:30:29Z",
-      "expires_at": "2026-04-08T12:30:29Z",
-      "notes": "Fix DNB too many open files and dead local dl handling"
-    },
-    {
-      "lock_id": "lock-20260408-dnb-nofile-2",
-      "status": "locked",
-      "path": "shared/oldiron_core/fc_email/llm_client.py",
-      "machine": "macos-local",
-      "agent": "Codex",
-      "task_id": "20260408-dnb-nofile",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-08T11:30:29Z",
-      "heartbeat_at": "2026-04-08T11:30:29Z",
-      "expires_at": "2026-04-08T12:30:29Z",
-      "notes": "Fix DNB too many open files and dead local dl handling"
-    },
-    {
-      "lock_id": "lock-20260408-dnb-nofile-3",
-      "status": "locked",
-      "path": "shared/oldiron_core/protocol_crawler/client.py",
-      "machine": "macos-local",
-      "agent": "Codex",
-      "task_id": "20260408-dnb-nofile",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-08T11:30:29Z",
-      "heartbeat_at": "2026-04-08T11:30:29Z",
-      "expires_at": "2026-04-08T12:30:29Z",
-      "notes": "Fix DNB too many open files and dead local dl handling"
-    }
-  ]
+  "updated_at": "2026-04-08T11:34:50Z",
+  "locks": []
 }

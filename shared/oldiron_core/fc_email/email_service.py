@@ -273,6 +273,13 @@ class FirecrawlEmailService:
         self._llm: EmailUrlLlmClient | None = None
 
     def close(self) -> None:
+        if self._llm is not None and hasattr(self._llm, "close"):
+            try:
+                self._llm.close()
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                self._llm = None
         if self._owns_key_pool and self._key_pool is not None:
             self._key_pool.close()
         if self._owns_firecrawl and hasattr(self._firecrawl, "close"):

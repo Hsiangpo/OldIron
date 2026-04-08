@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -21,7 +22,25 @@ from .store import DnbBrStore
 ROOT = Path(__file__).resolve().parents[4]
 
 
+def _raise_nofile_limit() -> None:
+    """提高文件句柄上限，支撑 DNB 多线程网络请求。"""
+    if os.name == "nt":
+        return
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = 65536
+        if hard != resource.RLIM_INFINITY:
+            target = min(target, hard)
+        if soft < target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except Exception:  # noqa: BLE001
+        return
+
+
 def run_dnb(argv: list[str]) -> int:
+    _raise_nofile_limit()
     parser = argparse.ArgumentParser(description="DNB 巴西企业采集")
     parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email"])
     parser.add_argument("--segment-workers", type=int, default=3)

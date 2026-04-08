@@ -7,7 +7,9 @@ firecrawl_client 参数。
 from __future__ import annotations
 
 import logging
+import socket
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from curl_cffi import requests as cffi_requests
 
@@ -37,6 +39,13 @@ _TEXT_CONTENT_TYPE_HINTS = (
     "application/xml",
     "text/xml",
     "text/plain",
+)
+_LOCAL_PROXY_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_LOCAL_PROXY_ERROR_HINTS = (
+    "failed to connect",
+    "could not connect to server",
+    "connection refused",
+    "curl: (7)",
 )
 
 
@@ -73,17 +82,35 @@ class SiteCrawlClient:
 
     def __init__(self, config: SiteCrawlConfig | None = None) -> None:
         self._config = config or SiteCrawlConfig()
+        self._proxy_url = str(self._config.proxy_url or "").strip()
+        self._using_proxy = bool(self._proxy_url)
+        if self._using_proxy and _is_unavailable_local_proxy(self._proxy_url):
+            LOGGER.warning("协议爬虫本地 dl 未监听，改走直连：proxy=%s", self._proxy_url)
+            self._using_proxy = False
+        self._session = self._build_session(use_proxy=self._using_proxy)
+
+    def _build_session(self, *, use_proxy: bool) -> cffi_requests.Session:
         proxies = {}
-        if self._config.proxy_url:
+        if use_proxy and self._proxy_url:
             proxies = {
-                "http": self._config.proxy_url,
-                "https": self._config.proxy_url,
+                "http": self._proxy_url,
+                "https": self._proxy_url,
             }
-        self._session = cffi_requests.Session(
+        session = cffi_requests.Session(
             impersonate=self._config.impersonate,
             proxies=proxies,
         )
-        self._session.headers.update(self._config.default_headers)
+        session.trust_env = False
+        session.headers.update(self._config.default_headers)
+        return session
+
+    def _reset_session(self, *, use_proxy: bool) -> None:
+        try:
+            self._session.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._using_proxy = use_proxy
+        self._session = self._build_session(use_proxy=use_proxy)
 
     def map_site(
         self,
@@ -201,6 +228,8 @@ class SiteCrawlClient:
                 return ""
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                if self._disable_unavailable_local_proxy(exc):
+                    continue
                 LOGGER.debug(
                     "协议爬虫请求异常：url=%s attempt=%s/%s error=%s",
                     url, attempt + 1, attempts, exc,
@@ -219,6 +248,15 @@ class SiteCrawlClient:
                 return self._fetch_html(fallback_url)
             LOGGER.warning("协议爬虫请求最终失败：url=%s error=%s", url, last_error)
         return ""
+
+    def _disable_unavailable_local_proxy(self, error: Exception) -> bool:
+        if not self._using_proxy:
+            return False
+        if not _is_dead_local_proxy_error(self._proxy_url, error):
+            return False
+        LOGGER.warning("协议爬虫本地 dl 不可用，回退直连：proxy=%s error=%s", self._proxy_url, error)
+        self._reset_session(use_proxy=False)
+        return True
 
 
 def _is_supported_page_response(url: str, content_type: str) -> bool:
@@ -246,3 +284,33 @@ def _http_fallback_url(url: str, error: Exception) -> str:
     if not any(hint in text for hint in _HTTP_FALLBACK_ERROR_HINTS):
         return ""
     return str(url).replace("https://", "http://", 1)
+
+
+def _local_proxy_address(proxy_url: str) -> tuple[str, int] | None:
+    text = str(proxy_url or "").strip()
+    if not text:
+        return None
+    parsed = urlparse(text if "://" in text else f"http://{text}")
+    host = str(parsed.hostname or "").strip().lower()
+    if host not in _LOCAL_PROXY_HOSTS:
+        return None
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return host, int(port)
+
+
+def _is_unavailable_local_proxy(proxy_url: str) -> bool:
+    address = _local_proxy_address(proxy_url)
+    if address is None:
+        return False
+    try:
+        with socket.create_connection(address, timeout=0.25):
+            return False
+    except OSError:
+        return True
+
+
+def _is_dead_local_proxy_error(proxy_url: str, error: Exception) -> bool:
+    if _local_proxy_address(proxy_url) is None:
+        return False
+    lowered = str(error or "").lower()
+    return any(hint in lowered for hint in _LOCAL_PROXY_ERROR_HINTS)

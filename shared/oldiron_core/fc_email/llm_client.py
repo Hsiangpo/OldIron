@@ -148,6 +148,13 @@ class EmailUrlLlmClient:
             client_kwargs["verify"] = False
         return httpx_module.Client(**client_kwargs)
 
+    def close(self) -> None:
+        """关闭底层 HTTP 连接池。"""
+        try:
+            self._http_client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
     def pick_candidate_urls(
         self,
         *,

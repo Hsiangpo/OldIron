@@ -42,9 +42,13 @@ class _DummyKeyPool:
 class _DummyLlm:
     def __init__(self, result: HtmlContactExtraction) -> None:
         self._result = result
+        self.closed = 0
 
     def extract_contacts_from_html(self, **_: object) -> HtmlContactExtraction:
         return self._result
+
+    def close(self) -> None:
+        self.closed += 1
 
 
 class _CaptureLlm:
@@ -96,6 +100,7 @@ class _FakeHttpStreamClient:
         self.last_url: str | None = None
         self.last_headers: dict[str, str] | None = None
         self.last_json: dict[str, object] | None = None
+        self.closed = 0
 
     def stream(self, method: str, url: str, *, headers: dict[str, str], json: dict[str, object]) -> _FakeStreamResponse:
         self.last_method = method
@@ -103,6 +108,9 @@ class _FakeHttpStreamClient:
         self.last_headers = dict(headers)
         self.last_json = dict(json)
         return _FakeStreamResponse(self._lines)
+
+    def close(self) -> None:
+        self.closed += 1
 
 
 class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
@@ -162,6 +170,14 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
         text = client._call_responses_streaming_api({"model": "gpt-5.1-codex-mini", "input": "Say ok"})
         self.assertEqual("榛葉 稔", text)
 
+    def test_llm_client_close_closes_http_client(self) -> None:
+        client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
+        client._http_client = _FakeHttpStreamClient([])
+
+        client.close()
+
+        self.assertEqual(1, client._http_client.closed)
+
     def test_close_does_not_close_injected_crawler_or_key_pool(self) -> None:
         crawler = _DummyCrawler()
         key_pool = _DummyKeyPool()
@@ -176,6 +192,30 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
         service.close()
         self.assertEqual(0, crawler.closed)
         self.assertEqual(0, key_pool.closed)
+
+    def test_close_closes_owned_llm_client(self) -> None:
+        service = FirecrawlEmailService(
+            FirecrawlEmailSettings(
+                llm_api_key="x",
+                llm_model="gpt-5.4-mini",
+            ),
+            key_pool=_DummyKeyPool(),
+            firecrawl_client=_DummyCrawler(),
+        )
+        llm = _DummyLlm(
+            HtmlContactExtraction(
+                company_name="Example",
+                representative="山田 太郎",
+                emails=[],
+                evidence_url="https://example.co.jp/contact",
+                evidence_quote="山田 太郎",
+            )
+        )
+        service._llm = llm  # type: ignore[assignment]
+
+        service.close()
+
+        self.assertEqual(1, llm.closed)
 
     def test_extract_domain_uses_registrable_domain_for_subdomain(self) -> None:
         self.assertEqual("aig.com", extract_domain("http://www-154.aig.com/"))
