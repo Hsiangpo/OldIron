@@ -1,5 +1,32 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T01:53:14Z",
-  "locks": []
+  "updated_at": "2026-04-08T03:19:23Z",
+  "locks": [
+    {
+      "lock_id": "lock-2026-04-07-llm-stream-decode-1",
+      "status": "locked",
+      "path": "shared/oldiron_core/fc_email/llm_client.py",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "task_id": "2026-04-07-llm-stream-decode",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-08T03:19:23Z",
+      "heartbeat_at": "2026-04-08T03:19:23Z",
+      "expires_at": "2026-04-08T03:39:23Z",
+      "notes": "Fix cc.gpteam.top streaming decode mojibake; verify Japan onecareer/pasonacareer/openwork runtime"
+    },
+    {
+      "lock_id": "lock-2026-04-07-llm-stream-decode-2",
+      "status": "locked",
+      "path": "shared/oldiron_core/protocol_crawler/tests/test_email_service_lifecycle.py",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "task_id": "2026-04-07-llm-stream-decode",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-08T03:19:23Z",
+      "heartbeat_at": "2026-04-08T03:19:23Z",
+      "expires_at": "2026-04-08T03:39:23Z",
+      "notes": "Fix cc.gpteam.top streaming decode mojibake; verify Japan onecareer/pasonacareer/openwork runtime"
+    }
+  ]
 }

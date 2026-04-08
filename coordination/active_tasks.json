@@ -1,5 +1,27 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T01:53:14Z",
-  "tasks": []
+  "updated_at": "2026-04-08T03:19:23Z",
+  "tasks": [
+    {
+      "task_id": "2026-04-07-llm-stream-decode",
+      "status": "in_progress",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "shared llm decode + japan runtime check"
+      ],
+      "planned_files": [],
+      "shared_lock_ids": [
+        "lock-2026-04-07-llm-stream-decode-1",
+        "lock-2026-04-07-llm-stream-decode-2"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-08T03:19:23Z",
+      "last_heartbeat_at": "2026-04-08T03:19:23Z",
+      "notes": "Fix cc.gpteam.top streaming decode mojibake; verify Japan onecareer/pasonacareer/openwork runtime"
+    }
+  ]
 }
