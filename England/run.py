@@ -9,10 +9,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
+SHARED_PARENT = ROOT.parent  # OldIron/ — 包含 shared/oldiron_core
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(SHARED_PARENT) not in sys.path:
+    sys.path.insert(0, str(SHARED_PARENT))
 # 注入 shared/ 目录，以便 import oldiron_core
-SHARED_DIR = ROOT.parent / "shared"
+SHARED_DIR = SHARED_PARENT / "shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
