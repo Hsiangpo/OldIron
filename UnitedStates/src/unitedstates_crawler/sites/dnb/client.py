@@ -12,12 +12,15 @@ import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from html import unescape
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from urllib.parse import urlparse
 
 from curl_cffi import CurlHttpVersion
 from curl_cffi import requests as cffi_requests
+from oldiron_core.dnb_cookie_cache import load_dnb_cookie_snapshot
+from oldiron_core.dnb_cookie_cache import save_dnb_cookie_snapshot
 from playwright.sync_api import sync_playwright
 
 
@@ -28,6 +31,7 @@ DETAIL_URL_TEMPLATE = (
     "https://www.dnb.com/business-directory/company-profiles.{company_name_url}.html"
 )
 _DNB_REQUEST_RETRIES = 4
+_REPO_ROOT = Path(__file__).resolve().parents[5]
 _RETRYABLE_CURL_HINTS = (
     "curl: (92)",
     "http/2 stream",
@@ -122,6 +126,13 @@ def _companyprofile_api_path(detail_url: str) -> str:
     return f"https://www.dnb.com{path}"
 
 
+def _default_dnb_cookie_cache_file() -> Path:
+    configured = str(os.getenv("DNB_COOKIE_CACHE_FILE", "") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return _REPO_ROOT / "output" / "cache" / "dnb_akamai_cookie.json"
+
+
 def parse_companyinformation_payload(payload: dict[str, Any], industry_path: str) -> DnbListPage:
     """解析 DNB 列表 API 的返回。"""
     records: list[dict[str, str]] = []
@@ -198,7 +209,8 @@ class DnbBrowserCookieProvider:
         ).strip() or "https://www.dnb.com/"
         self._launch_timeout_ms = int(float(os.getenv("DNB_COOKIE_TIMEOUT_SECONDS", "30")) * 1000)
         self._launch_wait_ms = int(float(os.getenv("DNB_COOKIE_WAIT_SECONDS", "2.5")) * 1000)
-        self._snapshot_ttl_seconds = max(float(os.getenv("DNB_COOKIE_CACHE_SECONDS", "60")), 0.0)
+        self._snapshot_ttl_seconds = max(float(os.getenv("DNB_COOKIE_CACHE_SECONDS", "2592000")), 0.0)
+        self._cache_file = _default_dnb_cookie_cache_file()
         self._snapshot_lock = threading.Lock()
         self._snapshot_cookies: list[dict[str, str]] = []
         self._snapshot_headers: DnbBrowserHeaders | None = None
@@ -223,6 +235,19 @@ class DnbBrowserCookieProvider:
                 and now < self._snapshot_expire_at
             ):
                 return list(self._snapshot_cookies), self._snapshot_headers
+            if not force:
+                cached = load_dnb_cookie_snapshot(
+                    self._cache_file,
+                    max_age_seconds=self._snapshot_ttl_seconds,
+                )
+                if cached is not None:
+                    cookies = list(cached.get("cookies") or [])
+                    headers = self._headers_from_cache(dict(cached.get("headers") or {}))
+                    if cookies and headers is not None:
+                        self._snapshot_cookies = cookies
+                        self._snapshot_headers = headers
+                        self._snapshot_expire_at = now + self._snapshot_ttl_seconds
+                        return list(self._snapshot_cookies), self._snapshot_headers
             if self._cookie_source == "cdp":
                 LOGGER.info("DNB 获取 cookie 快照：source=cdp force=%s", force)
                 cookies, headers = self._fetch_snapshot_via_cdp(domain_keyword)
@@ -239,11 +264,38 @@ class DnbBrowserCookieProvider:
             self._snapshot_cookies = list(cookies)
             self._snapshot_headers = headers
             self._snapshot_expire_at = now + self._snapshot_ttl_seconds
+            save_dnb_cookie_snapshot(
+                self._cache_file,
+                cookies=self._snapshot_cookies,
+                headers=self._headers_to_cache(headers),
+            )
             return list(cookies), headers
 
     def fetch_browser_headers(self) -> DnbBrowserHeaders:
         _cookies, headers = self.fetch_snapshot()
         return headers
+
+    def _headers_from_cache(self, payload: dict[str, str]) -> DnbBrowserHeaders | None:
+        user_agent = str(payload.get("user_agent") or "").strip()
+        sec_ch_ua = str(payload.get("sec_ch_ua") or "").strip()
+        sec_ch_ua_platform = str(payload.get("sec_ch_ua_platform") or "").strip()
+        accept_language = str(payload.get("accept_language") or "").strip()
+        if not (user_agent and sec_ch_ua and sec_ch_ua_platform and accept_language):
+            return None
+        return DnbBrowserHeaders(
+            user_agent=user_agent,
+            sec_ch_ua=sec_ch_ua,
+            sec_ch_ua_platform=sec_ch_ua_platform,
+            accept_language=accept_language,
+        )
+
+    def _headers_to_cache(self, headers: DnbBrowserHeaders) -> dict[str, str]:
+        return {
+            "user_agent": headers.user_agent,
+            "sec_ch_ua": headers.sec_ch_ua,
+            "sec_ch_ua_platform": headers.sec_ch_ua_platform,
+            "accept_language": headers.accept_language,
+        }
 
     def _fetch_snapshot_via_cdp(self, domain_keyword: str) -> tuple[list[dict[str, str]], DnbBrowserHeaders]:
         with sync_playwright() as playwright:

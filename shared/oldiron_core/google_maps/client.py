@@ -259,8 +259,8 @@ class GoogleMapsConfig:
     pb_template: str = DEFAULT_SEARCH_PB
     min_delay: float = 1.0
     max_delay: float = 2.0
-    long_rest_interval: int = 100
-    long_rest_seconds: float = 15.0
+    long_rest_interval: int = 0
+    long_rest_seconds: float = 0.0
     timeout: float = 30.0
     proxy_url: str = field(default_factory=_default_google_maps_proxy)
 
@@ -343,16 +343,6 @@ class GoogleMapsClient:
         delay = random.uniform(self.config.min_delay, self.config.max_delay)
         time.sleep(delay)
         self._request_count += 1
-        if (
-            self.config.long_rest_interval > 0
-            and self._request_count % self.config.long_rest_interval == 0
-        ):
-            logger.info(
-                "Google Maps 已请求 %d 次，休息 %.0fs",
-                self._request_count,
-                self.config.long_rest_seconds,
-            )
-            time.sleep(self.config.long_rest_seconds)
 
     def _search_raw(self, query: str, max_retries: int = 4) -> str:
         params = {

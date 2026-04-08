@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,8 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
 from oldiron_core.google_maps.client import _candidate_score
+from oldiron_core.google_maps.client import GoogleMapsClient
+from oldiron_core.google_maps.client import GoogleMapsConfig
 from oldiron_core.google_maps.client import _is_blocked_host
 from oldiron_core.google_maps.client import _looks_like_query_artifact_name
 from oldiron_core.google_maps.client import _normalize_url
@@ -71,6 +74,25 @@ class GoogleMapsClientTests(unittest.TestCase):
             },
         )
         self.assertGreaterEqual(score, 45)
+
+    def test_sleep_does_not_apply_count_based_long_rest(self) -> None:
+        client = GoogleMapsClient.__new__(GoogleMapsClient)
+        client.config = GoogleMapsConfig(
+            min_delay=0.1,
+            max_delay=0.1,
+            long_rest_interval=1,
+            long_rest_seconds=99.0,
+        )
+        client._request_count = 0
+
+        with (
+            patch("oldiron_core.google_maps.client.random.uniform", return_value=0.1),
+            patch("oldiron_core.google_maps.client.time.sleep") as sleep_mock,
+        ):
+            GoogleMapsClient._sleep(client)
+
+        sleep_mock.assert_called_once_with(0.1)
+        self.assertEqual(1, client._request_count)
 
 
 if __name__ == "__main__":

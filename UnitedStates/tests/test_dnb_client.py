@@ -8,6 +8,7 @@ import time
 import unittest
 from unittest import mock
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -179,6 +180,43 @@ class DnbClientTests(unittest.TestCase):
         self.assertLess(elapsed, 0.2)
         self.assertEqual("1", cookies[0]["value"])
         self.assertEqual("ua", headers.user_agent)
+
+    def test_browser_cookie_provider_reuses_disk_snapshot(self) -> None:
+        from unitedstates_crawler.sites.dnb.client import DnbBrowserCookieProvider
+
+        with TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "dnb_cookie.json"
+            with (
+                mock.patch.dict(
+                    "os.environ",
+                    {
+                        "DNB_COOKIE_CACHE_FILE": str(cache_file),
+                        "DNB_COOKIE_CACHE_SECONDS": "2592000",
+                    },
+                    clear=False,
+                ),
+                mock.patch.object(
+                    DnbBrowserCookieProvider,
+                    "_fetch_snapshot_via_launch",
+                    return_value=(
+                        [{"name": "akaas_us", "value": "cookie1", "domain": ".dnb.com", "path": "/"}],
+                        DnbBrowserHeaders(
+                            user_agent="ua",
+                            sec_ch_ua='"Chromium";v="146"',
+                            sec_ch_ua_platform='"macOS"',
+                            accept_language="en-US,en;q=0.9",
+                        ),
+                    ),
+                ) as launch_mock,
+            ):
+                first = DnbBrowserCookieProvider()
+                cookies_a, headers_a = first.fetch_snapshot(force=False)
+                second = DnbBrowserCookieProvider()
+                cookies_b, headers_b = second.fetch_snapshot(force=False)
+
+            self.assertEqual(1, launch_mock.call_count)
+            self.assertEqual(cookies_a, cookies_b)
+            self.assertEqual(headers_a.user_agent, headers_b.user_agent)
 
     def test_parse_companyinformation_payload(self) -> None:
         parsed = parse_companyinformation_payload(SAMPLE_PAYLOAD, "beverage_manufacturing")
