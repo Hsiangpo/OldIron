@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -15,6 +17,7 @@ from shared.oldiron_core.fc_email.email_service import FirecrawlEmailService
 from shared.oldiron_core.fc_email.email_service import FirecrawlEmailSettings
 from shared.oldiron_core.fc_email.email_service import extract_domain
 from shared.oldiron_core.fc_email.client import HtmlPageResult
+from shared.oldiron_core.fc_email.llm_client import EmailUrlLlmClient
 from shared.oldiron_core.fc_email.llm_client import HtmlContactExtraction
 from shared.oldiron_core.fc_email.normalization import split_emails
 
@@ -68,7 +71,47 @@ class _CaptureFullHtmlCrawler:
         return [HtmlPageResult(url=str(urls[0]), html=self._html)]
 
 
+class _FakeStreamResponse:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    def __enter__(self) -> _FakeStreamResponse:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        return None
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_lines(self, decode_unicode: bool = True):  # noqa: ARG002
+        return iter(self._lines)
+
+
 class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
+    def test_llm_client_falls_back_to_streaming_when_responses_output_text_is_empty(self) -> None:
+        client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
+        client._client = SimpleNamespace(
+            responses=SimpleNamespace(create=lambda **kwargs: SimpleNamespace(output_text="")),
+        )
+        client._api_key = "x"
+        client._base_url = "https://cc.gpteam.top/v1"
+        client._timeout_seconds = 30.0
+        stream_lines = [
+            'data: {"type":"response.output_text.delta","delta":"o"}',
+            'data: {"type":"response.output_text.delta","delta":"k"}',
+            'data: {"type":"response.output_text.done","text":"ok"}',
+        ]
+        with patch(
+            "shared.oldiron_core.fc_email.llm_client.requests.post",
+            return_value=_FakeStreamResponse(stream_lines),
+        ):
+            text = client._call_api_with_retry(
+                channel="responses",
+                kwargs={"model": "gpt-5.1-codex-mini", "input": "Say ok"},
+            )
+        self.assertEqual("ok", text)
+
     def test_close_does_not_close_injected_crawler_or_key_pool(self) -> None:
         crawler = _DummyCrawler()
         key_pool = _DummyKeyPool()

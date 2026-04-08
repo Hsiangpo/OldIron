@@ -1,32 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T01:36:21Z",
-  "tasks": [
-    {
-      "task_id": "llm-provider-switch-20260408",
-      "status": "in_progress",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "change_class": "shared_zone",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "Switch approved LLM provider defaults and runtime docs"
-      ],
-      "planned_files": [
-        "AGENTS.md",
-        ".agents/skills/oldiron-crawler/SKILL.md",
-        "shared/oldiron_core/fc_email/llm_client.py",
-        "shared/oldiron_core/fc_email/email_service.py"
-      ],
-      "shared_lock_ids": [
-        "lock-llm-provider-switch-20260408-1",
-        "lock-llm-provider-switch-20260408-2"
-      ],
-      "github_ref": "not-created",
-      "started_at": "2026-04-08T01:36:21Z",
-      "last_heartbeat_at": "2026-04-08T01:36:21Z",
-      "notes": "Switch active LLM provider to cc.gpteam.top and document dual-provider workflow."
-    }
-  ]
+  "updated_at": "2026-04-08T01:53:14Z",
+  "tasks": []
 }

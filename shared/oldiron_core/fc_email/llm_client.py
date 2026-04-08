@@ -9,7 +9,9 @@ import re
 import warnings
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urljoin
 
+import requests
 from bs4 import XMLParsedAsHTMLWarning
 
 
@@ -24,7 +26,8 @@ def _should_disable_tls_verify(*, base_url: str, verify_mode: str) -> bool:
         return True
     if verify_mode in {"1", "true", "yes", "on"}:
         return False
-    return "gpt-agent.cc" in str(base_url or "").lower()
+    lowered = str(base_url or "").lower()
+    return "gpt-agent.cc" in lowered or "cc.gpteam.top" in lowered
 
 
 def _parse_json_text(raw: str) -> dict[str, object]:
@@ -103,6 +106,9 @@ class EmailUrlLlmClient:
             timeout=timeout,
             http_client=self._http_client,
         )
+        self._api_key = api_key
+        self._base_url = str(base_url or "").strip()
+        self._timeout_seconds = timeout
         self._model = model
         self._fallback_model = str(fallback_model or "").strip()
         self._reasoning_effort = reasoning_effort
@@ -419,12 +425,26 @@ class EmailUrlLlmClient:
                     resp = self._client.chat.completions.create(**kwargs)
                     return self._extract_chat_output_text(resp)
                 resp = self._client.responses.create(**kwargs)
-                return str(getattr(resp, "output_text", "") or "")
+                text = str(getattr(resp, "output_text", "") or "")
+                if text.strip():
+                    return text
+                if self._should_use_streaming_responses_fallback():
+                    stream_text = self._call_responses_streaming_api(kwargs)
+                    if stream_text.strip():
+                        return stream_text
+                return text
             except TypeError:
                 # 参数格式错误直接抛出，不重试
                 raise
             except Exception as exc:  # noqa: BLE001
                 err_str = str(exc)
+                if channel == "responses" and self._should_use_streaming_responses_fallback():
+                    try:
+                        stream_text = self._call_responses_streaming_api(kwargs)
+                    except Exception:  # noqa: BLE001
+                        stream_text = ""
+                    if stream_text.strip():
+                        return stream_text
                 if _is_model_not_found_error(err_str):
                     LOGGER.error("LLM 模型不可用，停止重试：%s", err_str)
                     raise
@@ -507,3 +527,53 @@ class EmailUrlLlmClient:
             "minimax",
         )
         return lowered.startswith(chat_first_prefixes)
+
+    def _should_use_streaming_responses_fallback(self) -> bool:
+        return "cc.gpteam.top" in self._base_url.lower()
+
+    def _call_responses_streaming_api(self, kwargs: dict[str, Any]) -> str:
+        payload = dict(kwargs)
+        payload["stream"] = True
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        proxy_url = str(os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "").strip()
+        request_kwargs: dict[str, Any] = {
+            "headers": headers,
+            "json": payload,
+            "timeout": max(float(self._timeout_seconds or 60.0), 20.0),
+            "stream": True,
+        }
+        if proxy_url:
+            request_kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
+        verify_mode = str(os.getenv("LLM_TLS_VERIFY", "auto") or "auto").strip().lower()
+        if _should_disable_tls_verify(base_url=self._base_url, verify_mode=verify_mode):
+            request_kwargs["verify"] = False
+        stream_url = urljoin(self._base_url.rstrip("/") + "/", "responses")
+        chunks: list[str] = []
+        with requests.post(stream_url, **request_kwargs) as response:
+            response.raise_for_status()
+            for raw_line in response.iter_lines(decode_unicode=True):
+                line = str(raw_line or "").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload_text = line[5:].strip()
+                if not payload_text or payload_text == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(payload_text)
+                except json.JSONDecodeError:
+                    continue
+                event_type = str(event.get("type", "") or "")
+                if event_type == "response.output_text.delta":
+                    delta = str(event.get("delta", "") or "")
+                    if delta:
+                        chunks.append(delta)
+                    continue
+                if event_type == "response.output_text.done":
+                    text = str(event.get("text", "") or "")
+                    if text and not chunks:
+                        chunks.append(text)
+        return "".join(chunks)

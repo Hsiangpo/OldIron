@@ -1,32 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T01:36:21Z",
-  "locks": [
-    {
-      "lock_id": "lock-llm-provider-switch-20260408-1",
-      "status": "locked",
-      "path": "AGENTS.md",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "task_id": "llm-provider-switch-20260408",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-08T01:36:21Z",
-      "heartbeat_at": "2026-04-08T01:36:21Z",
-      "expires_at": "2026-04-08T03:36:21Z",
-      "notes": "Switch active LLM provider to cc.gpteam.top and document dual-provider workflow."
-    },
-    {
-      "lock_id": "lock-llm-provider-switch-20260408-2",
-      "status": "locked",
-      "path": "shared/oldiron_core",
-      "machine": "machine1-windows",
-      "agent": "codex",
-      "task_id": "llm-provider-switch-20260408",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-08T01:36:21Z",
-      "heartbeat_at": "2026-04-08T01:36:21Z",
-      "expires_at": "2026-04-08T03:36:21Z",
-      "notes": "Switch active LLM provider to cc.gpteam.top and document dual-provider workflow."
-    }
-  ]
+  "updated_at": "2026-04-08T01:53:14Z",
+  "locks": []
 }

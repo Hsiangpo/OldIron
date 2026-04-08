@@ -183,8 +183,8 @@ class FirecrawlEmailSettings:
     key_cooldown_seconds: int = 90
     key_failure_threshold: int = 5
     llm_api_key: str = ""
-    llm_base_url: str = "https://api.gpteamservices.com/v1"
-    llm_model: str = "gpt-5.4-mini"
+    llm_base_url: str = "https://cc.gpteam.top/v1"
+    llm_model: str = "gpt-5.1-codex-mini"
     llm_reasoning_effort: str = "medium"
     llm_api_style: str = "auto"
     llm_timeout_seconds: float = 120.0
