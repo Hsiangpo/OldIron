@@ -68,6 +68,18 @@ def _is_model_not_found_error(error_text: str) -> bool:
     return any(needle in lowered for needle in needles)
 
 
+def _is_transient_ssl_eof_error(error_text: str) -> bool:
+    lowered = str(error_text or "").strip().lower()
+    if not lowered:
+        return False
+    needles = (
+        "unexpected_eof_while_reading",
+        "eof occurred in violation of protocol",
+        "ssl: unexpected eof while reading",
+    )
+    return any(needle in lowered for needle in needles)
+
+
 def _decode_sse_line(raw_line: object) -> str:
     """按 UTF-8 解析 SSE 行，避免中文被默认编码解成乱码。"""
     if isinstance(raw_line, bytes):
@@ -495,6 +507,18 @@ class EmailUrlLlmClient:
                     attempt += 1
                     wait = min(30 + attempt * 5, 120)
                     LOGGER.warning("LLM API 上游 5xx/拥塞，第 %d 次重试，等待 %ds，错误: %s", attempt, wait, exc)
+                    _time.sleep(wait)
+                    continue
+                if _is_transient_ssl_eof_error(err_str):
+                    transient_attempt += 1
+                    last_exc = exc
+                    if transient_attempt >= max_retries:
+                        raise last_exc
+                    wait = min(2 ** transient_attempt, 8)
+                    LOGGER.warning(
+                        "LLM API TLS EOF 抖动重试 %d/%d，等待 %ds，错误: %s",
+                        transient_attempt, max_retries, wait, exc,
+                    )
                     _time.sleep(wait)
                     continue
                 is_transient = any(kw in err_str for kw in (

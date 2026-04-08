@@ -170,6 +170,33 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
         text = client._call_responses_streaming_api({"model": "gpt-5.1-codex-mini", "input": "Say ok"})
         self.assertEqual("榛葉 稔", text)
 
+    def test_llm_client_retries_transient_ssl_eof(self) -> None:
+        calls = {"count": 0}
+
+        def _create(**kwargs: object) -> object:  # noqa: ARG001
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise RuntimeError("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)")
+            return SimpleNamespace(output_text='{"status":"ok"}')
+
+        client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
+        client._client = SimpleNamespace(
+            responses=SimpleNamespace(create=_create),
+        )
+        client._api_key = "x"
+        client._base_url = "https://api.example.com/v1"
+        client._timeout_seconds = 30.0
+        client._reasoning_effort = "medium"
+
+        with patch("time.sleep", return_value=None):
+            text = client._call_api_with_retry(
+                channel="responses",
+                kwargs={"model": "gpt-5.1-codex-mini", "input": "Say ok"},
+            )
+
+        self.assertEqual('{"status":"ok"}', text)
+        self.assertEqual(3, calls["count"])
+
     def test_llm_client_close_closes_http_client(self) -> None:
         client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
         client._http_client = _FakeHttpStreamClient([])
