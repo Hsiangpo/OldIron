@@ -4,3 +4,4 @@ playwright
 openai
 beautifulsoup4
 markdownify
+urllib3
