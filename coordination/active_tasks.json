@@ -1,5 +1,34 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T04:06:53Z",
-  "tasks": []
+  "updated_at": "2026-04-08T11:28:07Z",
+  "tasks": [
+    {
+      "task_id": "20260408-dnb-nofile",
+      "status": "in_progress",
+      "machine": "macos-local",
+      "agent": "Codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "shared/oldiron_core/fc_email",
+        "UnitedStates/src/unitedstates_crawler/sites/dnb",
+        "Brazil/src/brazil_crawler/sites/dnb"
+      ],
+      "planned_files": [
+        "shared/oldiron_core/fc_email/email_service.py",
+        "shared/oldiron_core/fc_email/llm_client.py",
+        "UnitedStates/src/unitedstates_crawler/sites/dnb/cli.py",
+        "Brazil/src/brazil_crawler/sites/dnb/cli.py"
+      ],
+      "shared_lock_ids": [
+        "lock-20260408-dnb-nofile-1",
+        "lock-20260408-dnb-nofile-2"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-08T11:28:07Z",
+      "last_heartbeat_at": "2026-04-08T11:28:07Z",
+      "notes": "Fix DNB too many open files resource cleanup and runtime nofile limit"
+    }
+  ]
 }
