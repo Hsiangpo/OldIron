@@ -394,6 +394,7 @@ class DnbCompanyInformationClient:
     def __init__(self, cookie_provider: DnbBrowserCookieProvider | None = None) -> None:
         self._cookie_provider = cookie_provider or DnbBrowserCookieProvider()
         self._cookie_lock = threading.Lock()
+        self._cookie_refresh_lock = threading.Lock()
         self._cookies: list[dict[str, str]] = []
         self._browser_headers: DnbBrowserHeaders | None = None
         self._forced_refresh_cooldown_seconds = max(
@@ -403,13 +404,22 @@ class DnbCompanyInformationClient:
         self._last_forced_refresh_at = 0.0
 
     def refresh_cookies(self, *, force: bool = True) -> bool:
+        now = time.monotonic()
         with self._cookie_lock:
             now = time.monotonic()
             if self._should_skip_forced_refresh(now=now, force=force):
                 return False
+        with self._cookie_refresh_lock:
+            with self._cookie_lock:
+                now = time.monotonic()
+                if self._should_skip_forced_refresh(now=now, force=force):
+                    return False
             if force:
                 LOGGER.warning("DNB 触发强制刷新 cookie，将重新获取浏览器快照")
-            self._cookies, self._browser_headers = self._cookie_provider.fetch_snapshot(force=force)
+            cookies, browser_headers = self._cookie_provider.fetch_snapshot(force=force)
+            with self._cookie_lock:
+                self._cookies = list(cookies)
+                self._browser_headers = browser_headers
             if force:
                 self._last_forced_refresh_at = now
             return True

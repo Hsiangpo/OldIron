@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -131,16 +133,52 @@ class _FakeCookieProvider:
         return self.headers
 
 
+class _BlockingCookieProvider(_FakeCookieProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.refresh_started = threading.Event()
+        self.release_refresh = threading.Event()
+
+    def fetch_snapshot(self, domain_keyword: str = "dnb.com", *, force: bool = False):
+        if self.calls >= 1 and force:
+            self.refresh_started.set()
+            self.release_refresh.wait(timeout=2.0)
+        return super().fetch_snapshot(domain_keyword=domain_keyword, force=force)
+
+
 class DnbClientTests(unittest.TestCase):
     def test_refresh_cookies_debounces_forced_browser_snapshot(self) -> None:
         provider = _FakeCookieProvider()
         client = DnbCompanyInformationClient(cookie_provider=provider)
         client._forced_refresh_cooldown_seconds = 60.0
-        with mock.patch("unitedstates_crawler.sites.dnb.client.time.monotonic", side_effect=[100.0, 110.0, 170.0]):
+        with mock.patch("unitedstates_crawler.sites.dnb.client.time.monotonic", return_value=100.0):
             self.assertTrue(client.refresh_cookies(force=True))
+        with mock.patch("unitedstates_crawler.sites.dnb.client.time.monotonic", return_value=110.0):
             self.assertFalse(client.refresh_cookies(force=True))
+        with mock.patch("unitedstates_crawler.sites.dnb.client.time.monotonic", return_value=170.0):
             self.assertTrue(client.refresh_cookies(force=True))
         self.assertEqual(2, provider.calls)
+
+    def test_forced_refresh_does_not_block_existing_cookie_reads(self) -> None:
+        provider = _BlockingCookieProvider()
+        client = DnbCompanyInformationClient(cookie_provider=provider)
+        self.assertTrue(client.refresh_cookies(force=False))
+
+        thread = threading.Thread(target=client.refresh_cookies, kwargs={"force": True}, daemon=True)
+        thread.start()
+        self.assertTrue(provider.refresh_started.wait(timeout=1.0))
+
+        start = time.monotonic()
+        cookies = client._get_cookies()
+        headers = client._get_browser_headers()
+        elapsed = time.monotonic() - start
+
+        provider.release_refresh.set()
+        thread.join(timeout=1.0)
+
+        self.assertLess(elapsed, 0.2)
+        self.assertEqual("1", cookies[0]["value"])
+        self.assertEqual("ua", headers.user_agent)
 
     def test_parse_companyinformation_payload(self) -> None:
         parsed = parse_companyinformation_payload(SAMPLE_PAYLOAD, "beverage_manufacturing")
