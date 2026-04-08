@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from xml.etree import ElementTree as ET
 from urllib.parse import urlparse
 
 from lxml import html
@@ -30,6 +31,8 @@ _LEGAL_ENTITY_HINTS = (
     "法人",
     "会社",
 )
+_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+_COMPANY_URL_RE = re.compile(r"/company/(\d+)/?$")
 
 
 def parse_total_results(page_html: str) -> int:
@@ -66,6 +69,44 @@ def parse_filter_options(page_html: str, input_name: str) -> list[dict[str, str 
             }
         )
     return options
+
+
+def parse_company_sitemap_urls(xml_text: str) -> list[str]:
+    text = str(xml_text or "").strip()
+    if not text:
+        return []
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return []
+    urls: list[str] = []
+    for node in root.findall("sm:url/sm:loc", _SITEMAP_NS):
+        url = str(node.text or "").strip()
+        if url:
+            urls.append(url)
+    return urls
+
+
+def parse_company_page(page_html: str) -> dict[str, str]:
+    if not str(page_html or "").strip():
+        return {
+            "company_name": "",
+            "representative": "",
+            "website": "",
+            "address": "",
+        }
+    tree = html.fromstring(page_html)
+    return {
+        "company_name": _extract_company_page_name(tree),
+        "representative": "",
+        "website": _normalize_website(_extract_company_page_website(tree)),
+        "address": _extract_company_page_address(tree),
+    }
+
+
+def extract_company_id_from_url(detail_url: str) -> str:
+    matched = _COMPANY_URL_RE.search(str(detail_url or "").strip())
+    return str(matched.group(1) or "").strip() if matched is not None else ""
 
 
 def parse_job_cards(page_html: str) -> list[dict[str, str]]:
@@ -115,8 +156,27 @@ def parse_job_detail(page_html: str) -> dict[str, str]:
     }
 
 
+def _extract_company_page_name(tree) -> str:
+    text = _clean_text(tree.xpath("string(//h1)") or "")
+    return re.sub(r"\s*の中途採用.*$", "", text).strip()
+
+
+def _extract_company_page_address(tree) -> str:
+    return _extract_labeled_value(tree, "本社所在地")
+
+
+def _extract_company_page_website(tree) -> str:
+    links = tree.xpath('//th[contains(normalize-space(.), "企業URL")]/following-sibling::td[1]//a/@href')
+    if links:
+        return str(links[0] or "").strip()
+    return ""
+
+
 def _extract_labeled_value(tree, label: str) -> str:
-    rows = tree.xpath(f'//th[h3[contains(normalize-space(.), "{label}")]]/following-sibling::td[1]')
+    rows = tree.xpath(
+        f'//th[h3[contains(normalize-space(.), "{label}")]]/following-sibling::td[1]'
+        f' | //th[contains(normalize-space(.), "{label}")]/following-sibling::td[1]'
+    )
     if not rows:
         return ""
     return _clean_text(rows[0].text_content())

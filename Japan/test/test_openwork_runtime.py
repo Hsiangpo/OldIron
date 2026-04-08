@@ -19,6 +19,8 @@ if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
 
 from japan_crawler.sites.openwork.client import OpenworkClient
+from japan_crawler.sites.openwork.client import OpenworkPageNotFound
+from japan_crawler.sites.openwork.pipeline import _plan_list_scopes
 from japan_crawler.sites.openwork.pipeline import _wait_for_list_page_html
 from japan_crawler.sites.openwork.pipeline import _load_company_details
 from japan_crawler.sites.openwork.browser_profile import OpenworkBrowserBlocked
@@ -85,6 +87,75 @@ class _RetryListClient:
         _ = page
         self.calls += 1
         return self._responses.pop(0) if self._responses else None
+
+
+class _NotFoundListClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def fetch_list_page(self, page: int, *, field: str = "", pref: str = "", src_str: str = "", ct: str = "") -> str | None:  # noqa: ARG002
+        self.calls += 1
+        raise OpenworkPageNotFound(f"page={page}")
+
+
+class _ScopePlanClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str, str]] = []
+
+    def fetch_list_page(self, page: int, *, field: str = "", pref: str = "", src_str: str = "", ct: str = "") -> str | None:  # noqa: ARG002
+        self.calls.append((page, field, pref))
+        if page != 1:
+            return None
+        if not field and not pref:
+            return """
+            <html><body>
+            <a href="/company_list?field=0023&sort=1">IT</a>
+            <a href="/company_list?field=0067&sort=1">Retail</a>
+            <a href="/company_list?pref=13&sort=1">Tokyo</a>
+            <a href="/company_list?pref=27&sort=1">Osaka</a>
+            </body></html>
+            """
+        if field == "0023" and not pref:
+            return "<html><body><div>1,200 件中 1～50件を表示</div></body></html>"
+        if field == "0067" and not pref:
+            return "<html><body><div>180 件中 1～50件を表示</div></body></html>"
+        if field == "0023" and pref == "13":
+            return "<html><body><div>320 件中 1～50件を表示</div></body></html>"
+        if field == "0023" and pref == "27":
+            return "<html><body><div>90 件中 1～50件を表示</div></body></html>"
+        return "<html><body><div>0 件中 0～0件を表示</div></body></html>"
+
+
+class _FieldScopedPrefClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str, str]] = []
+
+    def fetch_list_page(self, page: int, *, field: str = "", pref: str = "", src_str: str = "", ct: str = "") -> str | None:  # noqa: ARG002
+        self.calls.append((page, field, pref))
+        if page != 1:
+            return None
+        if not field and not pref:
+            return """
+            <html><body>
+            <a href="/company_list?field=0001&sort=1">制造</a>
+            <a href="/company_list?pref=13&sort=1">东京</a>
+            <a href="/company_list?pref=27&sort=1">大阪</a>
+            <a href="/company_list?pref=40&sort=1">福冈</a>
+            </body></html>
+            """
+        if field == "0001" and not pref:
+            return """
+            <html><body>
+            <div>1,086 件中 1～50件を表示</div>
+            <a href="/company_list?field=0001&pref=13&sort=1">东京</a>
+            <a href="/company_list?field=0001&pref=27&sort=1">大阪</a>
+            </body></html>
+            """
+        if field == "0001" and pref == "13":
+            return "<html><body><div>819 件中 1～50件を表示</div></body></html>"
+        if field == "0001" and pref == "27":
+            return "<html><body><div>120 件中 1～50件を表示</div></body></html>"
+        raise AssertionError(f'unexpected filters: field={field}, pref={pref}')
 
 
 class _StaticResponse:
@@ -204,6 +275,30 @@ class OpenworkRuntimeTests(unittest.TestCase):
             html = _wait_for_list_page_html(client, 9, max_rounds=2)
         self.assertIsNone(html)
         self.assertEqual(2, client.calls)
+
+    def test_wait_for_list_page_html_treats_404_scope_as_empty_without_retry(self) -> None:
+        client = _NotFoundListClient()
+        with patch("japan_crawler.sites.openwork.pipeline.time.sleep", return_value=None):
+            html = _wait_for_list_page_html(client, 1, field="0001", pref="2", max_rounds=40)
+        self.assertIn("0 件中", html or "")
+        self.assertEqual(1, client.calls)
+
+    def test_plan_list_scopes_splits_large_field_by_pref(self) -> None:
+        client = _ScopePlanClient()
+        scopes = _plan_list_scopes(client, client.fetch_list_page(1) or "")
+        scope_keys = [scope.key for scope in scopes]
+        self.assertIn("company_list:field=0067", scope_keys)
+        self.assertIn("company_list:field=0023&pref=13", scope_keys)
+        self.assertIn("company_list:field=0023&pref=27", scope_keys)
+        self.assertNotIn("company_list:field=0023", scope_keys)
+
+    def test_plan_list_scopes_prefers_field_specific_pref_codes(self) -> None:
+        client = _FieldScopedPrefClient()
+        scopes = _plan_list_scopes(client, client.fetch_list_page(1) or "")
+        scope_keys = [scope.key for scope in scopes]
+        self.assertIn("company_list:field=0001&pref=13", scope_keys)
+        self.assertIn("company_list:field=0001&pref=27", scope_keys)
+        self.assertNotIn("company_list:field=0001&pref=40", scope_keys)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,9 @@ from pathlib import Path
 
 from .client import PasonacareerClient
 from .parser import (
+    extract_company_id_from_url,
+    parse_company_page,
+    parse_company_sitemap_urls,
     parse_filter_options,
     parse_job_cards,
     parse_job_detail,
@@ -24,6 +27,8 @@ _SEARCH_PAGE_RETRY_LIMIT = 5
 _SEARCH_PAGE_CAP = 196
 _LOCATION_FILTER_NAME = "f[s3][]"
 _JOB_FILTER_NAME = "f[s1][]"
+_COMPANY_SITEMAP_SCOPE = "company_sitemap"
+_SITEMAP_RETRY_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,12 @@ class SearchScope:
     filters: dict[str, str]
     total_pages: int
     first_html: str
+
+
+@dataclass(frozen=True)
+class CompanyTarget:
+    company_id: str
+    detail_url: str
 
 
 def run_pipeline_list(
@@ -46,6 +57,31 @@ def run_pipeline_list(
     output_dir.mkdir(parents=True, exist_ok=True)
     store = PasonacareerStore(output_dir / "pasonacareer_store.db")
     client = PasonacareerClient(request_delay=request_delay, proxy=proxy)
+    sitemap_xml = _fetch_company_sitemap_with_retries(client)
+    if sitemap_xml is not None:
+        return _run_company_sitemap_pipeline(
+            store=store,
+            client=client,
+            sitemap_xml=sitemap_xml,
+            detail_workers=detail_workers,
+            max_pages=max_pages,
+        )
+    LOGGER.warning("PasonaCareer company sitemap 获取失败，回退旧版职位搜索链路。")
+    return _run_search_pipeline_list(
+        store=store,
+        client=client,
+        detail_workers=detail_workers,
+        max_pages=max_pages,
+    )
+
+
+def _run_search_pipeline_list(
+    *,
+    store: PasonacareerStore,
+    client: PasonacareerClient,
+    detail_workers: int,
+    max_pages: int,
+) -> dict[str, int]:
     first_html = _fetch_search_page_with_retries(client, 1, {})
     if first_html is None:
         return _build_pipeline_stats(store, client, 0, 0)
@@ -72,6 +108,47 @@ def run_pipeline_list(
     return _build_pipeline_stats(store, client, pages_done, new_companies)
 
 
+def _run_company_sitemap_pipeline(
+    *,
+    store: PasonacareerStore,
+    client: PasonacareerClient,
+    sitemap_xml: str,
+    detail_workers: int,
+    max_pages: int,
+) -> dict[str, int]:
+    urls = parse_company_sitemap_urls(sitemap_xml)
+    targets = [CompanyTarget(company_id=extract_company_id_from_url(url), detail_url=url) for url in urls]
+    targets = [target for target in targets if target.company_id and target.detail_url]
+    total_targets = len(targets)
+    LOGGER.info("PasonaCareer company sitemap：%d 家公司 URL", total_targets)
+    if total_targets <= 0:
+        return _build_pipeline_stats(store, client, 0, 0)
+    checkpoint = store.get_checkpoint(_COMPANY_SITEMAP_SCOPE)
+    start_page = _resolve_start_page(checkpoint, discovered_total_pages=total_targets)
+    if start_page is None:
+        return _build_pipeline_stats(store, client, 0, 0)
+    start_index = max(start_page - 1, 0)
+    if start_index >= total_targets:
+        store.update_checkpoint(_COMPANY_SITEMAP_SCOPE, total_targets, total_targets, "done")
+        return _build_pipeline_stats(store, client, 0, 0)
+    end_index = total_targets
+    if max_pages > 0:
+        end_index = min(total_targets, start_index + max_pages)
+    scoped_targets = targets[start_index:end_index]
+    pages_done, new_companies = _process_company_targets(
+        store=store,
+        client=client,
+        targets=scoped_targets,
+        detail_workers=detail_workers,
+        start_index=start_index,
+        total_targets=total_targets,
+    )
+    final_index = start_index + pages_done
+    final_status = "done" if final_index >= total_targets else "running"
+    store.update_checkpoint(_COMPANY_SITEMAP_SCOPE, final_index, total_targets, final_status)
+    return _build_pipeline_stats(store, client, pages_done, new_companies)
+
+
 def _build_pipeline_stats(
     store: PasonacareerStore,
     client: PasonacareerClient,
@@ -84,6 +161,87 @@ def _build_pipeline_stats(
         "total_companies": store.get_company_count(),
         **client.stats,
     }
+
+
+def _fetch_company_sitemap_with_retries(client: PasonacareerClient) -> str | None:
+    fetcher = getattr(client, "fetch_company_sitemap", None)
+    if fetcher is None:
+        return None
+    for attempt in range(1, _SITEMAP_RETRY_LIMIT + 1):
+        xml_text = fetcher()
+        if xml_text is not None:
+            return xml_text
+        if attempt >= _SITEMAP_RETRY_LIMIT:
+            break
+        wait = min(10, attempt * 2)
+        LOGGER.warning("PasonaCareer company sitemap 获取失败，第 %d/%d 次重试，%ds 后继续", attempt, _SITEMAP_RETRY_LIMIT, wait)
+        time.sleep(wait)
+    return None
+
+
+def _process_company_targets(
+    *,
+    store: PasonacareerStore,
+    client: PasonacareerClient,
+    targets: list[CompanyTarget],
+    detail_workers: int,
+    start_index: int,
+    total_targets: int,
+) -> tuple[int, int]:
+    if not targets:
+        return 0, 0
+    chunk_size = max(detail_workers * 4, 20)
+    pages_done = 0
+    new_companies = 0
+    for chunk in _iter_target_chunks(targets, chunk_size):
+        companies = _load_company_details(client, chunk, detail_workers)
+        pages_done += len(chunk)
+        new_companies += store.upsert_companies(companies)
+        current_index = start_index + pages_done
+        store.update_checkpoint(_COMPANY_SITEMAP_SCOPE, current_index, total_targets, "running")
+        if pages_done <= 5 or pages_done % 200 == 0 or current_index >= total_targets:
+            LOGGER.info("PasonaCareer company sitemap：%d/%d", current_index, total_targets)
+    return pages_done, new_companies
+
+
+def _load_company_details(
+    client: PasonacareerClient,
+    targets: list[CompanyTarget],
+    detail_workers: int,
+) -> list[dict[str, str]]:
+    if detail_workers <= 1 or getattr(client, "browser_primary", False):
+        return [_fetch_company_detail(client, target) for target in targets]
+    results: list[dict[str, str]] = []
+    with ThreadPoolExecutor(max_workers=detail_workers, thread_name_prefix="pasona-company") as executor:
+        futures = {executor.submit(_fetch_company_detail, client, target): target for target in targets}
+        for future in as_completed(futures):
+            target = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("PasonaCareer 公司页处理异常，跳过：%s | %s", target.detail_url, exc)
+    return results
+
+
+def _fetch_company_detail(client: PasonacareerClient, target: CompanyTarget) -> dict[str, str]:
+    html_text = client.fetch_company_page(target.detail_url)
+    if not str(html_text or "").strip():
+        LOGGER.warning("PasonaCareer 公司页为空，跳过：%s", target.detail_url)
+        return _fallback_company_from_target(target)
+    detail = parse_company_page(html_text)
+    return {
+        "company_name": detail["company_name"],
+        "representative": detail["representative"],
+        "website": detail["website"],
+        "address": detail["address"],
+        "detail_url": target.detail_url,
+        "source_job_url": target.detail_url,
+    }
+
+
+def _iter_target_chunks(targets: list[CompanyTarget], chunk_size: int):
+    for index in range(0, len(targets), chunk_size):
+        yield targets[index:index + chunk_size]
 
 
 def _plan_search_scopes(client: PasonacareerClient, base_html: str) -> list[SearchScope]:
@@ -273,7 +431,7 @@ def _load_job_details(
     cards: list[dict[str, str]],
     detail_workers: int,
 ) -> list[dict[str, str]]:
-    if detail_workers <= 1 or client.browser_primary:
+    if detail_workers <= 1 or getattr(client, "browser_primary", False):
         return [_fetch_job_detail(client, card) for card in cards]
     results: list[dict[str, str]] = []
     with ThreadPoolExecutor(max_workers=detail_workers, thread_name_prefix="pasona-detail") as executor:
@@ -312,4 +470,15 @@ def _fallback_company_from_card(card: dict[str, str]) -> dict[str, str]:
         "address": "",
         "detail_url": card["detail_url"],
         "source_job_url": card["detail_url"],
+    }
+
+
+def _fallback_company_from_target(target: CompanyTarget) -> dict[str, str]:
+    return {
+        "company_name": "",
+        "representative": "",
+        "website": "",
+        "address": "",
+        "detail_url": target.detail_url,
+        "source_job_url": target.detail_url,
     }

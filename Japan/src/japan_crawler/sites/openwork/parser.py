@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from lxml import html
 
@@ -64,6 +64,21 @@ def parse_company_cards(page_html: str) -> list[dict[str, str]]:
     return cards
 
 
+def parse_field_codes(page_html: str) -> list[str]:
+    return _extract_filter_values(page_html, "field")
+
+
+def parse_pref_codes(page_html: str) -> list[str]:
+    return _extract_filter_values(page_html, "pref")
+
+
+def parse_accessible_pages(total_results: int, per_page: int = 50, page_cap: int = 10) -> int:
+    if total_results <= 0:
+        return 1
+    total_pages = math.ceil(total_results / max(int(per_page or 1), 1))
+    return max(1, min(int(page_cap or 1), total_pages))
+
+
 def parse_company_detail(page_html: str) -> dict[str, str]:
     """解析公司详情页。"""
     tree = html.fromstring(page_html)
@@ -120,3 +135,18 @@ def _normalize_website(value: str) -> str:
 
 def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _extract_filter_values(page_html: str, param_name: str) -> list[str]:
+    tree = html.fromstring(page_html)
+    results: list[str] = []
+    seen: set[str] = set()
+    for link in tree.cssselect('a[href*="/company_list?"]'):
+        href = str(link.get("href", "") or "").strip()
+        query = parse_qs(urlparse(href).query)
+        value = str((query.get(param_name) or [""])[0] or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        results.append(value)
+    return results

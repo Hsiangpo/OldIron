@@ -11,12 +11,20 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
+import requests
 from curl_cffi.requests import Session
 
 
 LOGGER = logging.getLogger("pasonacareer.client")
 BASE_URL = "https://www.pasonacareer.jp"
 SEARCH_PATH = "/search/jl/"
+COMPANY_SITEMAP_PATH = "/sitemap_company.xml"
+_SITEMAP_TIMEOUT = (20, 120)
+_REQUESTS_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 _PROXY_FALLBACK_ERROR_HINTS = (
     "curl: (35)",
     "tls connect error",
@@ -68,7 +76,18 @@ class PasonacareerClient:
         response = self._get_with_retry(f"{BASE_URL}{SEARCH_PATH}", params=params)
         return response.text if response is not None else None
 
+    def fetch_company_sitemap(self) -> str | None:
+        xml_text = self._fetch_company_sitemap_via_requests()
+        if xml_text is not None:
+            return xml_text
+        response = self._get_with_retry(f"{BASE_URL}{COMPANY_SITEMAP_PATH}", max_retries=2, fast_fail=True)
+        return response.text if response is not None else None
+
     def fetch_job_page(self, detail_url: str) -> str | None:
+        response = self._get_with_retry(urljoin(BASE_URL, detail_url), max_retries=1, fast_fail=True)
+        return response.text if response is not None else None
+
+    def fetch_company_page(self, detail_url: str) -> str | None:
         response = self._get_with_retry(urljoin(BASE_URL, detail_url), max_retries=1, fast_fail=True)
         return response.text if response is not None else None
 
@@ -136,6 +155,44 @@ class PasonacareerClient:
         if time.time() < self._proxy_cooldown_until:
             return [False]
         return [True, False]
+
+    def _fetch_company_sitemap_via_requests(self) -> str | None:
+        headers = dict(self._base_headers)
+        headers["User-Agent"] = _REQUESTS_USER_AGENT
+        url = f"{BASE_URL}{COMPANY_SITEMAP_PATH}"
+        for use_proxy in self._request_modes():
+            proxies = None
+            if use_proxy and self._proxy_url:
+                proxies = {"http": self._proxy_url, "https": self._proxy_url}
+            try:
+                self._polite_delay()
+                response = requests.get(url, headers=headers, proxies=proxies, timeout=_SITEMAP_TIMEOUT)
+                self._request_count += 1
+                if response.status_code == 200:
+                    xml_text = str(response.text or "")
+                    if xml_text.strip():
+                        return xml_text
+                    LOGGER.warning("PasonaCareer company sitemap 返回空内容。")
+                    return None
+                if response.status_code == 403 and use_proxy:
+                    self._error_count += 1
+                    self._disable_proxy_temporarily(f"company sitemap 403: {url}")
+                    LOGGER.warning("PasonaCareer company sitemap 代理访问被拦，回退直连。")
+                    continue
+                if response.status_code == 403:
+                    self._error_count += 1
+                    LOGGER.warning("PasonaCareer company sitemap 403：%s", url)
+                    return None
+                LOGGER.warning("PasonaCareer company sitemap HTTP %d：%s", response.status_code, url)
+                return None
+            except requests.RequestException as exc:
+                self._error_count += 1
+                if use_proxy and self._should_fallback_direct_from_exception(exc):
+                    self._disable_proxy_temporarily(f"company sitemap 代理异常: {url}")
+                    LOGGER.warning("PasonaCareer company sitemap 代理异常，回退直连：%s", exc)
+                    continue
+                LOGGER.warning("PasonaCareer company sitemap 请求异常: %s", exc)
+        return None
 
     def _session(self, use_proxy: bool) -> Session:
         attr = "proxy_session" if use_proxy else "direct_session"

@@ -16,6 +16,9 @@ if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
 
 from japan_crawler.sites.pasonacareer.parser import (
+    extract_company_id_from_url,
+    parse_company_page,
+    parse_company_sitemap_urls,
     parse_filter_options,
     parse_job_cards,
     parse_job_detail,
@@ -82,6 +85,25 @@ FILTER_HTML = """
 </body></html>
 """
 
+COMPANY_SITEMAP_XML = """
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.pasonacareer.jp/company/80100144/</loc></url>
+  <url><loc>https://www.pasonacareer.jp/company/80204433/</loc></url>
+</urlset>
+"""
+
+COMPANY_DETAIL_HTML = """
+<html><body>
+  <h1>株式会社三菱ＵＦＪ銀行 の中途採用・転職・求人情報</h1>
+  <table>
+    <tr><th>事業内容</th><td>金融業</td></tr>
+    <tr><th>本社所在地</th><td>東京都 千代田区丸の内１丁目４－５</td></tr>
+    <tr><th>企業URL</th><td><a href="https://www.bk.mufg.jp/">https://www.bk.mufg.jp/</a></td></tr>
+  </table>
+</body></html>
+"""
+
 
 class PasonacareerParserTests(unittest.TestCase):
     def test_parse_total_results_and_pages(self) -> None:
@@ -127,6 +149,27 @@ class PasonacareerParserTests(unittest.TestCase):
         self.assertTrue(area_options[1]["has_children"])
         self.assertEqual("jb100", job_options[0]["value"])
         self.assertEqual("", job_options[0]["parent_value"])
+
+    def test_parse_company_sitemap_urls(self) -> None:
+        urls = parse_company_sitemap_urls(COMPANY_SITEMAP_XML)
+        self.assertEqual(
+            [
+                "https://www.pasonacareer.jp/company/80100144/",
+                "https://www.pasonacareer.jp/company/80204433/",
+            ],
+            urls,
+        )
+
+    def test_parse_company_page(self) -> None:
+        detail = parse_company_page(COMPANY_DETAIL_HTML)
+        self.assertEqual("株式会社三菱ＵＦＪ銀行", detail["company_name"])
+        self.assertEqual("東京都 千代田区丸の内１丁目４－５", detail["address"])
+        self.assertEqual("https://www.bk.mufg.jp", detail["website"])
+        self.assertEqual("", detail["representative"])
+
+    def test_extract_company_id_from_url(self) -> None:
+        self.assertEqual("80204433", extract_company_id_from_url("https://www.pasonacareer.jp/company/80204433/"))
+        self.assertEqual("", extract_company_id_from_url("https://www.pasonacareer.jp/search/"))
 
 
 if __name__ == "__main__":

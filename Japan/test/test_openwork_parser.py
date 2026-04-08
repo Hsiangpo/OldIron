@@ -15,7 +15,15 @@ if str(SRC) not in sys.path:
 if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
 
-from japan_crawler.sites.openwork.parser import parse_company_cards, parse_company_detail, parse_total_pages, parse_total_results
+from japan_crawler.sites.openwork.parser import (
+    parse_accessible_pages,
+    parse_company_cards,
+    parse_company_detail,
+    parse_field_codes,
+    parse_pref_codes,
+    parse_total_pages,
+    parse_total_results,
+)
 
 
 LIST_HTML = """
@@ -31,6 +39,16 @@ LIST_HTML = """
 <div>193,415 件中 1～50件を表示</div>
 <a href="/company_list?field=&pref=&src_str=&sort=1&next_page=2">次へ</a>
 <a href="/company_list?field=&pref=&src_str=&sort=1&next_page=6">6</a>
+</body></html>
+"""
+
+FILTER_HTML = """
+<html><body>
+  <a href="/company_list?field=0023&sort=1">SIer、ソフト開発、システム運用</a>
+  <a href="/company_list?field=0067&sort=1">小売</a>
+  <a href="/company_list?pref=13&sort=1">東京都</a>
+  <a href="/company_list?pref=27&sort=1">大阪府</a>
+  <a href="/company_list?field=0023&sort=1">重复行业</a>
 </body></html>
 """
 
@@ -75,6 +93,14 @@ class OpenworkParserTests(unittest.TestCase):
         self.assertEqual("代表取締役社長 牛田 圭一", detail["representative"])
         self.assertEqual("東京都千代田区丸の内1-9-2 グラントウキョウサウスタワー", detail["address"])
         self.assertEqual("情報サービス、リサーチ", detail["industry"])
+
+    def test_parse_filter_codes(self) -> None:
+        self.assertEqual(["0023", "0067"], parse_field_codes(FILTER_HTML))
+        self.assertEqual(["13", "27"], parse_pref_codes(FILTER_HTML))
+
+    def test_parse_accessible_pages_applies_site_cap(self) -> None:
+        self.assertEqual(10, parse_accessible_pages(10351))
+        self.assertEqual(4, parse_accessible_pages(180))
 
 
 if __name__ == "__main__":

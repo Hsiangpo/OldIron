@@ -308,7 +308,15 @@ def _openwork_progress_snapshot(output_dir: Path) -> str:
     try:
         with sqlite3.connect(str(db_path), timeout=5.0) as conn:
             checkpoint = conn.execute(
-                "SELECT last_page, total_pages, status FROM checkpoints WHERE scope = 'company_list'"
+                """
+                SELECT
+                    COUNT(*) AS scope_count,
+                    SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count,
+                    COALESCE(SUM(last_page), 0) AS finished_pages,
+                    COALESCE(SUM(total_pages), 0) AS total_pages
+                FROM checkpoints
+                WHERE scope LIKE 'company_list%'
+                """
             ).fetchone()
             company_count, updated_at = conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(updated_at), '') FROM companies"
@@ -321,10 +329,11 @@ def _openwork_progress_snapshot(output_dir: Path) -> str:
             ).fetchone()[0]
     except sqlite3.Error as exc:
         return f"读取进度失败: {exc}"
-    if checkpoint is None:
+    if checkpoint is None or int(checkpoint[0] or 0) <= 0:
         return f"P1 尚未落盘 | 公司={company_count}"
     return (
-        f"P1={checkpoint[0]}/{checkpoint[1]}:{checkpoint[2]} | 公司={company_count} | "
+        f"P1范围={int(checkpoint[1] or 0)}/{int(checkpoint[0] or 0)} | "
+        f"页进度={int(checkpoint[2] or 0)}/{int(checkpoint[3] or 0)} | 公司={company_count} | "
         f"邮箱待补={email_todo} | 官网待补={gmap_todo} | 最新更新={updated_at or '-'}"
     )
 

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,13 +19,47 @@ if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
 
 from japan_crawler.sites.pasonacareer.pipeline import _fetch_search_page_with_retries
+from japan_crawler.sites.pasonacareer.pipeline import _fetch_company_sitemap_with_retries
 from japan_crawler.sites.pasonacareer.pipeline import _fetch_job_detail
 from japan_crawler.sites.pasonacareer.pipeline import _plan_search_scopes
 from japan_crawler.sites.pasonacareer.pipeline import _resolve_start_page
 from japan_crawler.sites.pasonacareer.pipeline import run_pipeline_list
+from japan_crawler.sites.pasonacareer.client import PasonacareerClient
 
 
 class PasonacareerPipelineTests(unittest.TestCase):
+    def test_client_fetch_company_sitemap_prefers_requests_path(self) -> None:
+        client = PasonacareerClient(request_delay=0.0, proxy="http://127.0.0.1:7897")
+        response = mock.Mock(status_code=200, text="<urlset></urlset>")
+        with (
+            mock.patch("japan_crawler.sites.pasonacareer.client.requests.get", return_value=response) as get_mock,
+            mock.patch.object(client, "_get_with_retry", side_effect=AssertionError("不该回退到 curl 路径")),
+        ):
+            xml_text = client.fetch_company_sitemap()
+        self.assertEqual("<urlset></urlset>", xml_text)
+        get_mock.assert_called_once()
+
+    def test_fetch_company_sitemap_with_retries_eventually_succeeds(self) -> None:
+        class _Client:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def fetch_company_sitemap(self) -> str | None:
+                self.calls += 1
+                return "<urlset></urlset>" if self.calls >= 2 else None
+
+        client = _Client()
+        from japan_crawler.sites.pasonacareer import pipeline as target
+
+        original_sleep = target.time.sleep
+        target.time.sleep = lambda seconds: None  # type: ignore[assignment]
+        try:
+            xml_text = _fetch_company_sitemap_with_retries(client)
+        finally:
+            target.time.sleep = original_sleep  # type: ignore[assignment]
+        self.assertEqual("<urlset></urlset>", xml_text)
+        self.assertEqual(2, client.calls)
+
     def test_fetch_search_page_with_retries_eventually_succeeds(self) -> None:
         class _Client:
             def __init__(self) -> None:
@@ -173,6 +208,60 @@ class PasonacareerPipelineTests(unittest.TestCase):
         self.assertEqual("株式会社テスト", company["company_name"])
         self.assertEqual("", company["website"])
         self.assertEqual("", company["address"])
+
+    def test_pipeline_prefers_company_sitemap_when_available(self) -> None:
+        sitemap_xml = """
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>https://www.pasonacareer.jp/company/80204433/</loc></url>
+        </urlset>
+        """
+        company_html = """
+        <html><body>
+          <h1>株式会社三菱ＵＦＪ銀行 の中途採用・転職・求人情報</h1>
+          <table>
+            <tr><th>本社所在地</th><td>東京都 千代田区丸の内１丁目４－５</td></tr>
+            <tr><th>企業URL</th><td><a href="https://www.bk.mufg.jp/">https://www.bk.mufg.jp/</a></td></tr>
+          </table>
+        </body></html>
+        """
+
+        class _Client:
+            stats = {"requests": 2, "errors": 0}
+
+            def __init__(self) -> None:
+                self.search_calls = 0
+
+            def fetch_company_sitemap(self) -> str | None:
+                return sitemap_xml
+
+            def fetch_company_page(self, detail_url: str) -> str | None:
+                _ = detail_url
+                return company_html
+
+            def fetch_search_page(self, page: int = 1, *, filters=None) -> str | None:  # noqa: ARG002
+                self.search_calls += 1
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            from japan_crawler.sites.pasonacareer import pipeline as target
+
+            original_client = target.PasonacareerClient
+            target.PasonacareerClient = lambda **kwargs: _Client()  # type: ignore[assignment]
+            try:
+                stats = run_pipeline_list(output_dir=output_dir, request_delay=0.0, proxy="", max_pages=0, detail_workers=1)
+            finally:
+                target.PasonacareerClient = original_client  # type: ignore[assignment]
+            self.assertEqual(1, stats["pages_done"])
+            self.assertEqual(1, stats["new_companies"])
+            conn = sqlite3.connect(output_dir / "pasonacareer_store.db")
+            row = conn.execute("SELECT company_name, website, address FROM companies").fetchone()
+            checkpoint = conn.execute(
+                "SELECT last_page, total_pages, status FROM checkpoints WHERE scope = 'company_sitemap'"
+            ).fetchone()
+            conn.close()
+            self.assertEqual(("株式会社三菱ＵＦＪ銀行", "https://www.bk.mufg.jp", "東京都 千代田区丸の内１丁目４－５"), row)
+            self.assertEqual((1, 1, "done"), checkpoint)
 
 
 if __name__ == "__main__":

@@ -68,6 +68,10 @@ class _CaptchaChallenge:
     form_fields: dict[str, str]
 
 
+class OpenworkPageNotFound(RuntimeError):
+    """OpenWork 页面返回 404。"""
+
+
 class OpenworkClient:
     """OpenWork 列表页与公司详情页抓取客户端。"""
 
@@ -108,26 +112,50 @@ class OpenworkClient:
         self._request_count = 0
         self._error_count = 0
 
-    def fetch_list_page(self, page: int = 1) -> str | None:
+    def fetch_list_page(
+        self,
+        page: int = 1,
+        *,
+        field: str = "",
+        pref: str = "",
+        src_str: str = "",
+        ct: str = "",
+    ) -> str | None:
         """抓取公司列表页。"""
         params = {
-            "field": "",
-            "pref": "",
-            "src_str": "",
+            "field": field,
+            "pref": pref,
+            "src_str": src_str,
             "sort": "1",
         }
+        if ct:
+            params["ct"] = ct
         if page > 1:
             params["next_page"] = str(page)
-        response = self._get_with_retry(f"{BASE_URL}{LIST_PATH}", params=params)
+        response = self._get_with_retry(
+            f"{BASE_URL}{LIST_PATH}",
+            params=params,
+            raise_on_404=True,
+        )
         return response.text if response is not None else None
 
     def fetch_detail_page(self, detail_url: str) -> str | None:
         """抓取公司详情页。"""
         absolute = urljoin(BASE_URL, detail_url)
-        response = self._get_with_retry(absolute)
+        try:
+            response = self._get_with_retry(absolute, raise_on_404=True)
+        except OpenworkPageNotFound:
+            LOGGER.warning("OpenWork 详情页 404：%s", absolute)
+            return None
         return response.text if response is not None else None
 
-    def _get_with_retry(self, url: str, params: dict[str, str] | None = None) -> Any:
+    def _get_with_retry(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        *,
+        raise_on_404: bool = False,
+    ) -> Any:
         if self._browser_mode:
             browser_response = self._browser_response(url)
             if browser_response is not None:
@@ -166,11 +194,18 @@ class OpenworkClient:
                             continue
                         LOGGER.warning("OpenWork 403，当前直连/IP 也被拦，保留断点等待换 IP：%s", url)
                         return None
+                    if response.status_code == 404:
+                        if raise_on_404:
+                            raise OpenworkPageNotFound(url)
+                        LOGGER.warning("HTTP 404: %s", url)
+                        return None
                     if response.status_code >= 500:
                         self._sleep_backoff(attempt, 2.0, 5.0, f"{response.status_code} 服务端错误")
                         break
                     LOGGER.warning("HTTP %d: %s", response.status_code, url)
                     return None
+                except OpenworkPageNotFound:
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     self._error_count += 1
                     if use_proxy and self._should_fallback_direct_from_exception(exc):
