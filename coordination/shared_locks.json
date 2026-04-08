@@ -1,32 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T12:45:31Z",
-  "locks": [
-    {
-      "lock_id": "lock-20260408-gmap-cookie-reuse-1",
-      "status": "locked",
-      "path": "shared/oldiron_core/google_maps/client.py",
-      "machine": "macos-local",
-      "agent": "Codex",
-      "task_id": "20260408-gmap-cookie-reuse",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-08T12:37:27Z",
-      "heartbeat_at": "2026-04-08T12:45:31Z",
-      "expires_at": "2026-04-08T13:05:31Z",
-      "notes": "Disable Google Maps count-based rest and persist DNB akamai cookie across countries"
-    },
-    {
-      "lock_id": "lock-20260408-gmap-cookie-reuse-2",
-      "status": "locked",
-      "path": "shared/oldiron_core/dnb_cookie_cache.py",
-      "machine": "macos-local",
-      "agent": "Codex",
-      "task_id": "20260408-gmap-cookie-reuse",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-08T12:37:27Z",
-      "heartbeat_at": "2026-04-08T12:45:31Z",
-      "expires_at": "2026-04-08T13:05:31Z",
-      "notes": "Disable Google Maps count-based rest and persist DNB akamai cookie across countries"
-    }
-  ]
+  "updated_at": "2026-04-08T12:57:55Z",
+  "locks": []
 }

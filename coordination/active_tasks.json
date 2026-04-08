@@ -1,37 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T12:45:31Z",
-  "tasks": [
-    {
-      "task_id": "20260408-gmap-cookie-reuse",
-      "status": "in_progress",
-      "machine": "macos-local",
-      "agent": "Codex",
-      "change_class": "shared_zone",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "shared/oldiron_core/google_maps",
-        "shared/oldiron_core",
-        "UnitedStates/src/unitedstates_crawler/sites/dnb",
-        "Brazil/src/brazil_crawler/sites/dnb"
-      ],
-      "planned_files": [
-        "shared/oldiron_core/google_maps/client.py",
-        "shared/oldiron_core/dnb_cookie_cache.py",
-        "UnitedStates/src/unitedstates_crawler/sites/dnb/client.py",
-        "Brazil/src/brazil_crawler/sites/dnb/client.py",
-        "UnitedStates/tests/test_dnb_client.py",
-        "Brazil/tests/test_dnb_client.py"
-      ],
-      "shared_lock_ids": [
-        "lock-20260408-gmap-cookie-reuse-1",
-        "lock-20260408-gmap-cookie-reuse-2"
-      ],
-      "github_ref": "not-created",
-      "started_at": "2026-04-08T12:37:27Z",
-      "last_heartbeat_at": "2026-04-08T12:45:31Z",
-      "notes": "Disable Google Maps count-based rest and persist DNB akamai cookie across countries"
-    }
-  ]
+  "updated_at": "2026-04-08T12:57:55Z",
+  "tasks": []
 }
