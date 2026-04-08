@@ -1,5 +1,19 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T11:39:01Z",
-  "locks": []
+  "updated_at": "2026-04-08T11:44:12Z",
+  "locks": [
+    {
+      "lock_id": "lock-20260408-llm-ssl-eof-1",
+      "status": "locked",
+      "path": "shared/oldiron_core/fc_email/llm_client.py",
+      "machine": "macos-local",
+      "agent": "Codex",
+      "task_id": "20260408-llm-ssl-eof",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-08T11:44:12Z",
+      "heartbeat_at": "2026-04-08T11:44:12Z",
+      "expires_at": "2026-04-08T12:14:12Z",
+      "notes": "Retry transient SSL EOF from provider TLS instability"
+    }
+  ]
 }

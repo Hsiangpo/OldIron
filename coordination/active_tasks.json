@@ -1,5 +1,29 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T11:39:01Z",
-  "tasks": []
+  "updated_at": "2026-04-08T11:44:12Z",
+  "tasks": [
+    {
+      "task_id": "20260408-llm-ssl-eof",
+      "status": "in_progress",
+      "machine": "macos-local",
+      "agent": "Codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "shared/oldiron_core/fc_email"
+      ],
+      "planned_files": [
+        "shared/oldiron_core/fc_email/llm_client.py",
+        "shared/oldiron_core/protocol_crawler/tests/test_email_service_lifecycle.py"
+      ],
+      "shared_lock_ids": [
+        "lock-20260408-llm-ssl-eof-1"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-08T11:44:12Z",
+      "last_heartbeat_at": "2026-04-08T11:44:12Z",
+      "notes": "Retry transient SSL EOF from provider TLS instability"
+    }
+  ]
 }
