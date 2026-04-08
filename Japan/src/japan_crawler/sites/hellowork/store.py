@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+_REP_ONLY_QUEUE_MIGRATION_VERSION = 20260408
+
 
 class HelloworkStore:
     """线程安全的 hellowork 数据存储。"""
@@ -23,6 +25,7 @@ class HelloworkStore:
         self._local = threading.local()
         self._max_write_retries = 6
         self._init_tables()
+        self._migrate_rep_only_queue()
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -94,6 +97,25 @@ class HelloworkStore:
             );
         """)
         conn.commit()
+
+    def _migrate_rep_only_queue(self) -> None:
+        def _action(conn: sqlite3.Connection) -> None:
+            current_version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+            if current_version >= _REP_ONLY_QUEUE_MIGRATION_VERSION:
+                return
+            conn.execute(
+                """
+                UPDATE companies
+                SET email_status = 'rep_pending'
+                WHERE website != ''
+                  AND website IS NOT NULL
+                  AND trim(coalesce(representative, '')) = ''
+                  AND email_status = 'done'
+                """
+            )
+            conn.execute(f"PRAGMA user_version = {_REP_ONLY_QUEUE_MIGRATION_VERSION}")
+
+        self._run_write(_action)
 
     # ── 都道府県管理 ──
 
@@ -232,7 +254,7 @@ class HelloworkStore:
             SELECT id, company_name, address, website, representative
             FROM companies
             WHERE website != '' AND website IS NOT NULL
-              AND (email_status = 'pending' OR email_status IS NULL)
+              AND (email_status IN ('pending', 'rep_pending') OR email_status IS NULL)
             ORDER BY id
         """
         if limit > 0:

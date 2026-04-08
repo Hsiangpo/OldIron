@@ -16,6 +16,7 @@ _PLACEHOLDER_COMPANY_NAMES = (
     "企業インタビュー",
     "採用企業検索",
 )
+_REP_ONLY_QUEUE_MIGRATION_VERSION = 20260408
 
 
 def _now_text() -> str:
@@ -33,6 +34,7 @@ class PasonacareerStore:
         self._max_write_retries = 6
         self._init_tables()
         self._repair_statuses()
+        self._migrate_rep_only_queue()
         self.purge_placeholder_companies()
 
     def _conn(self) -> sqlite3.Connection:
@@ -131,6 +133,25 @@ class PasonacareerStore:
                 """,
                 (_now_text(),),
             )
+
+        self._run_write(_action)
+
+    def _migrate_rep_only_queue(self) -> None:
+        def _action(conn: sqlite3.Connection) -> None:
+            current_version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+            if current_version >= _REP_ONLY_QUEUE_MIGRATION_VERSION:
+                return
+            conn.execute(
+                """
+                UPDATE companies
+                SET email_status = 'rep_pending'
+                WHERE website != ''
+                  AND website IS NOT NULL
+                  AND trim(coalesce(representative, '')) = ''
+                  AND email_status = 'done'
+                """
+            )
+            conn.execute(f"PRAGMA user_version = {_REP_ONLY_QUEUE_MIGRATION_VERSION}")
 
         self._run_write(_action)
 
@@ -265,7 +286,7 @@ class PasonacareerStore:
             SELECT id, company_name, address, website, representative
             FROM companies
             WHERE website != '' AND website IS NOT NULL
-              AND (email_status = 'pending' OR email_status IS NULL)
+              AND (email_status IN ('pending', 'rep_pending') OR email_status IS NULL)
             ORDER BY id
         """
         if limit > 0:
