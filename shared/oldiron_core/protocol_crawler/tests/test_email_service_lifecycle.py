@@ -66,6 +66,11 @@ class _CaptureLlm:
         )
 
 
+class _FailIfCalledLlm:
+    def extract_contacts_from_html(self, **_: object) -> HtmlContactExtraction:
+        raise AssertionError("不应该触发 LLM 代表人抽取")
+
+
 class _CaptureFullHtmlCrawler:
     def __init__(self, html: str) -> None:
         self._html = html
@@ -308,6 +313,72 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
         pages = [HtmlPageResult(url="https://example.co.jp/contact", html=html)]
         emails = service._extract_rule_emails("https://example.co.jp", pages)
         self.assertEqual(["contact@mazda.co.jp"], emails)
+
+    def test_extract_rule_representative_reads_next_line_value(self) -> None:
+        service = FirecrawlEmailService(
+            FirecrawlEmailSettings(
+                llm_api_key="x",
+                llm_model="gpt-5.4-mini",
+            ),
+            key_pool=_DummyKeyPool(),
+            firecrawl_client=_DummyCrawler(),
+        )
+        html = """
+        <html>
+          <ul>
+            <li><p>会社名</p><p>川上建材株式会社</p></li>
+            <li><p>代表者</p><p>川上　雅央</p></li>
+          </ul>
+        </html>
+        """
+        representative, quote = service._extract_rule_representative_from_html(html)
+        self.assertEqual("川上 雅央", representative)
+        self.assertIn("代表者", quote)
+        self.assertIn("川上", quote)
+
+    def test_extract_rule_representative_skips_greeting_headings(self) -> None:
+        service = FirecrawlEmailService(
+            FirecrawlEmailSettings(
+                llm_api_key="x",
+                llm_model="gpt-5.4-mini",
+            ),
+            key_pool=_DummyKeyPool(),
+            firecrawl_client=_DummyCrawler(),
+        )
+        representative, quote = service._extract_rule_representative_from_html(
+            "<html><h2>代表あいさつ</h2></html>"
+        )
+        self.assertEqual("", representative)
+        self.assertEqual("", quote)
+
+    def test_discover_emails_uses_rule_representative_before_llm(self) -> None:
+        service = FirecrawlEmailService(
+            FirecrawlEmailSettings(
+                llm_api_key="x",
+                llm_model="gpt-5.4-mini",
+            ),
+            key_pool=_DummyKeyPool(),
+            firecrawl_client=_DummyCrawler(),
+        )
+        service._map_site = lambda start_url: [start_url]  # type: ignore[method-assign]
+        service._select_urls_for_scrape = lambda **_: ["https://example.co.jp/company"]  # type: ignore[method-assign]
+        service._scrape_html_pages = lambda urls: [  # type: ignore[method-assign]
+            HtmlPageResult(
+                url=str(urls[0]),
+                html="<html><p>代表者</p><p>川上　雅央</p></html>",
+            )
+        ]
+        service._extract_rule_emails = lambda start_url, pages: []  # type: ignore[method-assign]
+        service._llm = _FailIfCalledLlm()  # type: ignore[assignment]
+
+        result = service.discover_emails(
+            company_name="川上建材株式会社",
+            homepage="https://example.co.jp",
+        )
+
+        self.assertEqual("川上 雅央", result.representative)
+        self.assertEqual("https://example.co.jp/company", result.evidence_url)
+        self.assertIn("代表者", result.evidence_quote)
 
     def test_discover_emails_keeps_personal_mail_from_llm(self) -> None:
         service = FirecrawlEmailService(

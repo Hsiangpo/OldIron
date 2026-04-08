@@ -75,6 +75,46 @@ _HTML_COMMENT_RE = re.compile(r"(?is)<!--.*?-->")
 _SCRIPT_LIKE_BLOCK_RE = re.compile(r"(?is)<(script|style|template)\b[^>]*>.*?</\1>")
 _NON_ALPHA_RE = re.compile(r"[^a-z0-9]+")
 _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif")
+_REPRESENTATIVE_LABELS = (
+    "代表取締役",
+    "代表社員",
+    "代表理事",
+    "代表者",
+    "社長",
+    "院長",
+    "理事長",
+    "代表",
+)
+_REPRESENTATIVE_BLOCKER_LABELS = (
+    "会社名",
+    "商号",
+    "所在地",
+    "住所",
+    "電話",
+    "tel",
+    "fax",
+    "設立",
+    "創業",
+    "資本金",
+    "事業内容",
+    "従業員",
+    "営業時間",
+    "定休日",
+    "アクセス",
+    "お問い合わせ",
+)
+_REPRESENTATIVE_BLOCKER_VALUES = {
+    "あいさつ",
+    "挨拶",
+    "ごあいさつ",
+    "ご挨拶",
+    "メッセージ",
+    "プロフィール",
+    "会社概要",
+    "概要",
+    "一覧",
+}
+_REPRESENTATIVE_BLOCKER_VALUES_LOWER = {value.lower() for value in _REPRESENTATIVE_BLOCKER_VALUES}
 _BAD_HOST_KEYWORDS = (
     "googlesyndication.com",
     "doubleclick.net",
@@ -441,6 +481,9 @@ class FirecrawlEmailService:
                 selected_urls=final_urls,
             )
 
+        if not representative:
+            representative, evidence_url, evidence_quote = self._extract_rule_representative(pages)
+
         need_llm_representative = not representative
         if need_llm_representative:
             llm_pages = _truncate_page_results_for_llm(pages)
@@ -650,6 +693,41 @@ class FirecrawlEmailService:
                     candidates.append(email)
         return self._clean_emails(candidates)
 
+    def _extract_rule_representative(self, pages: list[HtmlPageResult]) -> tuple[str, str, str]:
+        for page in pages:
+            representative, quote = self._extract_rule_representative_from_html(page.html)
+            if representative:
+                LOGGER.info("代表人规则提取成功：url=%s representative=%s", page.url, representative)
+                return representative, page.url, quote
+        return "", "", ""
+
+    def _extract_rule_representative_from_html(self, raw_html: str) -> tuple[str, str]:
+        html_text = str(raw_html or "")
+        if not html_text.strip():
+            return "", ""
+
+        normalized = html.unescape(html_text)
+        normalized = _HTML_COMMENT_RE.sub(" ", normalized)
+        normalized = _SCRIPT_LIKE_BLOCK_RE.sub(" ", normalized)
+        normalized = re.sub(r"(?i)<br\s*/?>", "\n", normalized)
+        normalized = re.sub(r"(?i)</(?:p|li|td|th|div|tr|dd|dt|h[1-6]|section|article|ul|ol|table)>", "\n", normalized)
+        normalized = re.sub(r"<[^>]+>", " ", normalized)
+        normalized = re.sub(r"[ \t\r\f\v]+", " ", normalized)
+        raw_lines = re.split(r"\n+", normalized)
+        lines = [line.strip(" :：|\t\r\n") for line in raw_lines if line.strip(" :：|\t\r\n")]
+
+        for index, line in enumerate(lines):
+            candidate = self._extract_inline_representative_candidate(line)
+            if candidate:
+                return candidate, line
+            if line not in _REPRESENTATIVE_LABELS or index + 1 >= len(lines):
+                continue
+            next_line = lines[index + 1]
+            candidate = self._normalize_representative_candidate(next_line)
+            if candidate:
+                return candidate, f"{line} {next_line}"
+        return "", ""
+
     def _extract_rule_emails_from_html(self, raw_html: str) -> list[str]:
         html_text = str(raw_html or "")
         if not html_text.strip():
@@ -670,6 +748,35 @@ class FirecrawlEmailService:
     def _normalize_existing_representative(self, value: str) -> str:
         text = str(value or "").strip()
         if text in {"-", "—", "--", "?", "？", "N/A", "n/a", "null", "None"}:
+            return ""
+        return text
+
+    def _extract_inline_representative_candidate(self, line: str) -> str:
+        for label in _REPRESENTATIVE_LABELS:
+            match = re.match(rf"^{re.escape(label)}(?:\s+|[:：]\s*)(.+)$", line)
+            if match is not None:
+                return self._normalize_representative_candidate(match.group(1))
+        return ""
+
+    def _normalize_representative_candidate(self, value: str) -> str:
+        text = str(value or "").replace("\u3000", " ").strip(" :：|/\t\r\n")
+        text = re.sub(r"\s+", " ", text)
+        if not text:
+            return ""
+        lowered = text.lower()
+        if lowered in _REPRESENTATIVE_BLOCKER_VALUES_LOWER:
+            return ""
+        if any(label.lower() in lowered for label in _REPRESENTATIVE_BLOCKER_LABELS):
+            return ""
+        if any(token in lowered for token in ("http", "www.", "@")):
+            return ""
+        if any(marker in text for marker in ("株式会社", "有限会社", "合同会社", "合名会社", "合資会社")):
+            return ""
+        if sum(ch.isdigit() for ch in text) >= 3:
+            return ""
+        if len(text) < 2 or len(text) > 40:
+            return ""
+        if len(re.findall(r"[一-龥ぁ-んァ-ヶA-Za-z]", text)) < 2:
             return ""
         return text
 
