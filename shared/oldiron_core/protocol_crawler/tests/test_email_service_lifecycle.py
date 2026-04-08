@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -72,7 +73,7 @@ class _CaptureFullHtmlCrawler:
 
 
 class _FakeStreamResponse:
-    def __init__(self, lines: list[str]) -> None:
+    def __init__(self, lines: list[str | bytes]) -> None:
         self._lines = lines
 
     def __enter__(self) -> _FakeStreamResponse:
@@ -89,7 +90,7 @@ class _FakeStreamResponse:
 
 
 class _FakeHttpStreamClient:
-    def __init__(self, lines: list[str]) -> None:
+    def __init__(self, lines: list[str | bytes]) -> None:
         self._lines = lines
         self.last_method: str | None = None
         self.last_url: str | None = None
@@ -141,6 +142,25 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
             text = client._call_responses_json_with_model("gpt-5.1-codex-mini", "Say ok")
         self.assertEqual('{"status":"ok"}', text)
         stream_mock.assert_called_once()
+
+    def test_llm_client_streaming_response_decodes_utf8_sse_lines(self) -> None:
+        client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
+        client._api_key = "x"
+        client._base_url = "https://cc.gpteam.top/v1"
+        client._timeout_seconds = 30.0
+        client._http_client = _FakeHttpStreamClient(
+            [
+                (
+                    "data: "
+                    + json.dumps(
+                        {"type": "response.output_text.done", "text": "榛葉 稔"},
+                        ensure_ascii=False,
+                    )
+                ).encode("utf-8")
+            ]
+        )
+        text = client._call_responses_streaming_api({"model": "gpt-5.1-codex-mini", "input": "Say ok"})
+        self.assertEqual("榛葉 稔", text)
 
     def test_close_does_not_close_injected_crawler_or_key_pool(self) -> None:
         crawler = _DummyCrawler()

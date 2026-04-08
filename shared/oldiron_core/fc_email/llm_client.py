@@ -68,6 +68,16 @@ def _is_model_not_found_error(error_text: str) -> bool:
     return any(needle in lowered for needle in needles)
 
 
+def _decode_sse_line(raw_line: object) -> str:
+    """按 UTF-8 解析 SSE 行，避免中文被默认编码解成乱码。"""
+    if isinstance(raw_line, bytes):
+        try:
+            return raw_line.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw_line.decode("utf-8", errors="replace")
+    return str(raw_line or "")
+
+
 @dataclass(slots=True)
 class HtmlContactExtraction:
     company_name: str
@@ -554,7 +564,7 @@ class EmailUrlLlmClient:
         with self._http_client.stream("POST", stream_url, headers=headers, json=payload) as response:
             response.raise_for_status()
             for raw_line in response.iter_lines():
-                line = str(raw_line or "").strip()
+                line = _decode_sse_line(raw_line).strip()
                 if not line.startswith("data:"):
                     continue
                 payload_text = line[5:].strip()
