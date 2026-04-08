@@ -76,11 +76,11 @@ At the start of substantial work:
    - `LLM_MODEL`
    - proxy settings (`7897` is the default outbound proxy port in this project)
    - if the user has switched the approved LLM provider, update the local runtime `.env` first and verify a real API call before restarting crawler processes
-   - current active approved provider in this repo is:
-     - `LLM_BASE_URL=https://cc.gpteam.top/v1`
-     - `LLM_MODEL=gpt-5.1-codex-mini`
-     - `LLM_REASONING_EFFORT=medium`
-     - `LLM_API_STYLE=auto`
+   - do not infer the current provider from committed docs, `.env.example`, README snippets, or code fallback defaults
+   - for a machine that is actually running, the source of truth is:
+     - the user's latest explicit provider-switch instruction
+     - that machine's current local country `.env`
+   - if repository docs/examples/defaults disagree, do not present any one of them as the active provider until the user confirms the intended one
    - do not write `LLM_API_KEY` into tracked files; keep it only in local `.env`
 4. If protocol exploration is needed, ensure the workflow follows the repository's crawler tooling expectations.
 5. Read `coordination/active_tasks.json` and `coordination/shared_locks.json` before substantial edits.

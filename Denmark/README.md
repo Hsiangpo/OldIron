@@ -62,8 +62,11 @@ Denmark/.venv/bin/python product.py Denmark day1
 
 ```env
 LLM_API_KEY=你的LLM密钥
-LLM_BASE_URL=https://api.gpteamservices.com/v1
-LLM_MODEL=gpt-5.4-mini
+# 注意：这里不要照抄仓库历史示例，按当前批准的 provider / model 填写
+LLM_BASE_URL=
+LLM_MODEL=
+LLM_REASONING_EFFORT=
+LLM_API_STYLE=auto
 CRAWL_BACKEND=protocol
 ```
 

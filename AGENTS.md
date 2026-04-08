@@ -31,13 +31,13 @@
 - Do not commit `.env`, cookies, API keys, or anything under `output/`.
 - LLM provider switching rule:
   - this repo may switch between approved LLM providers over time; do not hardcode the assumption that only one provider exists
-  - the active provider must be recorded in both `AGENTS.md` and the relevant skill doc when the user switches it
+  - the active provider must be recorded in both `AGENTS.md` and the relevant skill doc when the user explicitly confirms a repo-wide switch
   - API keys must stay only in local `.env` files; never write LLM API keys into tracked docs, code comments, commits, or delivery outputs
-  - current active provider on this repo is:
-    - `LLM_BASE_URL=https://cc.gpteam.top/v1`
-    - `LLM_MODEL=gpt-5.1-codex-mini`
-    - `LLM_REASONING_EFFORT=medium`
-    - `LLM_API_STYLE=auto`
+  - do not treat committed docs, `.env.example`, README snippets, or code fallback defaults as the source of truth for the current runtime provider
+  - for a machine that is actually running crawler processes, the source of truth is:
+    - the user's latest explicit provider-switch instruction
+    - that machine's current local country `.env`
+  - if docs/examples/defaults disagree, stop claiming a repo-wide active provider until the user confirms the intended one
   - after a provider switch, update all affected runtime `.env` files on every runtime machine before resuming processes
 - Cross-machine sync rule:
   - Code, docs, tests, and normal source changes must be synced by Git only.
