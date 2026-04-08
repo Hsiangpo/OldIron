@@ -1,5 +1,30 @@
 {
   "version": 1,
-  "updated_at": "2026-04-08T16:02:34Z",
-  "tasks": []
+  "updated_at": "2026-04-08T16:08:45Z",
+  "tasks": [
+    {
+      "task_id": "20260408-llm-provider-confirm",
+      "status": "in_progress",
+      "machine": "macos-local",
+      "agent": "Codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "AGENTS.md",
+        ".agents/skills/oldiron-crawler/SKILL.md"
+      ],
+      "planned_files": [
+        "AGENTS.md",
+        ".agents/skills/oldiron-crawler/SKILL.md"
+      ],
+      "shared_lock_ids": [
+        "lock-20260408-llm-provider-confirm-1"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-08T16:08:45Z",
+      "last_heartbeat_at": "2026-04-08T16:08:45Z",
+      "notes": "Record confirmed repo-wide LLM provider after live validation"
+    }
+  ]
 }
