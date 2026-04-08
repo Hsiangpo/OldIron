@@ -112,6 +112,20 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
             )
         self.assertEqual("ok", text)
 
+    def test_llm_client_prefers_streaming_responses_directly_for_cc_provider(self) -> None:
+        client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
+        client._client = SimpleNamespace(
+            responses=SimpleNamespace(create=lambda **kwargs: (_ for _ in ()).throw(AssertionError("不该先走 SDK responses"))),
+        )
+        client._api_key = "x"
+        client._base_url = "https://cc.gpteam.top/v1"
+        client._timeout_seconds = 30.0
+        client._reasoning_effort = "medium"
+        with patch.object(client, "_call_responses_streaming_api", return_value='{"status":"ok"}') as stream_mock:
+            text = client._call_responses_json_with_model("gpt-5.1-codex-mini", "Say ok")
+        self.assertEqual('{"status":"ok"}', text)
+        stream_mock.assert_called_once()
+
     def test_close_does_not_close_injected_crawler_or_key_pool(self) -> None:
         crawler = _DummyCrawler()
         key_pool = _DummyKeyPool()

@@ -13,11 +13,14 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import XMLParsedAsHTMLWarning
+from urllib3 import disable_warnings
+from urllib3.exceptions import InsecureRequestWarning
 
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 LOGGER = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+disable_warnings(InsecureRequestWarning)
 _TLS_VERIFY_NOTICE_BASE_URLS: set[str] = set()
 
 
@@ -374,6 +377,8 @@ class EmailUrlLlmClient:
         base_kwargs: dict[str, Any] = {"model": model, "input": prompt}
         if self._reasoning_effort:
             base_kwargs["reasoning"] = {"effort": self._reasoning_effort}
+        if self._should_use_streaming_responses_fallback():
+            return self._call_responses_streaming_api(base_kwargs)
         plans = ((False, True), (False, False), (True, True), (True, False))
         last_exc: Exception | None = None
         for use_list_input, use_response_format in plans:
