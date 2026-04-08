@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin
 
-import requests
 from bs4 import XMLParsedAsHTMLWarning
 from urllib3 import disable_warnings
 from urllib3.exceptions import InsecureRequestWarning
@@ -22,6 +21,10 @@ LOGGER = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 disable_warnings(InsecureRequestWarning)
 _TLS_VERIFY_NOTICE_BASE_URLS: set[str] = set()
+_DEFAULT_LLM_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json",
+}
 
 
 def _should_disable_tls_verify(*, base_url: str, verify_mode: str) -> bool:
@@ -123,6 +126,7 @@ class EmailUrlLlmClient:
         client_kwargs: dict[str, Any] = {
             "timeout": timeout_seconds,
             "follow_redirects": True,
+            "headers": dict(_DEFAULT_LLM_HEADERS),
         }
         if proxy_url:
             client_kwargs["proxy"] = proxy_url
@@ -543,24 +547,13 @@ class EmailUrlLlmClient:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
+            "User-Agent": _DEFAULT_LLM_HEADERS["User-Agent"],
         }
-        proxy_url = str(os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "").strip()
-        request_kwargs: dict[str, Any] = {
-            "headers": headers,
-            "json": payload,
-            "timeout": max(float(self._timeout_seconds or 60.0), 20.0),
-            "stream": True,
-        }
-        if proxy_url:
-            request_kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
-        verify_mode = str(os.getenv("LLM_TLS_VERIFY", "auto") or "auto").strip().lower()
-        if _should_disable_tls_verify(base_url=self._base_url, verify_mode=verify_mode):
-            request_kwargs["verify"] = False
         stream_url = urljoin(self._base_url.rstrip("/") + "/", "responses")
         chunks: list[str] = []
-        with requests.post(stream_url, **request_kwargs) as response:
+        with self._http_client.stream("POST", stream_url, headers=headers, json=payload) as response:
             response.raise_for_status()
-            for raw_line in response.iter_lines(decode_unicode=True):
+            for raw_line in response.iter_lines():
                 line = str(raw_line or "").strip()
                 if not line.startswith("data:"):
                     continue

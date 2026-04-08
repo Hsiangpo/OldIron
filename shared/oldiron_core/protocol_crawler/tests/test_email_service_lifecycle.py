@@ -88,6 +88,22 @@ class _FakeStreamResponse:
         return iter(self._lines)
 
 
+class _FakeHttpStreamClient:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+        self.last_method: str | None = None
+        self.last_url: str | None = None
+        self.last_headers: dict[str, str] | None = None
+        self.last_json: dict[str, object] | None = None
+
+    def stream(self, method: str, url: str, *, headers: dict[str, str], json: dict[str, object]) -> _FakeStreamResponse:
+        self.last_method = method
+        self.last_url = url
+        self.last_headers = dict(headers)
+        self.last_json = dict(json)
+        return _FakeStreamResponse(self._lines)
+
+
 class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
     def test_llm_client_falls_back_to_streaming_when_responses_output_text_is_empty(self) -> None:
         client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
@@ -102,15 +118,15 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
             'data: {"type":"response.output_text.delta","delta":"k"}',
             'data: {"type":"response.output_text.done","text":"ok"}',
         ]
-        with patch(
-            "shared.oldiron_core.fc_email.llm_client.requests.post",
-            return_value=_FakeStreamResponse(stream_lines),
-        ):
-            text = client._call_api_with_retry(
-                channel="responses",
-                kwargs={"model": "gpt-5.1-codex-mini", "input": "Say ok"},
-            )
+        client._http_client = _FakeHttpStreamClient(stream_lines)
+        text = client._call_api_with_retry(
+            channel="responses",
+            kwargs={"model": "gpt-5.1-codex-mini", "input": "Say ok"},
+        )
         self.assertEqual("ok", text)
+        self.assertEqual("POST", client._http_client.last_method)
+        self.assertEqual("https://cc.gpteam.top/v1/responses", client._http_client.last_url)
+        self.assertEqual("Mozilla/5.0", client._http_client.last_headers["User-Agent"])
 
     def test_llm_client_prefers_streaming_responses_directly_for_cc_provider(self) -> None:
         client = EmailUrlLlmClient.__new__(EmailUrlLlmClient)
