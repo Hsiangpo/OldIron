@@ -108,13 +108,15 @@ class MynaviParserTests(unittest.TestCase):
         self.assertEqual("426522", cards[0]["company_id"])
         self.assertEqual("株式会社NTTデータグループ", cards[0]["company_name"])
         self.assertEqual("インターネット関連", cards[0]["industry"])
+        self.assertFalse(cards[0]["ended_listing"])
 
     def test_parse_company_cards_supports_completed_class(self) -> None:
         cards = parse_company_cards(LIST_COMPLETED_HTML)
         self.assertEqual(1, len(cards))
         self.assertEqual("224127", cards[0]["company_id"])
-        self.assertEqual("株式会社アイズ・コミュニケーション（掲載終了）", cards[0]["company_name"])
+        self.assertEqual("株式会社アイズ・コミュニケーション", cards[0]["company_name"])
         self.assertEqual("設備工事", cards[0]["industry"])
+        self.assertTrue(cards[0]["ended_listing"])
 
     def test_parse_company_detail(self) -> None:
         detail = parse_company_detail(DETAIL_HTML)

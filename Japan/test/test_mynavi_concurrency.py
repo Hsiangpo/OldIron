@@ -24,6 +24,7 @@ from japan_crawler.sites.mynavi.cli import _parent_process_is_alive
 from japan_crawler.sites.mynavi.cli import _prepare_processes_for_start
 from japan_crawler.sites.mynavi.cli import _shutdown_processes
 from japan_crawler.sites.mynavi.cli import _wait_for_next_round
+from japan_crawler.sites.mynavi.client import MynaviPageFetchResult
 
 
 class MynaviConcurrencyTests(unittest.TestCase):
@@ -55,9 +56,9 @@ class MynaviConcurrencyTests(unittest.TestCase):
 
     def test_fetch_company_detail_falls_back_when_detail_html_missing(self) -> None:
         class _MissingDetailClient:
-            def fetch_detail_page(self, detail_url: str) -> str | None:
+            def fetch_detail_page(self, detail_url: str) -> MynaviPageFetchResult:
                 _ = detail_url
-                return None
+                return MynaviPageFetchResult(text="", status_code=0)
 
         card = {
             "company_id": "413161",
@@ -72,6 +73,29 @@ class MynaviConcurrencyTests(unittest.TestCase):
         self.assertEqual("", company["representative"])
         self.assertEqual("", company["website"])
         self.assertEqual("東京都中央区", company["address"])
+
+    def test_fetch_company_detail_logs_ended_404_as_info(self) -> None:
+        class _EndedDetailClient:
+            def fetch_detail_page(self, detail_url: str) -> MynaviPageFetchResult:
+                _ = detail_url
+                return MynaviPageFetchResult(text="", status_code=404)
+
+        card = {
+            "company_id": "224127",
+            "company_name": "株式会社アイズ・コミュニケーション",
+            "address": "東京都豊島区",
+            "industry": "設備工事",
+            "detail_url": "//tenshoku.mynavi.jp/company/224127/",
+            "ended_listing": True,
+        }
+        with mock.patch("japan_crawler.sites.mynavi.pipeline.LOGGER.info") as info_mock, mock.patch(
+            "japan_crawler.sites.mynavi.pipeline.LOGGER.warning"
+        ) as warning_mock:
+            company = _fetch_company_detail(_EndedDetailClient(), card)
+        self.assertEqual("224127", company["company_id"])
+        self.assertEqual("株式会社アイズ・コミュニケーション", company["company_name"])
+        info_mock.assert_called_once()
+        warning_mock.assert_not_called()
 
     def test_prepare_processes_marks_children_daemon(self) -> None:
         class _FakeProcess:

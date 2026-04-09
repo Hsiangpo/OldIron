@@ -107,14 +107,14 @@ class MynaviClient:
                         break
                     if response.status_code == 403:
                         self._error_count += 1
-                        LOGGER.error("403 禁止访问: %s", url)
                         if keep_http_error_response:
                             return response
+                        LOGGER.error("403 禁止访问: %s", url)
                         return None
                     if response.status_code == 404:
-                        LOGGER.warning("HTTP 404: %s", url)
                         if keep_http_error_response:
                             return response
+                        LOGGER.warning("HTTP 404: %s", url)
                         return None
                     if response.status_code >= 500:
                         self._sleep_backoff(attempt, 2.0, 5.0, f"{response.status_code} 服务端错误")

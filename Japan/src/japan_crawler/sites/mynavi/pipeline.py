@@ -151,10 +151,10 @@ def _fetch_company_detail(client: MynaviClient, card: dict[str, str]) -> dict[st
     fetch_result = client.fetch_detail_page(card["detail_url"])
     html_text = fetch_result.text
     if fetch_result.status_code and fetch_result.status_code != 200:
-        _log_empty_detail(card["detail_url"], fetch_result.status_code)
+        _log_empty_detail(card, fetch_result.status_code)
         return _build_fallback_company(card)
     if not str(html_text or "").strip():
-        _log_empty_detail(card["detail_url"], fetch_result.status_code)
+        _log_empty_detail(card, fetch_result.status_code)
         return _build_fallback_company(card)
     try:
         detail = parse_company_detail(html_text)
@@ -172,8 +172,13 @@ def _fetch_company_detail(client: MynaviClient, card: dict[str, str]) -> dict[st
     }
 
 
-def _log_empty_detail(detail_url: str, status_code: int) -> None:
+def _log_empty_detail(card: dict[str, str], status_code: int) -> None:
+    detail_url = str(card.get("detail_url", "") or "")
+    ended_listing = bool(card.get("ended_listing"))
     if status_code == 404:
+        if ended_listing:
+            LOGGER.info("Mynavi 详情页已下线(404，列表已标注掲載終了)，保留列表页信息：%s", detail_url)
+            return
         LOGGER.warning("Mynavi 详情页已下线(404)，保留列表页信息：%s", detail_url)
         return
     if status_code == 403:

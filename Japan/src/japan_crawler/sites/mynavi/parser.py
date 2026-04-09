@@ -12,6 +12,7 @@ _GROUP_RE = re.compile(r"/company/list/(n[a-z]+)/")
 _COMPANY_RE = re.compile(r"/company/(\d+)/")
 _PAGE_RE = re.compile(r"/pg(\d+)/")
 _TOTAL_RE = re.compile(r"（(\d+)社）")
+_ENDED_MARKERS = ("（掲載終了）", "(掲載終了)", "掲載終了")
 
 
 def parse_kana_groups(page_html: str) -> list[dict[str, str]]:
@@ -48,16 +49,18 @@ def parse_company_cards(page_html: str) -> list[dict[str, str]]:
         "//li[contains(@class, 'companySearchList__content')]"
     )
     for item in items:
-        links = item.cssselect('a[href*="/company/"]')
+        links = item.xpath('.//a[contains(@href, "/company/")]')
         if not links:
             continue
         href = str(links[0].get("href", "") or "").strip()
         company_id = _extract_company_id(href)
-        company_name_nodes = item.cssselect("h2.companySearchList__company-name")
-        info_nodes = item.cssselect("h3.companySearchList__icon-parent")
+        company_name_nodes = item.xpath('.//h2[contains(@class, "companySearchList__company-name")]')
+        info_nodes = item.xpath('.//h3[contains(@class, "companySearchList__icon-parent")]')
         company_name = _clean_text(company_name_nodes[0].text_content()) if company_name_nodes else ""
         address = _clean_text(info_nodes[0].text_content()) if len(info_nodes) >= 1 else ""
         industry = _clean_text(info_nodes[1].text_content()) if len(info_nodes) >= 2 else ""
+        ended_listing = _contains_ended_marker(company_name)
+        company_name = _strip_ended_marker(company_name)
         if not company_id or not company_name:
             continue
         cards.append(
@@ -67,6 +70,7 @@ def parse_company_cards(page_html: str) -> list[dict[str, str]]:
                 "address": address,
                 "industry": industry,
                 "detail_url": href,
+                "ended_listing": ended_listing,
             }
         )
     return cards
@@ -121,4 +125,16 @@ def _normalize_website(value: str) -> str:
 
 def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _contains_ended_marker(value: str) -> bool:
+    text = str(value or "")
+    return any(marker in text for marker in _ENDED_MARKERS)
+
+
+def _strip_ended_marker(value: str) -> str:
+    text = str(value or "")
+    for marker in _ENDED_MARKERS:
+        text = text.replace(marker, "")
+    return _clean_text(text)
 
