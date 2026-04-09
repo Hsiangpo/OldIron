@@ -451,38 +451,39 @@ def _normalize_key_text(raw: str) -> str:
 def _load_site_baseline_keys(*, delivery_root: Path, site_name: str, baseline_day: int) -> set[str]:
     if baseline_day <= 0:
         return set()
-    baseline_dir = delivery_root / f"Japan_day{baseline_day:03d}"
-    key_path = baseline_dir / f"{site_name}.keys.txt"
-    if key_path.exists():
-        return {
-            _normalize_key_text(line)
-            for line in key_path.read_text(encoding="utf-8").splitlines()
-            if _normalize_key_text(line)
-        }
-    csv_path = baseline_dir / f"{site_name}.csv"
-    if csv_path.exists():
-        with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+    for day in range(baseline_day, 0, -1):
+        baseline_dir = delivery_root / f"Japan_day{day:03d}"
+        key_path = baseline_dir / f"{site_name}.keys.txt"
+        if key_path.exists():
             return {
-                _record_key(row)
-                for row in csv.DictReader(fp)
-                if row.get("company_name", "").strip()
+                _normalize_key_text(line)
+                for line in key_path.read_text(encoding="utf-8").splitlines()
+                if _normalize_key_text(line)
             }
-    legacy_country_keys = baseline_dir / "keys.txt"
-    if legacy_country_keys.exists():
-        return {
-            _normalize_key_text(line)
-            for line in legacy_country_keys.read_text(encoding="utf-8").splitlines()
-            if _normalize_key_text(line)
-        }
-    legacy_country_csv = baseline_dir / "companies.csv"
-    if not legacy_country_csv.exists():
-        return set()
-    with legacy_country_csv.open(encoding="utf-8-sig", newline="") as fp:
-        return {
-            _record_key(row)
-            for row in csv.DictReader(fp)
-            if row.get("company_name", "").strip()
-        }
+        csv_path = baseline_dir / f"{site_name}.csv"
+        if csv_path.exists():
+            with csv_path.open(encoding="utf-8-sig", newline="") as fp:
+                return {
+                    _record_key(row)
+                    for row in csv.DictReader(fp)
+                    if row.get("company_name", "").strip()
+                }
+        legacy_country_keys = baseline_dir / "keys.txt"
+        if legacy_country_keys.exists():
+            return {
+                _normalize_key_text(line)
+                for line in legacy_country_keys.read_text(encoding="utf-8").splitlines()
+                if _normalize_key_text(line)
+            }
+        legacy_country_csv = baseline_dir / "companies.csv"
+        if legacy_country_csv.exists():
+            with legacy_country_csv.open(encoding="utf-8-sig", newline="") as fp:
+                return {
+                    _record_key(row)
+                    for row in csv.DictReader(fp)
+                    if row.get("company_name", "").strip()
+                }
+    return set()
 
 
 def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:

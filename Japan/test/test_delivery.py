@@ -409,6 +409,49 @@ class JapanDeliveryTests(unittest.TestCase):
             self.assertFalse((delivery_root / "Japan_day003" / "xlsximport.csv").exists())
             self.assertFalse((delivery_root / "Japan_day003" / "xlsximport.keys.txt").exists())
 
+    def test_day3_uses_last_existing_site_baseline_when_day2_skipped_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_root = root / "output"
+            site_dir = output_root / "xlsximport"
+            site_dir.mkdir(parents=True)
+            conn = sqlite3.connect(str(site_dir / "xlsximport_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE companies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_name TEXT,
+                    representative TEXT,
+                    website TEXT,
+                    address TEXT,
+                    detail_url TEXT,
+                    emails TEXT
+                );
+                INSERT INTO companies (company_name, representative, website, address, detail_url, emails)
+                VALUES ('Alpha', 'Jane', 'https://alpha.example', '', 'https://example.com/a', 'jane@gmail.com');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            delivery_root = output_root / "delivery"
+            day1 = build_delivery_bundle(output_root, delivery_root, "day1")
+            self.assertEqual(1, day1["delta_companies"])
+
+            day2 = build_delivery_bundle(output_root, delivery_root, "day2")
+            self.assertEqual(0, day2["delta_companies"])
+            self.assertEqual(["xlsximport"], day2["skipped_sites_no_delta"])
+            self.assertFalse((delivery_root / "Japan_day002" / "xlsximport.csv").exists())
+            self.assertFalse((delivery_root / "Japan_day002" / "xlsximport.keys.txt").exists())
+
+            day3 = build_delivery_bundle(output_root, delivery_root, "day3")
+            self.assertEqual(0, day3["delta_companies"])
+            self.assertEqual(1, day3["sites"]["xlsximport"]["qualified_current"])
+            self.assertEqual(0, day3["sites"]["xlsximport"]["delta"])
+            self.assertEqual(["xlsximport"], day3["skipped_sites_no_delta"])
+            self.assertFalse((delivery_root / "Japan_day003" / "xlsximport.csv").exists())
+            self.assertFalse((delivery_root / "Japan_day003" / "xlsximport.keys.txt").exists())
+
     def test_openwork_site_is_packaged_independently(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
