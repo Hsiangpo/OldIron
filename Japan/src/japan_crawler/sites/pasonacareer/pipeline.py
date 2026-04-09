@@ -29,6 +29,7 @@ _LOCATION_FILTER_NAME = "f[s3][]"
 _JOB_FILTER_NAME = "f[s1][]"
 _COMPANY_SITEMAP_SCOPE = "company_sitemap"
 _SITEMAP_RETRY_LIMIT = 3
+_COMPANY_SITEMAP_MIN_COVERAGE = 0.95
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,12 @@ class SearchScope:
 class CompanyTarget:
     company_id: str
     detail_url: str
+
+
+@dataclass(frozen=True)
+class CompanyBatchLoadResult:
+    companies: list[dict[str, str]]
+    failed_targets: list[str]
 
 
 def run_pipeline_list(
@@ -124,7 +131,7 @@ def _run_company_sitemap_pipeline(
     if total_targets <= 0:
         return _build_pipeline_stats(store, client, 0, 0)
     checkpoint = store.get_checkpoint(_COMPANY_SITEMAP_SCOPE)
-    start_page = _resolve_start_page(checkpoint, discovered_total_pages=total_targets)
+    start_page = _resolve_company_sitemap_start_page(store, checkpoint, total_targets)
     if start_page is None:
         return _build_pipeline_stats(store, client, 0, 0)
     start_index = max(start_page - 1, 0)
@@ -194,9 +201,16 @@ def _process_company_targets(
     pages_done = 0
     new_companies = 0
     for chunk in _iter_target_chunks(targets, chunk_size):
-        companies = _load_company_details(client, chunk, detail_workers)
+        batch = _load_company_details(client, chunk, detail_workers)
+        new_companies += store.upsert_companies(batch.companies)
+        if batch.failed_targets:
+            LOGGER.warning(
+                "PasonaCareer company sitemap 本块失败 %d 家，保留断点重试；样例=%s",
+                len(batch.failed_targets),
+                batch.failed_targets[0],
+            )
+            break
         pages_done += len(chunk)
-        new_companies += store.upsert_companies(companies)
         current_index = start_index + pages_done
         store.update_checkpoint(_COMPANY_SITEMAP_SCOPE, current_index, total_targets, "running")
         if pages_done <= 5 or pages_done % 200 == 0 or current_index >= total_targets:
@@ -208,10 +222,19 @@ def _load_company_details(
     client: PasonacareerClient,
     targets: list[CompanyTarget],
     detail_workers: int,
-) -> list[dict[str, str]]:
+) -> CompanyBatchLoadResult:
     if detail_workers <= 1 or getattr(client, "browser_primary", False):
-        return [_fetch_company_detail(client, target) for target in targets]
+        companies: list[dict[str, str]] = []
+        failed_targets: list[str] = []
+        for target in targets:
+            try:
+                companies.append(_fetch_company_detail(client, target))
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("PasonaCareer 公司页处理异常，保留断点：%s | %s", target.detail_url, exc)
+                failed_targets.append(target.detail_url)
+        return CompanyBatchLoadResult(companies=companies, failed_targets=failed_targets)
     results: list[dict[str, str]] = []
+    failed_targets: list[str] = []
     with ThreadPoolExecutor(max_workers=detail_workers, thread_name_prefix="pasona-company") as executor:
         futures = {executor.submit(_fetch_company_detail, client, target): target for target in targets}
         for future in as_completed(futures):
@@ -219,16 +242,18 @@ def _load_company_details(
             try:
                 results.append(future.result())
             except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("PasonaCareer 公司页处理异常，跳过：%s | %s", target.detail_url, exc)
-    return results
+                LOGGER.warning("PasonaCareer 公司页处理异常，保留断点：%s | %s", target.detail_url, exc)
+                failed_targets.append(target.detail_url)
+    return CompanyBatchLoadResult(companies=results, failed_targets=failed_targets)
 
 
 def _fetch_company_detail(client: PasonacareerClient, target: CompanyTarget) -> dict[str, str]:
     html_text = client.fetch_company_page(target.detail_url)
     if not str(html_text or "").strip():
-        LOGGER.warning("PasonaCareer 公司页为空，跳过：%s", target.detail_url)
-        return _fallback_company_from_target(target)
+        raise ValueError(f"公司页为空: {target.detail_url}")
     detail = parse_company_page(html_text)
+    if not str(detail.get("company_name", "") or "").strip():
+        raise ValueError(f"公司页未解析到公司名: {target.detail_url}")
     return {
         "company_name": detail["company_name"],
         "representative": detail["representative"],
@@ -395,6 +420,37 @@ def _resolve_start_page(
     if status in {"running", "done"} and last_page > 0:
         return last_page + 1
     return 1
+
+
+def _resolve_company_sitemap_start_page(
+    store: PasonacareerStore,
+    checkpoint: dict[str, int | str] | None,
+    total_targets: int,
+) -> int | None:
+    if _should_restart_company_sitemap(store, checkpoint, total_targets):
+        stored = store.count_company_page_rows()
+        LOGGER.warning(
+            "PasonaCareer company sitemap 断点覆盖率异常，自动从头重跑：已落公司页=%d 目标=%d",
+            stored,
+            total_targets,
+        )
+        return 1
+    return _resolve_start_page(checkpoint, discovered_total_pages=total_targets)
+
+
+def _should_restart_company_sitemap(
+    store: PasonacareerStore,
+    checkpoint: dict[str, int | str] | None,
+    total_targets: int,
+) -> bool:
+    if checkpoint is None or total_targets <= 0:
+        return False
+    status = str(checkpoint.get("status", "") or "").strip().lower()
+    if status != "done":
+        return False
+    stored = store.count_company_page_rows()
+    required = max(1, int(total_targets * _COMPANY_SITEMAP_MIN_COVERAGE))
+    return stored < required
 
 
 def _fetch_search_page_with_retries(

@@ -38,6 +38,7 @@ _PROXY_FALLBACK_RESPONSE_HINTS = (
     "verify that you're not a robot",
     "javascript is disabled",
 )
+_COMPANY_PAGE_RETRY_LIMIT = 3
 
 
 class PasonacareerClient:
@@ -88,7 +89,11 @@ class PasonacareerClient:
         return response.text if response is not None else None
 
     def fetch_company_page(self, detail_url: str) -> str | None:
-        response = self._get_with_retry(urljoin(BASE_URL, detail_url), max_retries=1, fast_fail=True)
+        response = self._get_with_retry(
+            urljoin(BASE_URL, detail_url),
+            max_retries=_COMPANY_PAGE_RETRY_LIMIT,
+            fast_fail=False,
+        )
         return response.text if response is not None else None
 
     def _get_with_retry(

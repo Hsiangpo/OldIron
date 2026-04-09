@@ -158,7 +158,13 @@ def parse_job_detail(page_html: str) -> dict[str, str]:
 
 def _extract_company_page_name(tree) -> str:
     text = _clean_text(tree.xpath("string(//h1)") or "")
-    return re.sub(r"\s*の中途採用.*$", "", text).strip()
+    if text:
+        return re.sub(r"\s*の中途採用.*$", "", text).strip()
+    title = _clean_text(tree.xpath("string(//title)") or "")
+    matched = re.match(r"(.+?)\s*の中途採用", title)
+    if matched is not None:
+        return _clean_text(matched.group(1))
+    return ""
 
 
 def _extract_company_page_address(tree) -> str:

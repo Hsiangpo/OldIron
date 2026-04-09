@@ -209,6 +209,17 @@ class PasonacareerStore:
         row = conn.execute("SELECT COUNT(*) AS cnt FROM companies").fetchone()
         return int(row["cnt"] if row else 0)
 
+    def count_company_page_rows(self) -> int:
+        conn = self._conn()
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM companies
+            WHERE detail_url LIKE 'https://www.pasonacareer.jp/company/%'
+            """
+        ).fetchone()
+        return int(row["cnt"] if row else 0)
+
     def purge_placeholder_companies(self) -> int:
         def _action(conn: sqlite3.Connection) -> int:
             before = conn.total_changes
