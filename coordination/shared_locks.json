@@ -1,5 +1,19 @@
 {
   "version": 1,
-  "updated_at": "2026-04-09T01:07:21Z",
-  "locks": []
+  "updated_at": "2026-04-09T04:36:27Z",
+  "locks": [
+    {
+      "lock_id": "lock-fix-japan-day-baseline-20260408-1",
+      "status": "locked",
+      "path": "Japan/src/japan_crawler/delivery.py",
+      "machine": "machine1-windows",
+      "agent": "codex",
+      "task_id": "fix-japan-day-baseline-20260408",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-09T04:36:27Z",
+      "heartbeat_at": "2026-04-09T04:36:27Z",
+      "expires_at": "2026-04-09T05:06:27Z",
+      "notes": "Fix Japan day baseline recursion so skipped no-delta sites do not reappear as full delta on next day"
+    }
+  ]
 }
