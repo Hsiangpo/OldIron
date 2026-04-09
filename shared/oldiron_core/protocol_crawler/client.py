@@ -47,6 +47,12 @@ _LOCAL_PROXY_ERROR_HINTS = (
     "connection refused",
     "curl: (7)",
 )
+_INSECURE_HTTPS_ERROR_HINTS = (
+    "ssl certificate problem",
+    "unable to get local issuer certificate",
+    "certificate subject name",
+    "certificate verify failed",
+)
 
 
 @dataclass()
@@ -193,7 +199,13 @@ class SiteCrawlClient:
         except Exception:  # noqa: BLE001
             return None
 
-    def _fetch_html(self, url: str, *, truncate_html: bool = True) -> str:
+    def _fetch_html(
+        self,
+        url: str,
+        *,
+        truncate_html: bool = True,
+        allow_insecure_https_retry: bool = True,
+    ) -> str:
         """带重试的 HTTP GET 获取 HTML。"""
         attempts = max(self._config.max_retries, 0) + 1
         last_error: Exception | None = None
@@ -242,12 +254,50 @@ class SiteCrawlClient:
                         pass
 
         if last_error:
+            if allow_insecure_https_retry and _should_retry_insecure_https(url, last_error):
+                LOGGER.info("协议爬虫 HTTPS 证书异常，尝试宽松校验重试：url=%s", url)
+                insecure_html = self._fetch_html_insecure_https(url, truncate_html=truncate_html)
+                if insecure_html:
+                    return insecure_html
             fallback_url = _http_fallback_url(url, last_error)
             if fallback_url:
                 LOGGER.info("协议爬虫 HTTPS 失败，尝试 HTTP 回退：url=%s fallback=%s", url, fallback_url)
-                return self._fetch_html(fallback_url)
+                return self._fetch_html(
+                    fallback_url,
+                    truncate_html=truncate_html,
+                    allow_insecure_https_retry=False,
+                )
             LOGGER.warning("协议爬虫请求最终失败：url=%s error=%s", url, last_error)
         return ""
+
+    def _fetch_html_insecure_https(self, url: str, *, truncate_html: bool) -> str:
+        resp = None
+        try:
+            resp = self._session.get(
+                url,
+                timeout=self._config.timeout_seconds,
+                verify=False,
+            )
+            if resp.status_code != 200:
+                LOGGER.warning("协议爬虫宽松校验重试失败：url=%s status=%s", url, resp.status_code)
+                return ""
+            content_type = str(resp.headers.get("Content-Type", "") or "").lower()
+            if not _is_supported_page_response(url, content_type):
+                LOGGER.info("协议爬虫宽松校验跳过非 HTML 内容：url=%s content_type=%s", url, content_type or "-")
+                return ""
+            text = resp.text or ""
+            if truncate_html:
+                return _truncate_html_text(url, text, self._config.max_html_chars)
+            return text
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.debug("协议爬虫宽松校验重试失败：url=%s error=%s", url, exc)
+            return ""
+        finally:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _disable_unavailable_local_proxy(self, error: Exception) -> bool:
         if not self._using_proxy:
@@ -284,6 +334,13 @@ def _http_fallback_url(url: str, error: Exception) -> str:
     if not any(hint in text for hint in _HTTP_FALLBACK_ERROR_HINTS):
         return ""
     return str(url).replace("https://", "http://", 1)
+
+
+def _should_retry_insecure_https(url: str, error: Exception) -> bool:
+    if not str(url or "").startswith("https://"):
+        return False
+    lowered = str(error or "").lower()
+    return any(hint in lowered for hint in _INSECURE_HTTPS_ERROR_HINTS)
 
 
 def _local_proxy_address(proxy_url: str) -> tuple[str, int] | None:

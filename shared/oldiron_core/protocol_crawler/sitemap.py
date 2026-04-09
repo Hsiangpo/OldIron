@@ -11,6 +11,12 @@ from xml.etree import ElementTree
 from curl_cffi import requests as cffi_requests
 
 LOGGER = logging.getLogger(__name__)
+_INSECURE_HTTPS_ERROR_HINTS = (
+    "ssl certificate problem",
+    "unable to get local issuer certificate",
+    "certificate subject name",
+    "certificate verify failed",
+)
 
 # sitemap XML 命名空间
 _NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
@@ -69,7 +75,7 @@ def _find_sitemap_locations(
     """从 robots.txt 提取 Sitemap 声明。"""
     robots_url = urljoin(base_url, "/robots.txt")
     try:
-        resp = session.get(robots_url, timeout=timeout)
+        resp = _session_get_with_insecure_https_retry(session, robots_url, timeout=timeout)
         if resp.status_code != 200:
             return []
         text = resp.text or ""
@@ -164,7 +170,7 @@ def _fetch_sitemap_text(
 ) -> str:
     """获取 sitemap 内容，支持 .gz 压缩。"""
     try:
-        resp = session.get(url, timeout=timeout)
+        resp = _session_get_with_insecure_https_retry(session, url, timeout=timeout)
         if resp.status_code != 200:
             return ""
         content = resp.content or b""
@@ -178,3 +184,25 @@ def _fetch_sitemap_text(
     except Exception as exc:  # noqa: BLE001
         LOGGER.debug("sitemap 获取失败：%s — %s", url, exc)
         return ""
+
+
+def _session_get_with_insecure_https_retry(
+    session: cffi_requests.Session,
+    url: str,
+    *,
+    timeout: float,
+):
+    try:
+        return session.get(url, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001
+        if not _should_retry_insecure_https(url, exc):
+            raise
+        LOGGER.info("协议爬虫 sitemap HTTPS 证书异常，尝试宽松校验重试：url=%s", url)
+        return session.get(url, timeout=timeout, verify=False)
+
+
+def _should_retry_insecure_https(url: str, error: Exception) -> bool:
+    if not str(url or "").startswith("https://"):
+        return False
+    lowered = str(error or "").lower()
+    return any(hint in lowered for hint in _INSECURE_HTTPS_ERROR_HINTS)

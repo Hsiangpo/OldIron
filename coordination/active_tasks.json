@@ -1,54 +1,28 @@
 {
   "version": 1,
-  "updated_at": "2026-04-10T07:22:00Z",
+  "updated_at": "2026-04-09T13:07:50Z",
   "tasks": [
     {
-      "task_id": "coord-2026-04-08-uae-local",
+      "task_id": "fix-fc-email-init-20260409",
       "status": "in_progress",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "UnitedArabEmirates"
-      ],
-      "planned_files": [
-        "UnitedArabEmirates/run.py"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-04-09T05:39:35Z",
-      "last_heartbeat_at": "2026-04-09T05:39:35Z",
-      "notes": "Implement UnitedArabEmirates multi-site country"
-    },
-    {
-      "task_id": "coord-2026-04-08-uae-shared",
-      "status": "in_progress",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
+      "machine": "machine1-windows",
+      "agent": "codex",
       "change_class": "shared_zone",
       "base_branch": "main",
       "working_branch": "main",
       "scope": [
-        "AGENTS.md",
-        "README.md",
-        "product.py"
+        "shared/fc_email-init"
       ],
       "planned_files": [
-        "AGENTS.md",
-        "README.md",
-        "product.py"
+        "shared/oldiron_core/fc_email/__init__.py"
       ],
       "shared_lock_ids": [
-        "lock-coord-2026-04-08-uae-shared-1",
-        "lock-coord-2026-04-08-uae-shared-2",
-        "lock-coord-2026-04-08-uae-shared-3"
+        "lock-fix-fc-email-init-20260409-1"
       ],
       "github_ref": "not-created",
-      "started_at": "2026-04-09T05:39:35Z",
-      "last_heartbeat_at": "2026-04-09T06:09:34Z",
-      "notes": "Register UnitedArabEmirates country and delivery rules"
+      "started_at": "2026-04-09T11:52:51Z",
+      "last_heartbeat_at": "2026-04-09T13:02:29Z",
+      "notes": "Avoid eager fc_email imports so delivery can run when asyncio/_overlapped is broken on Windows"
     }
   ]
 }

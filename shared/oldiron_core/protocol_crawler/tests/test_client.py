@@ -169,6 +169,28 @@ class TestSitemap(unittest.TestCase):
             urls,
         )
 
+    def test_sitemap_retries_insecure_https_before_giving_up(self) -> None:
+        robots_resp = _MockResponse(200, text="Sitemap: https://example.com/sitemap.xml")
+        sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <url><loc>https://example.com/page1</loc></url>
+        </urlset>'''
+        sitemap_resp = _MockResponse(200, text=sitemap_xml, content=sitemap_xml.encode())
+        https_error = RuntimeError(
+            "curl: (60) SSL certificate problem: unable to get local issuer certificate"
+        )
+
+        session = MagicMock()
+        session.get.side_effect = [https_error, robots_resp, sitemap_resp]
+
+        urls = discover_sitemap_urls(session, "https://example.com", limit=100)
+
+        self.assertEqual(["https://example.com/page1"], urls)
+        self.assertEqual("https://example.com/robots.txt", session.get.call_args_list[0].args[0])
+        self.assertEqual("https://example.com/robots.txt", session.get.call_args_list[1].args[0])
+        self.assertFalse(session.get.call_args_list[0].kwargs.get("verify", True) is False)
+        self.assertFalse(session.get.call_args_list[1].kwargs.get("verify", True))
+
     def test_skips_document_urls_from_sitemap(self) -> None:
         robots_resp = _MockResponse(200, text="Sitemap: https://example.com/sitemap.xml")
         sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -269,6 +291,25 @@ class TestSiteCrawlClient(unittest.TestCase):
         self.assertEqual(2, client._session.get.call_count)
         self.assertEqual("https://example.com", client._session.get.call_args_list[0].args[0])
         self.assertEqual("http://example.com", client._session.get.call_args_list[1].args[0])
+
+    def test_fetch_html_retries_insecure_https_before_http_fallback(self) -> None:
+        client = SiteCrawlClient(SiteCrawlConfig(max_retries=0))
+        https_error = RuntimeError("curl: (60) SSL certificate problem: unable to get local issuer certificate")
+        insecure_response = MagicMock(
+            status_code=200,
+            text="<html>secure-ok</html>",
+            headers={"Content-Type": "text/html; charset=utf-8"},
+        )
+        client._session.get = MagicMock(side_effect=[https_error, insecure_response])
+
+        html = client._fetch_html("https://example.com")
+
+        self.assertEqual("<html>secure-ok</html>", html)
+        self.assertEqual(2, client._session.get.call_count)
+        self.assertEqual("https://example.com", client._session.get.call_args_list[0].args[0])
+        self.assertEqual("https://example.com", client._session.get.call_args_list[1].args[0])
+        self.assertFalse(client._session.get.call_args_list[0].kwargs.get("verify", True) is False)
+        self.assertFalse(client._session.get.call_args_list[1].kwargs.get("verify", True))
 
     def test_fetch_html_skips_pdf_response(self) -> None:
         client = SiteCrawlClient(SiteCrawlConfig(max_retries=0))
