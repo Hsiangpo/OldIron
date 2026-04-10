@@ -314,6 +314,37 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
         emails = service._extract_rule_emails("https://example.co.jp", pages)
         self.assertEqual(["contact@mazda.co.jp"], emails)
 
+    def test_extract_rule_emails_drops_placeholder_offsite_noise_but_keeps_possible_real_mail(self) -> None:
+        service = FirecrawlEmailService(
+            FirecrawlEmailSettings(
+                llm_api_key="x",
+                llm_model="gpt-5.4-mini",
+            ),
+            key_pool=_DummyKeyPool(),
+            firecrawl_client=_DummyCrawler(),
+        )
+        html = """
+        <html>
+          info@alpha.co.jp
+          found@fastcompany.com
+          owner@template.com
+          contact@vendor-support.com
+          ceo.personal@gmail.com
+          donna.boynton@partner.org
+        </html>
+        """
+        pages = [HtmlPageResult(url="https://example.co.jp/contact", html=html)]
+        emails = service._extract_rule_emails("https://alpha.co.jp", pages)
+        self.assertEqual(
+            [
+                "info@alpha.co.jp",
+                "contact@vendor-support.com",
+                "ceo.personal@gmail.com",
+                "donna.boynton@partner.org",
+            ],
+            emails,
+        )
+
     def test_extract_rule_representative_reads_next_line_value(self) -> None:
         service = FirecrawlEmailService(
             FirecrawlEmailSettings(
@@ -481,6 +512,8 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
             "n@t.prototype.render",
             "http://soumu@icco2012.com",
             "https://kishubaiko.jp/info@kishubaiko.jp",
+            "owner@template.com",
+            "example.mail@site.com.br",
             "ceo.personal@gmail.com",
         ]
         self.assertEqual(

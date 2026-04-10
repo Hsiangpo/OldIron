@@ -31,6 +31,11 @@ _BAD_EMAIL_HOST_HINTS = (
     "prototype.render",
     "prototype.read",
     "rendertostring",
+    "template.com",
+    "template.net",
+    "template.org",
+    "template.ae",
+    "template.co.jp",
     "group.calendar.google.com",
     "example.jp",
     "example.co.jp",
@@ -43,6 +48,7 @@ _BAD_EMAIL_HOST_HINTS = (
     "48g9-.bybgnptut",
     "sample.com",
     "sample.co.jp",
+    "site.com.br",
     "mysite.com",
     "mysite.co.jp",
     "eksempel.dk",
@@ -123,8 +129,31 @@ _EMAIL_PRIORITY_LOCAL_PARTS = {
     "soumu",
     "kojinjoho",
 }
-
-
+_FREE_MAIL_DOMAINS = {
+    "aol.com",
+    "gmail.com",
+    "googlemail.com",
+    "hotmail.com",
+    "icloud.com",
+    "live.com",
+    "mac.com",
+    "me.com",
+    "msn.com",
+    "outlook.com",
+    "pm.me",
+    "proton.me",
+    "protonmail.com",
+    "yahoo.co.jp",
+    "yahoo.com",
+    "yahoo.com.br",
+}
+_OFFSITE_ALWAYS_DROP_LOCAL_PARTS = {
+    "found",
+    "posted",
+    "profile",
+    "webmaster",
+    "website",
+}
 @dataclass(slots=True)
 class EmailSetAnalysis:
     emails: list[str]
@@ -228,6 +257,27 @@ def analyze_email_set(website: str, values: Iterable[str] | str) -> EmailSetAnal
         domain_count=len(domains),
         suspicious_directory_like=suspicious,
     )
+
+
+def filter_emails_for_website(website: str, values: Iterable[str] | str) -> list[str]:
+    """结合站点域名过滤明显不属于该公司的脏邮箱。"""
+    emails = split_emails(values)
+    if not emails:
+        return []
+    site_domain = extract_registrable_domain(website)
+    if not site_domain:
+        return _prioritize_emails(emails)
+
+    same_domain_emails = [email for email in emails if email_matches_website(website, email)]
+    filtered: list[str] = list(same_domain_emails)
+    has_same_domain_email = bool(same_domain_emails)
+
+    for email in emails:
+        if email in filtered:
+            continue
+        if _should_keep_offsite_email(email, has_same_domain_email):
+            filtered.append(email)
+    return _prioritize_emails(filtered)
 
 
 def email_matches_website(website: str, email: str) -> bool:
@@ -341,6 +391,26 @@ def _matches_placeholder_stem(value: str) -> bool:
         if len(normalized) <= len(stem) + 8 and (normalized.startswith(stem) or normalized.endswith(stem)):
             return True
     return False
+
+
+def _should_keep_offsite_email(email: str, has_same_domain_email: bool) -> bool:
+    value = str(email or "").strip().lower()
+    if "@" not in value:
+        return False
+    local, domain = value.split("@", 1)
+    registrable_domain = extract_registrable_domain(domain)
+    if not registrable_domain:
+        return False
+    if registrable_domain in _FREE_MAIL_DOMAINS:
+        return True
+    local_key = _normalize_local_part_key(local)
+    if local_key in _OFFSITE_ALWAYS_DROP_LOCAL_PARTS:
+        return False
+    return True
+
+
+def _normalize_local_part_key(local: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(local or "").strip().lower())
 
 
 def _prioritize_emails(emails: list[str]) -> list[str]:

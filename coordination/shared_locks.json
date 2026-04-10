@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-10T07:11:29Z",
+  "updated_at": "2026-04-10T07:22:00Z",
   "locks": [
     {
       "lock_id": "lock-coord-2026-04-08-uae-shared-1",
@@ -40,32 +40,6 @@
       "heartbeat_at": "2026-04-09T06:09:34Z",
       "expires_at": "2026-04-09T07:09:34Z",
       "notes": "Register UnitedArabEmirates country and delivery rules"
-    },
-    {
-      "lock_id": "lock-coord-2026-04-10-shared-email-cleanup-1",
-      "status": "locked",
-      "path": "shared/oldiron_core/fc_email/email_service.py",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
-      "task_id": "coord-2026-04-10-shared-email-cleanup",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-10T07:11:29Z",
-      "heartbeat_at": "2026-04-10T07:11:29Z",
-      "expires_at": "2026-04-10T09:11:29Z",
-      "notes": "Tighten shared email filtering against placeholder/offsite/directory noise"
-    },
-    {
-      "lock_id": "lock-coord-2026-04-10-shared-email-cleanup-2",
-      "status": "locked",
-      "path": "shared/oldiron_core/protocol_crawler/tests/test_email_service_lifecycle.py",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
-      "task_id": "coord-2026-04-10-shared-email-cleanup",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-10T07:11:29Z",
-      "heartbeat_at": "2026-04-10T07:11:29Z",
-      "expires_at": "2026-04-10T09:11:29Z",
-      "notes": "Tighten shared email filtering against placeholder/offsite/directory noise"
     }
   ]
 }

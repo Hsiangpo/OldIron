@@ -23,6 +23,7 @@ from .key_pool import KeyPoolConfig
 from .llm_client import EmailUrlLlmClient
 from .normalization import analyze_email_set
 from .normalization import extract_registrable_domain
+from .normalization import filter_emails_for_website
 from .normalization import split_emails
 
 
@@ -469,7 +470,7 @@ class FirecrawlEmailService:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("二级邮箱补充失败：company=%s homepage=%s error=%s", company_name or "-", start_url, exc)
             else:
-                emails = self._clean_emails(list(fallback_emails or []))
+                emails = self._clean_emails(list(fallback_emails or []), website=start_url)
         representative = str(existing_representative or "").strip()
         extracted_company_name = str(company_name or "").strip()
         evidence_url = final_urls[0] if final_urls else start_url
@@ -663,8 +664,8 @@ class FirecrawlEmailService:
         target = urlparse(url).netloc.lower()
         return bool(target and (target == host or target.endswith(f".{host}") or host.endswith(f".{target}")))
 
-    def _clean_emails(self, emails: list[str]) -> list[str]:
-        cleaned = split_emails(emails)
+    def _clean_emails(self, emails: list[str], *, website: str = "") -> list[str]:
+        cleaned = filter_emails_for_website(website, emails) if website else split_emails(emails)
         return sorted(
             cleaned,
             key=lambda item: (-_email_priority_score(item), cleaned.index(item)),
@@ -692,10 +693,10 @@ class FirecrawlEmailService:
                 else:
                     LOGGER.info("协议邮箱跳过疑似目录页：start=%s page=%s emails=%d domains=%d", start_url, page.url, len(analysis.emails), analysis.domain_count)
                     continue
-            for email in self._clean_emails(page_emails):
+            for email in self._clean_emails(page_emails, website=start_url):
                 if email not in candidates:
                     candidates.append(email)
-        return self._clean_emails(candidates)
+        return self._clean_emails(candidates, website=start_url)
 
     def _extract_rule_representative(self, pages: list[HtmlPageResult]) -> tuple[str, str, str]:
         for page in pages:

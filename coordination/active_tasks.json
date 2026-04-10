@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-10T07:11:29Z",
+  "updated_at": "2026-04-10T07:22:00Z",
   "tasks": [
     {
       "task_id": "coord-2026-04-08-uae-local",
@@ -49,31 +49,6 @@
       "started_at": "2026-04-09T05:39:35Z",
       "last_heartbeat_at": "2026-04-09T06:09:34Z",
       "notes": "Register UnitedArabEmirates country and delivery rules"
-    },
-    {
-      "task_id": "coord-2026-04-10-shared-email-cleanup",
-      "status": "in_progress",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
-      "change_class": "shared_zone",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "shared/oldiron_core/fc_email/email_service.py",
-        "shared/oldiron_core/protocol_crawler/tests/test_email_service_lifecycle.py"
-      ],
-      "planned_files": [
-        "shared/oldiron_core/fc_email/email_service.py",
-        "shared/oldiron_core/protocol_crawler/tests/test_email_service_lifecycle.py"
-      ],
-      "shared_lock_ids": [
-        "lock-coord-2026-04-10-shared-email-cleanup-1",
-        "lock-coord-2026-04-10-shared-email-cleanup-2"
-      ],
-      "github_ref": "not-created",
-      "started_at": "2026-04-10T07:11:29Z",
-      "last_heartbeat_at": "2026-04-10T07:11:29Z",
-      "notes": "Tighten shared email filtering against placeholder/offsite/directory noise"
     }
   ]
 }
