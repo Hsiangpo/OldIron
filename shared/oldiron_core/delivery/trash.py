@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import shutil
 import sys
 from ctypes import wintypes
@@ -10,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 
+LOGGER = logging.getLogger(__name__)
 _FO_DELETE = 3
 _FOF_SILENT = 0x0004
 _FOF_NOCONFIRMATION = 0x0010
@@ -40,8 +42,11 @@ def move_path_to_recycle_bin(target: Path) -> None:
     if _try_send2trash(path):
         return
     if sys.platform.startswith("win"):
-        _move_to_windows_recycle_bin(path)
-        return
+        try:
+            _move_to_windows_recycle_bin(path)
+            return
+        except OSError as exc:
+            LOGGER.warning("Windows 回收站接口失败，回退用户 Trash 目录：%s | %s", path, exc)
     _move_to_user_trash(path)
 
 
@@ -51,8 +56,12 @@ def _try_send2trash(target: Path) -> bool:
         from send2trash import send2trash
     except ModuleNotFoundError:
         return False
-    send2trash(str(target))
-    return True
+    try:
+        send2trash(str(target))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("send2trash 失败，回退平台兜底逻辑：%s | %s", target, exc)
+        return False
 
 
 def _move_to_windows_recycle_bin(target: Path) -> None:
@@ -79,6 +88,8 @@ def _move_to_user_trash(target: Path) -> None:
 def _detect_user_trash_dir() -> Path:
     """根据平台返回用户废纸篓目录。"""
     home = Path.home()
+    if sys.platform.startswith("win"):
+        return home / ".Trash" / "files"
     if sys.platform == "darwin":
         return home / ".Trash"
     return home / ".local" / "share" / "Trash" / "files"

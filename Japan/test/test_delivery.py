@@ -24,6 +24,7 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
 from japan_crawler.delivery import build_delivery_bundle
+from oldiron_core.delivery.trash import move_path_to_recycle_bin
 
 
 class JapanDeliveryTests(unittest.TestCase):
@@ -603,6 +604,32 @@ class JapanDeliveryTests(unittest.TestCase):
             self.assertEqual(2, summary["delta_companies"])
             self.assertEqual(2, summary["total_current_companies"])
             self.assertEqual({"onecareer", "openwork"}, set(summary["sites"]))
+
+    def test_move_path_to_recycle_bin_falls_back_to_user_trash_when_windows_api_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            target = root / "England_day003"
+            target.mkdir()
+            (target / "summary.json").write_text("{}", encoding="utf-8")
+            fake_home = root / "home"
+            fake_home.mkdir()
+
+            with patch("oldiron_core.delivery.trash._try_send2trash", return_value=False), patch(
+                "oldiron_core.delivery.trash._move_to_windows_recycle_bin",
+                side_effect=OSError("移动到回收站失败，系统错误码 126"),
+            ), patch("oldiron_core.delivery.trash.sys.platform", "win32"), patch(
+                "oldiron_core.delivery.trash.Path.home",
+                return_value=fake_home,
+            ):
+                move_path_to_recycle_bin(target)
+
+            trash_dir = fake_home / ".Trash" / "files"
+            self.assertFalse(target.exists())
+            self.assertTrue(trash_dir.exists())
+            moved = list(trash_dir.iterdir())
+            self.assertEqual(1, len(moved))
+            self.assertEqual("England_day003", moved[0].name)
+            self.assertTrue((moved[0] / "summary.json").exists())
 
     def _seed_company_db(
         self,
