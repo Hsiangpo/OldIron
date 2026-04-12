@@ -21,6 +21,7 @@ from shared.oldiron_core.google_maps.client import _normalize_url as _gmap_norma
 _DIRTY_HOMEPAGE_FRAGMENTS = (
     "booking.com",
     "carsensor.net",
+    "company-information.service.gov.uk",
     "getyourguide.com",
     "giatamedia.com",
     "goo-net.com",

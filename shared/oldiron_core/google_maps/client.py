@@ -54,6 +54,7 @@ PORTAL_HOSTS = (
     "bluepillow.com",
     "carsensor.net",
     "cartorionobrasil.com.br",
+    "company-information.service.gov.uk",
     "descubraalagoas.com.br",
     "eitamenu.com",
     "encurtador.com.br",
