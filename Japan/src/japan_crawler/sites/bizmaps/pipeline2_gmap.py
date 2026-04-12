@@ -18,16 +18,27 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from oldiron_core.google_maps import GoogleMapsClient, GoogleMapsConfig
+from oldiron_core.google_maps.client import _is_blocked_host as _gmap_is_blocked_host
+from oldiron_core.google_maps.client import _normalize_url as _gmap_normalize_url
 from .store import BizmapsStore
 
 logger = logging.getLogger("bizmaps.pipeline2")
-
-# 过滤掉的社交/信息网站
-BLOCKED_HOST_HINTS = (
-    "wikipedia.org", "wikidata.org", "facebook.com", "instagram.com",
-    "twitter.com", "x.com", "linkedin.com", "youtube.com", "tiktok.com",
-    "google.", "gstatic.", "g.page", "goo.gl", "tabelog.com",
-    "hotpepper.jp", "gnavi.co.jp", "rakuten.co.jp", "amazon.co.jp",
+_DIRTY_WEBSITE_SQL_HINTS = (
+    "%booking.com%",
+    "%tripadvisor.com%",
+    "%expedia.com%",
+    "%hotels.com%",
+    "%hoteis.com%",
+    "%decolar.com%",
+    "%facebook.com%",
+    "%instagram.com%",
+    "%x.com%",
+    "%twitter.com%",
+    "%linkedin.com%",
+    "%youtube.com%",
+    "%wa.me%",
+    "%whatsapp.com%",
+    "%linktr.ee%",
 )
 
 DEFAULT_CONCURRENCY = 64
@@ -48,6 +59,9 @@ def run_pipeline_gmap(
 
     # 确保 gmap_status 列存在
     _ensure_gmap_status(store)
+    repaired = _repair_dirty_gmap_websites(store)
+    if repaired:
+        logger.info("GMap 启动自愈：重置 %d 条脏官网并重新放回待补队列", repaired)
 
     # 筛选需要补全的公司 — 没有 website 且 gmap_status='pending'
     pending = _load_gmap_pending(store)
@@ -196,13 +210,57 @@ def _extract_location_prefix(address: str) -> str:
 
 def _clean_website(url: str) -> str:
     """清洗 GMap 返回的官网 URL。"""
-    if not url:
+    normalized = _gmap_normalize_url(url)
+    if not normalized:
         return ""
-    # 过滤社交/信息站点
     try:
-        host = urlparse(url).netloc.lower()
-        if any(hint in host for hint in BLOCKED_HOST_HINTS):
+        host = urlparse(normalized).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if not host or "." not in host:
+            return ""
+        if _gmap_is_blocked_host(host):
+            return ""
+        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
             return ""
     except Exception:
         return ""
-    return url
+    return normalized
+
+
+def _repair_dirty_gmap_websites(store: BizmapsStore) -> int:
+    """清理已写入库的脏官网，重新放回 GMap 待补队列。"""
+    conn = store._conn()
+    clauses = " OR ".join(["LOWER(website) LIKE ?"] * len(_DIRTY_WEBSITE_SQL_HINTS))
+    rows = conn.execute(
+        f"""
+        SELECT id, website
+        FROM companies
+        WHERE website IS NOT NULL
+          AND TRIM(website) != ''
+          AND ({clauses}
+               OR LOWER(website) = 't.n'
+               OR website GLOB '[0-9]*.[0-9]*.[0-9]*.[0-9]*')
+        """,
+        _DIRTY_WEBSITE_SQL_HINTS,
+    ).fetchall()
+    dirty_ids: list[int] = []
+    for row in rows:
+        if not _clean_website(str(row["website"] or "")):
+            dirty_ids.append(int(row["id"]))
+    if not dirty_ids:
+        return 0
+    placeholders = ",".join("?" for _ in dirty_ids)
+    conn.execute(
+        f"""
+        UPDATE companies
+        SET website = '',
+            gmap_status = 'pending',
+            emails = '',
+            email_status = 'pending'
+        WHERE id IN ({placeholders})
+        """,
+        dirty_ids,
+    )
+    conn.commit()
+    return len(dirty_ids)

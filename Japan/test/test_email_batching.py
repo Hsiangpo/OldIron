@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,18 @@ class EmailBatchingTests(unittest.TestCase):
         self.assertEqual(512, _resolve_batch_size(128))
         batches = list(_iter_batches(list(range(1025)), 512))
         self.assertEqual([512, 512, 1], [len(batch) for batch in batches])
+
+    def test_onecareer_run_with_timeout_fails_fast(self) -> None:
+        from japan_crawler.sites.onecareer.pipeline3_email import _run_with_timeout
+
+        start = time.perf_counter()
+        with self.assertRaises(TimeoutError):
+            _run_with_timeout(
+                lambda: (time.sleep(0.2), ("company-1", [], ""))[1],
+                timeout_seconds=0.05,
+                timeout_label="timeout-test",
+            )
+        self.assertLess(time.perf_counter() - start, 0.2)
 
 
 if __name__ == "__main__":

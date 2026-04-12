@@ -12,12 +12,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 SHARED_PARENT = ROOT.parent
+SHARED_DIR = SHARED_PARENT / "shared"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 if str(SHARED_PARENT) not in sys.path:
     sys.path.insert(0, str(SHARED_PARENT))
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
 
 from japan_crawler.sites.bizmaps.store import BizmapsStore
+from japan_crawler.sites.bizmaps.pipeline2_gmap import _clean_website
+from japan_crawler.sites.bizmaps.pipeline2_gmap import _repair_dirty_gmap_websites
 from japan_crawler.sites.hellowork.store import HelloworkStore
 
 
@@ -117,6 +122,57 @@ class StoreGuardrailTests(unittest.TestCase):
                 self.assertEqual("pending", row[1])
             finally:
                 store._conn().close()
+
+    def test_bizmaps_repair_dirty_gmap_websites_resets_booking_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "bizmaps.db"
+            store = BizmapsStore(db_path)
+            try:
+                conn = sqlite3.connect(str(db_path))
+                conn.execute(
+                    """
+                    INSERT INTO companies (
+                        pref_code, company_name, representative, website, address,
+                        emails, email_status, gmap_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "01",
+                        "Hotel A",
+                        "Jane Doe",
+                        "https://Booking.com",
+                        "Sapporo",
+                        "stay@booking.com",
+                        "done",
+                        "done",
+                    ),
+                )
+                conn.commit()
+                conn.close()
+
+                repaired = _repair_dirty_gmap_websites(store)
+
+                conn = sqlite3.connect(str(db_path))
+                row = conn.execute(
+                    """
+                    SELECT website, emails, email_status, gmap_status, representative
+                    FROM companies
+                    WHERE company_name = 'Hotel A' AND address = 'Sapporo'
+                    """
+                ).fetchone()
+                conn.close()
+
+                self.assertEqual(1, repaired)
+                self.assertEqual("", row[0])
+                self.assertEqual("", row[1])
+                self.assertEqual("pending", row[2])
+                self.assertEqual("pending", row[3])
+                self.assertEqual("Jane Doe", row[4])
+            finally:
+                store._conn().close()
+
+    def test_bizmaps_clean_website_blocks_portal_host(self) -> None:
+        self.assertEqual("", _clean_website("https://Booking.com"))
 
     def test_hellowork_dash_representative_does_not_overwrite_real_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
