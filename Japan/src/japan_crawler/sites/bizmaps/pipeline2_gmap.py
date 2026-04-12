@@ -25,11 +25,15 @@ from .store import BizmapsStore
 logger = logging.getLogger("bizmaps.pipeline2")
 _DIRTY_WEBSITE_SQL_HINTS = (
     "%booking.com%",
+    "%carsensor.net%",
     "%tripadvisor.com%",
     "%expedia.com%",
     "%hotels.com%",
     "%hoteis.com%",
     "%decolar.com%",
+    "%getyourguide.com%",
+    "%giatamedia.com%",
+    "%goo-net.com%",
     "%facebook.com%",
     "%instagram.com%",
     "%x.com%",
@@ -42,8 +46,12 @@ _DIRTY_WEBSITE_SQL_HINTS = (
 )
 _DIRTY_HOST_FRAGMENTS = (
     "booking.com",
+    "carsensor.net",
     "tripadvisor.com",
     "expedia.com",
+    "getyourguide.com",
+    "giatamedia.com",
+    "goo-net.com",
     "hotels.com",
     "hoteis.com",
     "decolar.com",
@@ -228,6 +236,7 @@ def _clean_website(url: str) -> str:
     normalized = _gmap_normalize_url(url)
     if not normalized:
         return ""
+    lowered_url = normalized.lower()
     try:
         host = urlparse(normalized).netloc.lower()
         if host.startswith("www."):
@@ -237,6 +246,8 @@ def _clean_website(url: str) -> str:
         if _gmap_is_blocked_host(host):
             return ""
         if any(fragment in host for fragment in _DIRTY_HOST_FRAGMENTS):
+            return ""
+        if any(fragment in lowered_url for fragment in _DIRTY_HOST_FRAGMENTS):
             return ""
         if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
             return ""

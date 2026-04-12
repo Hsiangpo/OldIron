@@ -15,6 +15,7 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
 from oldiron_core.protocol_crawler.client import SiteCrawlClient, SiteCrawlConfig, HtmlPageResult
+from oldiron_core.protocol_crawler.sitemap import decode_response_text
 from oldiron_core.protocol_crawler.sitemap import discover_sitemap_urls
 from oldiron_core.protocol_crawler.link_extractor import extract_same_site_links
 
@@ -100,7 +101,31 @@ class _MockResponse:
             self.headers = {}
 
 
+@dataclass
+class _BrokenTextResponse:
+    status_code: int
+    content: bytes
+    headers: dict[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.headers is None:
+            self.headers = {}
+
+    @property
+    def text(self) -> str:
+        raise UnicodeDecodeError("utf-8", self.content, 0, 1, "broken decode")
+
+
 class TestSitemap(unittest.TestCase):
+    def test_decode_response_text_falls_back_to_cp932_bytes(self) -> None:
+        text = "<html><body>株式会社あいう</body></html>"
+        resp = _BrokenTextResponse(
+            200,
+            content=text.encode("cp932"),
+            headers={"Content-Type": "text/html"},
+        )
+        self.assertEqual(text, decode_response_text(resp))
+
     def test_parses_simple_sitemap(self) -> None:
         robots_resp = _MockResponse(200, text="Sitemap: https://example.com/sitemap.xml")
         sitemap_xml = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -277,7 +302,7 @@ class TestSiteCrawlClient(unittest.TestCase):
 
     def test_fetch_html_falls_back_to_http_on_tls_error(self) -> None:
         client = SiteCrawlClient(SiteCrawlConfig(max_retries=0))
-        https_error = RuntimeError("curl: (60) SSL certificate problem")
+        https_error = RuntimeError("curl: (35) TLS wrong_version_number")
         http_response = MagicMock(
             status_code=200,
             text="<html>ok</html>",
@@ -310,6 +335,19 @@ class TestSiteCrawlClient(unittest.TestCase):
         self.assertEqual("https://example.com", client._session.get.call_args_list[1].args[0])
         self.assertFalse(client._session.get.call_args_list[0].kwargs.get("verify", True) is False)
         self.assertFalse(client._session.get.call_args_list[1].kwargs.get("verify", True))
+
+    def test_fetch_html_decodes_non_utf8_response_without_crashing(self) -> None:
+        client = SiteCrawlClient(SiteCrawlConfig(max_retries=0))
+        response = _BrokenTextResponse(
+            200,
+            content="<html>株式会社あいう</html>".encode("cp932"),
+            headers={"Content-Type": "text/html"},
+        )
+        client._session.get = MagicMock(return_value=response)
+
+        html = client._fetch_html("https://example.com/page")
+
+        self.assertIn("株式会社あいう", html)
 
     def test_fetch_html_skips_pdf_response(self) -> None:
         client = SiteCrawlClient(SiteCrawlConfig(max_retries=0))

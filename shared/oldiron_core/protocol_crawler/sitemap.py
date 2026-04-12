@@ -23,6 +23,9 @@ _NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 # robots.txt 中 Sitemap 声明的正则
 _ROBOTS_SITEMAP_RE = re.compile(r"^Sitemap:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_CHARSET_RE = re.compile(r"charset\s*=\s*[\"']?\s*([a-zA-Z0-9._-]+)", re.IGNORECASE)
+_HTML_META_CHARSET_RE = re.compile(br"<meta[^>]+charset=[\"']?\s*([a-zA-Z0-9._-]+)", re.IGNORECASE)
+_XML_ENCODING_RE = re.compile(br"<\?xml[^>]+encoding=[\"']\s*([a-zA-Z0-9._-]+)", re.IGNORECASE)
 _SKIP_EXTENSIONS = frozenset({
     ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp",
     ".css", ".js", ".woff", ".woff2", ".ttf", ".eot",
@@ -31,6 +34,61 @@ _SKIP_EXTENSIONS = frozenset({
     ".zip", ".tar", ".gz", ".rar", ".7z",
     ".exe", ".dmg", ".apk",
 })
+
+
+def decode_response_text(resp) -> str:
+    """尽量稳妥地把响应体解码成文本，避免非 UTF-8 页面直接抛错。"""
+    content = getattr(resp, "content", b"")
+    content_type = str(getattr(resp, "headers", {}).get("Content-Type", "") or "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, (bytes, bytearray)) and content:
+        raw = bytes(content)
+        for encoding in _candidate_encodings(content_type, raw):
+            try:
+                return raw.decode(encoding)
+            except (LookupError, UnicodeDecodeError):
+                continue
+        return raw.decode("utf-8", errors="replace")
+    try:
+        text = getattr(resp, "text", "") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(text)
+
+
+def _candidate_encodings(content_type: str, content: bytes) -> list[str]:
+    encodings: list[str] = []
+    declared = _extract_declared_charset(content_type)
+    if declared:
+        encodings.append(declared)
+    meta_declared = _extract_meta_charset(content)
+    if meta_declared and meta_declared not in encodings:
+        encodings.append(meta_declared)
+    for fallback in ("utf-8", "utf-8-sig", "cp932", "shift_jis", "euc_jp", "iso2022_jp", "latin-1"):
+        if fallback not in encodings:
+            encodings.append(fallback)
+    return encodings
+
+
+def _extract_declared_charset(content_type: str) -> str:
+    match = _CHARSET_RE.search(str(content_type or ""))
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip().lower()
+
+
+def _extract_meta_charset(content: bytes) -> str:
+    head = bytes(content[:4096])
+    for pattern in (_HTML_META_CHARSET_RE, _XML_ENCODING_RE):
+        match = pattern.search(head)
+        if not match:
+            continue
+        try:
+            return match.group(1).decode("ascii", errors="ignore").strip().lower()
+        except Exception:  # noqa: BLE001
+            return ""
+    return ""
 
 
 def discover_sitemap_urls(
@@ -78,7 +136,7 @@ def _find_sitemap_locations(
         resp = _session_get_with_insecure_https_retry(session, robots_url, timeout=timeout)
         if resp.status_code != 200:
             return []
-        text = resp.text or ""
+        text = decode_response_text(resp)
         matches = _ROBOTS_SITEMAP_RE.findall(text)
         return [m.strip() for m in matches if m.strip()]
     except Exception as exc:  # noqa: BLE001
@@ -180,7 +238,7 @@ def _fetch_sitemap_text(
                 content = gzip.decompress(content)
             except Exception:  # noqa: BLE001
                 pass
-        return content.decode("utf-8", errors="replace")
+        return decode_response_text(type("_SitemapResponse", (), {"content": content, "headers": resp.headers})())
     except Exception as exc:  # noqa: BLE001
         LOGGER.debug("sitemap 获取失败：%s — %s", url, exc)
         return ""

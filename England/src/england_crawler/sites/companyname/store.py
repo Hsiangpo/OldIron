@@ -13,6 +13,19 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlparse
+
+from shared.oldiron_core.google_maps.client import _is_blocked_host as _gmap_is_blocked_host
+from shared.oldiron_core.google_maps.client import _normalize_url as _gmap_normalize_url
+
+_DIRTY_HOMEPAGE_FRAGMENTS = (
+    "booking.com",
+    "carsensor.net",
+    "getyourguide.com",
+    "giatamedia.com",
+    "goo-net.com",
+)
+_DIRTY_HOMEPAGE_SQL_HINTS = tuple(f"%{item}%" for item in _DIRTY_HOMEPAGE_FRAGMENTS)
 
 
 def run_with_sqlite_retry(conn, operation, *, attempts=6, base_delay=0.05, cap_delay=0.5):
@@ -53,6 +66,25 @@ def _extract_domain(url: str) -> str:
     if "." not in value or not value.isascii() or " " in value:
         return ""
     return value
+
+
+def _sanitize_homepage(url: str) -> str:
+    normalized = _gmap_normalize_url(url)
+    if not normalized:
+        return ""
+    lowered_url = normalized.lower()
+    host = urlparse(normalized).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host or "." not in host:
+        return ""
+    if _gmap_is_blocked_host(host):
+        return ""
+    if any(fragment in host for fragment in _DIRTY_HOMEPAGE_FRAGMENTS):
+        return ""
+    if any(fragment in lowered_url for fragment in _DIRTY_HOMEPAGE_FRAGMENTS):
+        return ""
+    return normalized
 
 
 def _normalize_phone(value: str) -> str:
@@ -258,6 +290,65 @@ class CompanyNameStore:
                 )
             self._conn.commit()
 
+    def repair_dirty_homepages(self) -> int:
+        now = _utc_now()
+        with self._lock:
+            clauses = " OR ".join(["LOWER(homepage) LIKE ?"] * len(_DIRTY_HOMEPAGE_SQL_HINTS))
+            rows = self._conn.execute(
+                f"""
+                SELECT orgnr, homepage
+                FROM companies
+                WHERE homepage != ''
+                  AND ({clauses})
+                """,
+                _DIRTY_HOMEPAGE_SQL_HINTS,
+            ).fetchall()
+            dirty_orgnrs = [
+                str(row["orgnr"])
+                for row in rows
+                if not _sanitize_homepage(str(row["homepage"] or ""))
+            ]
+            if not dirty_orgnrs:
+                return 0
+            placeholders = ",".join("?" for _ in dirty_orgnrs)
+            self._conn.execute(
+                f"""
+                UPDATE companies
+                SET homepage = '',
+                    domain = '',
+                    gmap_phone = '',
+                    gmap_company_name = '',
+                    evidence_url = '',
+                    gmap_status = 'pending',
+                    firecrawl_status = '',
+                    firecrawl_retry_at = '',
+                    last_error = '',
+                    updated_at = ?
+                WHERE orgnr IN ({placeholders})
+                """,
+                (now, *dirty_orgnrs),
+            )
+            self._conn.execute(
+                f"DELETE FROM firecrawl_queue WHERE orgnr IN ({placeholders})",
+                dirty_orgnrs,
+            )
+            for orgnr in dirty_orgnrs:
+                self._conn.execute(
+                    """
+                    INSERT INTO gmap_queue(orgnr, status, retries, next_run_at, last_error, updated_at)
+                    VALUES(?, 'pending', 0, ?, '', ?)
+                    ON CONFLICT(orgnr) DO UPDATE SET
+                        status='pending',
+                        retries=0,
+                        next_run_at=excluded.next_run_at,
+                        last_error='',
+                        updated_at=excluded.updated_at
+                    """,
+                    (orgnr, now, now),
+                )
+            self._conn.commit()
+            return len(dirty_orgnrs)
+
     # ── 公司灌入 ──
 
     def seed_companies(self, names: list[str]) -> int:
@@ -320,13 +411,15 @@ class CompanyNameStore:
     def complete_gmap_task(self, orgnr: str, homepage: str, phone: str,
                            gmap_name: str, evidence_url: str = "") -> None:
         now = _utc_now()
-        domain = _extract_domain(homepage)
+        cleaned_homepage = _sanitize_homepage(homepage)
+        cleaned_evidence_url = cleaned_homepage if cleaned_homepage else ""
+        domain = _extract_domain(cleaned_homepage)
         with self._lock:
             self._conn.execute(
                 """UPDATE companies SET homepage=?, domain=?, gmap_phone=?,
                    gmap_company_name=?, gmap_status='done', evidence_url=?, updated_at=?
                    WHERE orgnr=?""",
-                (homepage, domain, phone, gmap_name, evidence_url, now, orgnr),
+                (cleaned_homepage, domain, phone, gmap_name, cleaned_evidence_url, now, orgnr),
             )
             self._conn.execute(
                 "UPDATE gmap_queue SET status='done', updated_at=? WHERE orgnr=?",

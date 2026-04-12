@@ -103,6 +103,9 @@ class CompanyNamePipelineRunner:
         )
         if recovered:
             LOGGER.info("已回收陈旧运行中任务：%s", recovered)
+        repaired = self.store.repair_dirty_homepages()
+        if repaired:
+            LOGGER.info("启动自愈：重置 %d 条脏官网并重新放回 GMap 队列", repaired)
         # 启动前批量处理：域名缓存已有结果的 pending 任务直接标 done
         cached = self._firecrawl_domain_cache.get_all_done_domains()
         batch_resolved = self.store.batch_resolve_cached_firecrawl(cached)

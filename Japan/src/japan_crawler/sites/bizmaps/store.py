@@ -14,11 +14,40 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from shared.oldiron_core.fc_email.normalization import analyze_email_set
 from shared.oldiron_core.fc_email.normalization import join_emails
+from shared.oldiron_core.google_maps.client import _is_blocked_host as _gmap_is_blocked_host
+from shared.oldiron_core.google_maps.client import _normalize_url as _gmap_normalize_url
 
 _REP_ONLY_QUEUE_MIGRATION_VERSION = 20260408
+_SOURCE_DIRTY_HOST_FRAGMENTS = (
+    "booking.com",
+    "carsensor.net",
+    "getyourguide.com",
+    "giatamedia.com",
+    "goo-net.com",
+)
+
+
+def _sanitize_source_website(url: str) -> str:
+    normalized = _gmap_normalize_url(url)
+    if not normalized:
+        return ""
+    lowered_url = normalized.lower()
+    host = urlparse(normalized).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host or "." not in host:
+        return ""
+    if _gmap_is_blocked_host(host):
+        return ""
+    if any(fragment in host for fragment in _SOURCE_DIRTY_HOST_FRAGMENTS):
+        return ""
+    if any(fragment in lowered_url for fragment in _SOURCE_DIRTY_HOST_FRAGMENTS):
+        return ""
+    return normalized
 
 
 class BizmapsStore:
@@ -205,6 +234,7 @@ class BizmapsStore:
             for comp in companies:
                 name = comp.get("company_name", "").strip()
                 addr = comp.get("address", "").strip()
+                website = _sanitize_source_website(comp.get("website", ""))
                 if not name:
                     continue
                 try:
@@ -226,7 +256,7 @@ class BizmapsStore:
                         (
                             pref_code, name,
                             comp.get("representative", ""),
-                            comp.get("website", ""),
+                            website,
                             addr,
                             comp.get("industry", ""),
                             comp.get("phone", ""),

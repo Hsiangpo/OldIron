@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from curl_cffi import requests as cffi_requests
 
 from .link_extractor import extract_same_site_links
+from .sitemap import decode_response_text
 from .sitemap import discover_sitemap_urls
 
 LOGGER = logging.getLogger(__name__)
@@ -221,7 +222,7 @@ class SiteCrawlClient:
                     if not _is_supported_page_response(url, content_type):
                         LOGGER.info("协议爬虫跳过非 HTML 内容：url=%s content_type=%s", url, content_type or "-")
                         return ""
-                    text = resp.text or ""
+                    text = decode_response_text(resp)
                     if truncate_html:
                         return _truncate_html_text(url, text, self._config.max_html_chars)
                     return text
@@ -285,7 +286,7 @@ class SiteCrawlClient:
             if not _is_supported_page_response(url, content_type):
                 LOGGER.info("协议爬虫宽松校验跳过非 HTML 内容：url=%s content_type=%s", url, content_type or "-")
                 return ""
-            text = resp.text or ""
+            text = decode_response_text(resp)
             if truncate_html:
                 return _truncate_html_text(url, text, self._config.max_html_chars)
             return text

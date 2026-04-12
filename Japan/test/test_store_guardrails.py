@@ -177,6 +177,42 @@ class StoreGuardrailTests(unittest.TestCase):
     def test_bizmaps_clean_website_blocks_portal_fragment_host(self) -> None:
         self.assertEqual("", _clean_website("https://booking.comstandard"))
 
+    def test_bizmaps_clean_website_blocks_new_portal_hosts(self) -> None:
+        self.assertEqual("", _clean_website("https://getyourguide.com"))
+        self.assertEqual("", _clean_website("https://www.goo-net.com/usedcar_shop/0303191/stock.html"))
+        self.assertEqual("", _clean_website("https://www.carsensor.net/shop/hokkaido/329995001/"))
+        self.assertEqual("", _clean_website("https://i.giatamedia.com/m.php?m=abc"))
+        self.assertEqual(
+            "",
+            _clean_website(
+                "https://dr.r-ad.ne.jp/o?__url__=https://www.carsensor.net/usedcar/detail/AU123/index.html"
+            ),
+        )
+
+    def test_bizmaps_upsert_companies_skips_blocked_source_websites(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "bizmaps.db"
+            store = BizmapsStore(db_path)
+            try:
+                store.upsert_companies(
+                    "01",
+                    [
+                        {
+                            "company_name": "Portal Co",
+                            "address": "Tokyo",
+                            "website": "https://getyourguide.com",
+                        }
+                    ],
+                )
+                conn = sqlite3.connect(str(db_path))
+                row = conn.execute(
+                    "SELECT website FROM companies WHERE company_name = 'Portal Co' AND address = 'Tokyo'"
+                ).fetchone()
+                conn.close()
+                self.assertEqual("", row[0])
+            finally:
+                store._conn().close()
+
     def test_hellowork_dash_representative_does_not_overwrite_real_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "hellowork.db"
