@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
 import logging
 import multiprocessing
 import os
@@ -48,26 +50,15 @@ def run_pipeline_email(
 
     settings = _build_settings(output_dir)
     settings.validate()
-    LOGGER.info("OneCareer 邮箱提取：待处理 %d 家，并发=%d，批量=%d", len(pending), 1, batch_limit)
+    LOGGER.info("OneCareer 邮箱提取：待处理 %d 家，并发=%d，批量=%d", len(pending), worker_count, batch_limit)
     task_timeout_seconds = _email_task_timeout_seconds()
-
-    def _worker(company: dict[str, str]) -> tuple[str, list[str], str]:
-        return _run_company_process_with_timeout(company, settings, task_timeout_seconds)
-
-    processed = 0
-    found = 0
-    for company in pending:
-        try:
-            company_id, emails, representative = _worker(company)
-        except Exception:  # noqa: BLE001
-            LOGGER.warning("邮箱提取失败：%s", company["company_name"], exc_info=True)
-            store.mark_email_retry(company["company_id"])
-            processed += 1
-            continue
-        store.save_email_result(company_id, emails, representative)
-        processed += 1
-        if emails:
-            found += 1
+    processed, found = _run_pending_batch(
+        pending=pending,
+        settings=settings,
+        timeout_seconds=task_timeout_seconds,
+        worker_count=worker_count,
+        store=store,
+    )
     return {"processed": processed, "found": found}
 
 
@@ -90,6 +81,37 @@ def _email_task_timeout_seconds() -> float:
         return max(float(raw), 10.0)
     except ValueError:
         return _DEFAULT_TASK_TIMEOUT_SECONDS
+
+
+def _run_pending_batch(
+    *,
+    pending: list[dict[str, str]],
+    settings: FirecrawlEmailSettings,
+    timeout_seconds: float,
+    worker_count: int,
+    store: OnecareerStore,
+) -> tuple[int, int]:
+    processed = 0
+    found = 0
+    with ThreadPoolExecutor(max_workers=max(int(worker_count or 1), 1), thread_name_prefix="onecareer-p3") as executor:
+        future_to_company = {
+            executor.submit(_run_company_process_with_timeout, company, settings, timeout_seconds): company
+            for company in pending
+        }
+        for future in as_completed(future_to_company):
+            company = future_to_company[future]
+            try:
+                company_id, emails, representative = future.result()
+            except Exception:  # noqa: BLE001
+                LOGGER.warning("邮箱提取失败：%s", company["company_name"], exc_info=True)
+                store.mark_email_retry(company["company_id"])
+                processed += 1
+                continue
+            store.save_email_result(company_id, emails, representative)
+            processed += 1
+            if emails:
+                found += 1
+    return processed, found
 
 
 def _run_with_timeout(action: Callable[[], tuple[str, list[str], str]], *, timeout_seconds: float, timeout_label: str) -> tuple[str, list[str], str]:
