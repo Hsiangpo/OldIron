@@ -40,6 +40,21 @@ _DIRTY_WEBSITE_SQL_HINTS = (
     "%whatsapp.com%",
     "%linktr.ee%",
 )
+_DIRTY_HOST_FRAGMENTS = (
+    "booking.com",
+    "tripadvisor.com",
+    "expedia.com",
+    "hotels.com",
+    "hoteis.com",
+    "decolar.com",
+    "facebook.com",
+    "instagram.com",
+    "linkedin.com",
+    "twitter.com",
+    "youtube.com",
+    "whatsapp.com",
+    "linktr.ee",
+)
 
 DEFAULT_CONCURRENCY = 64
 DEFAULT_COMMIT_INTERVAL = 50
@@ -220,6 +235,8 @@ def _clean_website(url: str) -> str:
         if not host or "." not in host:
             return ""
         if _gmap_is_blocked_host(host):
+            return ""
+        if any(fragment in host for fragment in _DIRTY_HOST_FRAGMENTS):
             return ""
         if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
             return ""

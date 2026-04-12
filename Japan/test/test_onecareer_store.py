@@ -92,6 +92,42 @@ class OnecareerStoreTests(unittest.TestCase):
             finally:
                 repaired.close()
 
+    def test_mark_email_retry_moves_failed_company_behind_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "onecareer_store.db"
+            store = OnecareerStore(db_path)
+            try:
+                store.upsert_companies(
+                    [
+                        {
+                            "company_id": "84",
+                            "company_name": "東京ガス",
+                            "website": "https://example-a.co.jp",
+                            "detail_url": "/companies/84",
+                        },
+                        {
+                            "company_id": "85",
+                            "company_name": "大阪ガス",
+                            "website": "https://example-b.co.jp",
+                            "detail_url": "/companies/85",
+                        },
+                    ]
+                )
+                conn = sqlite3.connect(db_path)
+                conn.execute("UPDATE companies SET updated_at = '2026-01-01 00:00:00' WHERE company_id = '84'")
+                conn.execute("UPDATE companies SET updated_at = '2026-01-01 00:00:01' WHERE company_id = '85'")
+                conn.commit()
+                conn.close()
+
+                initial = [row["company_id"] for row in store.get_email_pending()]
+                store.mark_email_retry("84")
+                updated = [row["company_id"] for row in store.get_email_pending()]
+
+                self.assertEqual(["84", "85"], initial)
+                self.assertEqual(["85", "84"], updated)
+            finally:
+                store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -174,6 +174,9 @@ class StoreGuardrailTests(unittest.TestCase):
     def test_bizmaps_clean_website_blocks_portal_host(self) -> None:
         self.assertEqual("", _clean_website("https://Booking.com"))
 
+    def test_bizmaps_clean_website_blocks_portal_fragment_host(self) -> None:
+        self.assertEqual("", _clean_website("https://booking.comstandard"))
+
     def test_hellowork_dash_representative_does_not_overwrite_real_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "hellowork.db"

@@ -61,6 +61,7 @@ def run_pipeline_email(
             company_id, emails, representative = _worker(company)
         except Exception:  # noqa: BLE001
             LOGGER.warning("邮箱提取失败：%s", company["company_name"], exc_info=True)
+            store.mark_email_retry(company["company_id"])
             processed += 1
             continue
         store.save_email_result(company_id, emails, representative)

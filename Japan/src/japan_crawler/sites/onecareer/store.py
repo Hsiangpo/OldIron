@@ -274,7 +274,7 @@ class OnecareerStore:
             FROM companies
             WHERE website != '' AND website IS NOT NULL
               AND (email_status IN ('pending', 'rep_pending') OR email_status IS NULL)
-            ORDER BY company_id
+            ORDER BY updated_at, company_id
         """
         if limit > 0:
             sql += f" LIMIT {int(limit)}"
@@ -301,6 +301,19 @@ class OnecareerStore:
             )
 
         self._run_write(_action)
+
+    def mark_email_retry(self, company_id: str) -> None:
+        self._run_write(
+            lambda conn: conn.execute(
+                """
+                UPDATE companies
+                SET updated_at = ?
+                WHERE company_id = ?
+                  AND (email_status IN ('pending', 'rep_pending') OR email_status IS NULL)
+                """,
+                (_now_text(), company_id),
+            )
+        )
 
     def export_all_companies(self) -> list[dict[str, str]]:
         conn = self._conn()
