@@ -18,6 +18,21 @@ if str(SHARED_PARENT) not in sys.path:
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
+
+def _configure_stdio_utf8() -> None:
+    """统一入口标准流编码，避免 Windows 默认代码页导致中文输出崩溃。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+
+
+_configure_stdio_utf8()
+
 USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
 

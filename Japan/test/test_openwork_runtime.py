@@ -20,6 +20,7 @@ if str(SHARED_PARENT) not in sys.path:
 
 from japan_crawler.sites.openwork.client import OpenworkClient
 from japan_crawler.sites.openwork.client import OpenworkPageNotFound
+from japan_crawler.sites.openwork.pipeline import _build_keyword_seed
 from japan_crawler.sites.openwork.pipeline import _plan_list_scopes
 from japan_crawler.sites.openwork.pipeline import _wait_for_list_page_html
 from japan_crawler.sites.openwork.pipeline import _load_company_details
@@ -158,6 +159,65 @@ class _FieldScopedPrefClient:
         raise AssertionError(f'unexpected filters: field={field}, pref={pref}')
 
 
+class _KeywordSplitClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str, str, str]] = []
+        self._pref_html = """
+            <html><body>
+            <div>819 件中 1～50件を表示</div>
+            <ul class="mt-20 borderGray-top testCompanyList">
+              <li class="box-15 p-r noBorder-top">
+                <div class="searchCompanyName">
+                  <div><h3 class="fs-18 lh-1o3 p-r"><a href="/company.php?m_id=k1">株式会社日本証券</a></h3></div>
+                  <div class="f-l w-295"><p class="gray mt-5">証券</p></div>
+                </div>
+              </li>
+              <li class="box-15 p-r noBorder-top">
+                <div class="searchCompanyName">
+                  <div><h3 class="fs-18 lh-1o3 p-r"><a href="/company.php?m_id=k2">株式会社三和投資</a></h3></div>
+                  <div class="f-l w-295"><p class="gray mt-5">証券</p></div>
+                </div>
+              </li>
+              <li class="box-15 p-r noBorder-top">
+                <div class="searchCompanyName">
+                  <div><h3 class="fs-18 lh-1o3 p-r"><a href="/company.php?m_id=k3">SMBC日興証券株式会社</a></h3></div>
+                  <div class="f-l w-295"><p class="gray mt-5">証券</p></div>
+                </div>
+              </li>
+            </ul>
+            </body></html>
+        """
+        self._keyword_html = {
+            "株式会社日": "<html><body><div>7 件中 1～50件を表示</div></body></html>",
+            "株式会社三": "<html><body><div>3 件中 1～50件を表示</div></body></html>",
+            "SMBC": "<html><body><div>8 件中 1～50件を表示</div></body></html>",
+        }
+
+    def fetch_list_page(self, page: int, *, field: str = "", pref: str = "", src_str: str = "", ct: str = "") -> str | None:  # noqa: ARG002
+        self.calls.append((page, field, pref, src_str))
+        if not field and not pref and not src_str:
+            return """
+                <html><body>
+                <a href="/company_list?field=0001&sort=1">制造</a>
+                <a href="/company_list?pref=13&sort=1">东京</a>
+                </body></html>
+            """
+        if field == "0001" and not pref and not src_str:
+            return """
+                <html><body>
+                <div>1,086 件中 1～50件を表示</div>
+                <a href="/company_list?field=0001&pref=13&sort=1">东京</a>
+                </body></html>
+            """
+        if field == "0001" and pref == "13" and not src_str:
+            if page <= 10:
+                return self._pref_html
+            return "<html><body><div>0 件中 0～0件を表示</div></body></html>"
+        if field == "0001" and pref == "13" and src_str:
+            return self._keyword_html.get(src_str, "<html><body><div>0 件中 0～0件を表示</div></body></html>")
+        raise AssertionError(f"unexpected filters: page={page}, field={field}, pref={pref}, src_str={src_str}")
+
+
 class _StaticResponse:
     def __init__(self, status_code: int, text: str) -> None:
         self.status_code = status_code
@@ -173,6 +233,11 @@ class _StaticSession:
 
 
 class OpenworkRuntimeTests(unittest.TestCase):
+    def test_build_keyword_seed_prefers_company_prefix_plus_one_char(self) -> None:
+        self.assertEqual("株式会社日", _build_keyword_seed("株式会社日本証券"))
+        self.assertEqual("SMBC", _build_keyword_seed("SMBC日興証券株式会社"))
+        self.assertEqual("野村", _build_keyword_seed("野村證券株式会社"))
+
     def test_browser_response_failure_returns_none(self) -> None:
         client = OpenworkClient.__new__(OpenworkClient)
         client._browser_client = _FailingBrowser()
@@ -299,6 +364,15 @@ class OpenworkRuntimeTests(unittest.TestCase):
         self.assertIn("company_list:field=0001&pref=13", scope_keys)
         self.assertIn("company_list:field=0001&pref=27", scope_keys)
         self.assertNotIn("company_list:field=0001&pref=40", scope_keys)
+
+    def test_plan_list_scopes_adds_keyword_scopes_for_truncated_pref(self) -> None:
+        client = _KeywordSplitClient()
+        scopes = _plan_list_scopes(client, client.fetch_list_page(1) or "")
+        scope_keys = [scope.key for scope in scopes]
+        self.assertIn("company_list:field=0001&pref=13", scope_keys)
+        self.assertIn("company_list:field=0001&pref=13&src_str=株式会社日", scope_keys)
+        self.assertIn("company_list:field=0001&pref=13&src_str=株式会社三", scope_keys)
+        self.assertIn("company_list:field=0001&pref=13&src_str=SMBC", scope_keys)
 
 
 if __name__ == "__main__":
