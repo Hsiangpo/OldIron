@@ -28,7 +28,7 @@ from .store import OnecareerStore
 
 LOGGER = logging.getLogger("onecareer.pipeline3")
 _DEFAULT_BATCH_SIZE = 24
-_MAX_SAFE_CONCURRENCY = 4
+_MAX_SAFE_CONCURRENCY = 64
 _DEFAULT_TASK_TIMEOUT_SECONDS = 90.0
 
 
