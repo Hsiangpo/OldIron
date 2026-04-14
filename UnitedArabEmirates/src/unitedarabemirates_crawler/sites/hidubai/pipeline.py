@@ -91,7 +91,12 @@ def _build_session(proxy: str) -> cffi_requests.Session:
 
 def _fetch_page_items(session: cffi_requests.Session, page: int) -> list[dict]:
     response = session.get(SEARCH_URL.format(page=page), timeout=30)
+    if response.status_code == 204:
+        LOGGER.info("HiDubai 列表页已到末尾：page=%d status=204", page)
+        return []
     response.raise_for_status()
+    if not str(response.text or "").strip():
+        raise ValueError(f"HiDubai 返回空正文：page={page} status={response.status_code}")
     payload = response.json()
     return list(payload.get("_embedded", {}).get("localBusinesses", []))
 

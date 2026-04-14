@@ -6,6 +6,7 @@ import argparse
 import logging
 import multiprocessing as mp
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -37,6 +38,7 @@ def run_site_cli(
     run_list: Callable[..., dict[str, int]],
 ) -> int:
     """统一站点入口。"""
+    _ensure_stdio_utf8()
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email"])
     parser.add_argument("--delay", type=float, default=1.5)
@@ -305,10 +307,34 @@ def _close_batch_queue(queue: mp.Queue) -> None:
 
 
 def _print_all_summary(results: dict[str, dict[str, int]], total: int, errors: list[str]) -> None:
+    """输出总结时兜住 Windows 非 UTF-8 控制台。"""
     if errors:
-        print(f"\n部分完成: {results} | companies={total} | errors={errors}")
+        _safe_print(f"\n部分完成: {results} | companies={total} | errors={errors}")
         return
-    print(f"\n完成: {results} | companies={total}")
+    _safe_print(f"\n完成: {results} | companies={total}")
+
+
+def _ensure_stdio_utf8() -> None:
+    """尽量把标准输出切到 UTF-8，避免中文总结在 Windows 上崩溃。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+
+
+def _safe_print(message: str) -> None:
+    """在 reconfigure 不生效时，回退到底层 buffer 输出。"""
+    try:
+        print(message)
+        return
+    except UnicodeEncodeError:
+        pass
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:
+        raise
+    buffer.write((message + "\n").encode("utf-8", errors="replace"))
+    buffer.flush()
 
 
 def _looks_like_usage_limit_error(exc: Exception) -> bool:
