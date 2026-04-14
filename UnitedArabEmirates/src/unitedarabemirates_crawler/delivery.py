@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+import sqlite3
 import sys
 
 
@@ -15,9 +16,7 @@ if str(SHARED_ROOT) not in sys.path:
 
 from oldiron_core.delivery.engine import prepare_delivery_dir
 from oldiron_core.delivery.engine import validate_day_sequence
-from oldiron_core.delivery.sanitize import sanitize_record
-
-from unitedarabemirates_crawler.sites.common.store import UaeCompanyStore
+from oldiron_core.fc_email.normalization import split_emails
 
 
 def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) -> dict[str, object]:
@@ -41,7 +40,7 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
                 continue
             records = _load_site_records(db_path)
             raw_count = len(records)
-            qualified = [record for record in records if record is not None]
+            qualified = [record for record in records if _is_delivery_qualified(record)]
             baseline_keys = _load_site_baseline_keys(Path(delivery_root), site_dir.name, baseline_day)
             delta_records = [record for record in qualified if _record_key(record) not in baseline_keys]
             current_keys = sorted(baseline_keys | {_record_key(record) for record in qualified})
@@ -73,24 +72,52 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
     return summary
 
 
-def _load_site_records(db_path: Path) -> list[dict[str, str] | None]:
-    rows = UaeCompanyStore(db_path).export_all_companies()
-    records: list[dict[str, str] | None] = []
+def _load_site_records(db_path: Path) -> list[dict[str, str]]:
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT company_name,
+                   representative_final AS representative,
+                   emails,
+                   website,
+                   phone,
+                   evidence_url,
+                   p1_status,
+                   gmap_status,
+                   email_status
+            FROM companies
+            ORDER BY company_name
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    records: list[dict[str, str]] = []
     for row in rows:
-        sanitized = sanitize_record(
+        records.append(
             {
-                "company_name": str(row.get("company_name", "")).strip(),
-                "representative": str(row.get("representative", "")).strip(),
-                "website": str(row.get("website", "")).strip(),
-                "phone": str(row.get("phone", "")).strip(),
-                "evidence_url": str(row.get("evidence_url", "")).strip(),
-            },
-            [item.strip() for item in str(row.get("emails", "")).split(";") if item.strip()],
+                "company_name": str(row["company_name"] or "").strip(),
+                "representative": str(row["representative"] or "").strip(),
+                "emails": "; ".join(split_emails(str(row["emails"] or "").strip())),
+                "website": str(row["website"] or "").strip(),
+                "phone": str(row["phone"] or "").strip(),
+                "evidence_url": str(row["evidence_url"] or "").strip(),
+                "p1_status": str(row["p1_status"] or "").strip().lower(),
+                "gmap_status": str(row["gmap_status"] or "").strip().lower(),
+                "email_status": str(row["email_status"] or "").strip().lower(),
+            }
         )
-        if sanitized is not None:
-            sanitized["evidence_url"] = str(row.get("evidence_url", "")).strip()
-        records.append(sanitized)
     return records
+
+
+def _is_delivery_qualified(record: dict[str, str]) -> bool:
+    return bool(
+        str(record.get("company_name", "")).strip()
+        and str(record.get("website", "")).strip()
+        and _is_done_status(record)
+    )
 
 
 def _load_site_baseline_keys(delivery_root: Path, site_name: str, baseline_day: int) -> set[str]:
@@ -112,3 +139,11 @@ def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
+
+
+def _is_done_status(record: dict[str, str]) -> bool:
+    return (
+        str(record.get("p1_status", "")).strip().lower() == "done"
+        and str(record.get("gmap_status", "")).strip().lower() == "done"
+        and str(record.get("email_status", "")).strip().lower() == "done"
+    )
