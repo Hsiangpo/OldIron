@@ -181,7 +181,7 @@
   - `UnitedArabEmirates`: cross-site duplicates are allowed to appear in different site delivery files.
   - `UnitedArabEmirates`: representative output keeps `P1;P3` order. If `P1` is empty, keep only `P3`.
   - `UnitedArabEmirates`: `P1` representative comes from site-native contact/contact-person fields when present, but output should keep only person names.
-  - `UnitedArabEmirates`: delivery gate is country-specific. A record is deliverable when `company_name` and `website` are present and `p1_status`, `gmap_status`, `email_status` are all `done`. Representative and emails may be empty for delivery.
+  - `UnitedArabEmirates`: delivery gate is country-specific. A record is deliverable when `company_name` and `website` are present and the post-list pipelines have finished for that record (`gmap_status='done'` and `email_status='done'`). Representative and emails may be empty for delivery.
 - Japan multi-machine same-day rule:
   - different machines may run the same `Japan dayN` only when the split is by site ownership
   - never let two machines produce the same Japan site package for the same `dayN`

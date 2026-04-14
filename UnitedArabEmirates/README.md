@@ -61,7 +61,7 @@ UnitedArabEmirates/output/delivery/UnitedArabEmirates_day001/
 - 跨站点允许重复出现在不同站点交付文件里。
 - 代表人合并顺序固定为 `P1;P3`。
 - `P1` 没代表人时，只保留 `P3`。
-- 交付门禁按阿联酋单独规则执行：只要 `company_name` 和 `website` 存在，且 `p1_status`、`gmap_status`、`email_status` 都是 `done`，就允许交付；代表人和邮箱可以为空。
+- 交付门禁按阿联酋单独规则执行：只要 `company_name` 和 `website` 存在，且后置补充链路已经完成（`gmap_status='done'` 且 `email_status='done'`），就允许交付；代表人和邮箱可以为空。
 - 邮箱遵循全局默认规则：保留官网真实邮箱，不做域名过滤。
 - `dubaibizdirectory` 的 P1 已改为纯协议链路：`curl_cffi + 本地 cookie jar`。
 - `dubaibizdirectory` 至少需要一次有效 `cf_clearance`；程序会自动续写 `CAKEPHP` 到 `output/dubaibizdirectory/session/cookie_state.json`。
