@@ -45,6 +45,7 @@ _BAD_EMAIL_HOST_HINTS = (
     "gmaii.com",
     "gmai.com",
     "gmail.jp",
+    "xyzmail.com",
     "48g9-.bybgnptut",
     "sample.com",
     "sample.co.jp",
@@ -237,7 +238,7 @@ def split_emails(values: Iterable[str] | str) -> list[str]:
         email = normalize_email_candidate(raw)
         if email and not _is_placeholder_email(email) and email not in result:
             result.append(email)
-    return result
+    return _drop_prefixed_local_duplicates(result)
 
 
 def analyze_email_set(website: str, values: Iterable[str] | str) -> EmailSetAnalysis:
@@ -415,6 +416,23 @@ def _normalize_local_part_key(local: str) -> str:
 
 def _prioritize_emails(emails: list[str]) -> list[str]:
     return sorted(emails, key=lambda item: (-_email_priority_score(item), emails.index(item)))
+
+
+def _drop_prefixed_local_duplicates(emails: list[str]) -> list[str]:
+    values = [str(email or "").strip().lower() for email in emails if str(email or "").strip()]
+    existing = set(values)
+    result: list[str] = []
+    for email in values:
+        local, _, domain = email.partition("@")
+        if local.startswith("at") and len(local) > 2:
+            base_local = local[2:]
+            base_email = f"{base_local}@{domain}"
+            normalized_base = re.sub(r"[^a-z0-9]+", "", base_local)
+            if base_email in existing and normalized_base in _EMAIL_PRIORITY_LOCAL_PARTS:
+                continue
+        if email not in result:
+            result.append(email)
+    return result
 
 
 def _email_priority_score(email: str) -> int:

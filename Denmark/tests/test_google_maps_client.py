@@ -25,6 +25,7 @@ from oldiron_core.google_maps.client import GoogleMapsConfig
 from oldiron_core.google_maps.client import _is_blocked_host
 from oldiron_core.google_maps.client import _looks_like_query_artifact_name
 from oldiron_core.google_maps.client import _normalize_url
+from oldiron_core.google_maps.client import _unwrap_google_url
 
 
 class GoogleMapsClientTests(unittest.TestCase):
@@ -32,6 +33,10 @@ class GoogleMapsClientTests(unittest.TestCase):
         self.assertEqual("", _normalize_url("https://Show..."))
         self.assertEqual("", _normalize_url("https://obg."))
         self.assertEqual("", _normalize_url("https://$0.00"))
+        self.assertEqual("", _normalize_url("https://[SolèaAtelier]"))
+
+    def test_unwrap_google_url_rejects_invalid_ipv6_like_url(self) -> None:
+        self.assertEqual("", _unwrap_google_url("http://[broken"))
 
     def test_blocked_host_filters_portal_and_gov(self) -> None:
         self.assertTrue(_is_blocked_host("booking.com"))

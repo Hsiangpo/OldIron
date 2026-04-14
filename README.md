@@ -9,7 +9,7 @@
 - 一个站点可以拆多阶段流水线
 - 不同国家可以复用同一类能力（官网补齐、联系方式提取、增量交付等）
 
-当前仓库已经覆盖英国、丹麦、韩国、日本、印尼、马来西亚、泰国、印度，以及新接入的美国、台湾方向。
+当前仓库已经覆盖英国、丹麦、韩国、日本、印尼、马来西亚、泰国、印度，以及新接入的美国、台湾、阿联酋方向。
 
 ## 当前开发口径
 
@@ -38,6 +38,7 @@
 | Brazil | `dnb` | DNB 列表 API → 隐藏详情 API → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
 | England | `companyname` | Excel 名单 → GMap → Companies House officers → 规则邮箱提取 → delivery | 代表人来自 Companies House，邮箱走规则提取 |
 | UnitedStates | `dnb` | DNB API → DNB 详情 → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
+| UnitedArabEmirates | `dubaibusinessdirectory`、`hidubai`、`dayofdubai`、`dubaibizdirectory`、`wiza` | 目录页/接口/协议详情（`dubaibizdirectory` 复用 cf cookie jar，`wiza` 复用登录态） → GMap → 协议爬虫+LLM → per-site delivery | 官网邮箱走规则，官网代表人走 LLM |
 | Taiwan | `ieatpe` | 会员协议接口 → 详情接口 → delivery | 站点直出 |
 | SouthKorea | `catch`、`incheon`、`dart` 等 | 列表/详情 → 官网 → 邮箱 → 交付 | Snov 为主 |
 | Japan | `bizmaps`、`hellowork`、`xlsximport` | 站点列表/导入 → 官网/邮箱补齐 → delivery | 协议爬虫+LLM + 站点字段 |
@@ -198,6 +199,11 @@ OldIron/
 │   ├── run.py
 │   ├── src/unitedstates_crawler/
 │   │   └── sites/dnb/
+│   └── output/
+├── UnitedArabEmirates/          # 阿联酋项目
+│   ├── run.py
+│   ├── src/unitedarabemirates_crawler/
+│   │   └── sites/{dubaibusinessdirectory,hidubai,dayofdubai,dubaibizdirectory,wiza}/
 │   └── output/
 ├── Taiwan/                      # 台湾项目
 │   ├── run.py

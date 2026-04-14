@@ -597,7 +597,10 @@ def _flatten_strings(obj: Any) -> list[str]:
 
 
 def _unwrap_google_url(url: str) -> str:
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return ""
     if "google." not in parsed.netloc:
         return url
     if parsed.path not in ("/url", "/search"):
@@ -639,7 +642,10 @@ def _normalize_url(value: str) -> str:
         text = "https:" + text
     if not text.startswith(("http://", "https://")):
         text = "https://" + text
-    parsed = urlparse(text)
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return ""
     host = (parsed.netloc or "").strip().lower()
     if host.startswith("www."):
         host = host[4:]

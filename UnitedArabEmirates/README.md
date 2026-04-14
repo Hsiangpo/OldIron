@@ -1,0 +1,70 @@
+# UnitedArabEmirates
+
+阿联酋当前接入 5 个站点：
+
+- `dubaibusinessdirectory`
+- `hidubai`
+- `dayofdubai`
+- `dubaibizdirectory`
+- `wiza`
+
+## Runtime
+
+```bash
+cd UnitedArabEmirates
+python -m pip install -r requirements.txt
+python run.py dubaibusinessdirectory
+python run.py hidubai
+python run.py dayofdubai
+python run.py dubaibizdirectory
+python run.py wiza
+```
+
+统一模式：
+
+```bash
+python run.py <site> all
+python run.py <site> list
+python run.py <site> gmap
+python run.py <site> email
+```
+
+常用参数：
+
+```bash
+python run.py hidubai all --max-pages 5 --list-workers 8 --gmap-workers 64 --email-workers 64
+```
+
+## Delivery
+
+阿联酋按站点交付：
+
+```bash
+python product.py UnitedArabEmirates day1
+```
+
+输出目录：
+
+```text
+UnitedArabEmirates/output/delivery/UnitedArabEmirates_day001/
+```
+
+其中每个站点会产出一份：
+
+- `<site>.csv`
+- `<site>.keys.txt`
+- `summary.json`
+
+## Country Rules
+
+- 同站点按 `company_name` 去重。
+- 跨站点允许重复出现在不同站点交付文件里。
+- 代表人合并顺序固定为 `P1;P3`。
+- `P1` 没代表人时，只保留 `P3`。
+- 邮箱遵循全局默认规则：保留官网真实邮箱，不做域名过滤。
+- `dubaibizdirectory` 的 P1 已改为纯协议链路：`curl_cffi + 本地 cookie jar`。
+- `dubaibizdirectory` 至少需要一次有效 `cf_clearance`；程序会自动续写 `CAKEPHP` 到 `output/dubaibizdirectory/session/cookie_state.json`。
+- `wiza` 的 P1 也是纯协议链路：`curl_cffi + 本地登录态文件`。
+- `wiza` 固定只抓 `HQ Location = United Arab Emirates`，不再用 `EMEA/MENA` 泛筛选。
+- `wiza` 站内联系人只先打 `CXO` 过滤；规则优先选一把手，歧义时才用 LLM 小范围判定。
+- `wiza` 的登录态文件路径是 `output/wiza/session/login_state.json`。

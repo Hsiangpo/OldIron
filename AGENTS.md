@@ -175,6 +175,12 @@
   - `Japan`: per-site day delivery. Write one CSV + one keys file per site under `Japan/output/delivery/Japan_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `Brazil`: per-site day delivery. Write one CSV + one keys file per site under `Brazil/output/delivery/Brazil_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `UnitedStates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedStates/output/delivery/UnitedStates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+  - `UnitedArabEmirates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedArabEmirates/output/delivery/UnitedArabEmirates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+- Country-specific source overrides:
+  - `UnitedArabEmirates`: delivery keeps one CSV + one keys file per site. Same-site dedupe uses `company_name` only.
+  - `UnitedArabEmirates`: cross-site duplicates are allowed to appear in different site delivery files.
+  - `UnitedArabEmirates`: representative output keeps `P1;P3` order. If `P1` is empty, keep only `P3`.
+  - `UnitedArabEmirates`: `P1` representative comes from site-native contact/contact-person fields when present, but output should keep only person names.
 - Japan multi-machine same-day rule:
   - different machines may run the same `Japan dayN` only when the split is by site ownership
   - never let two machines produce the same Japan site package for the same `dayN`
@@ -183,7 +189,6 @@
   - do not copy the other machine's `summary.json` as the final summary
   - regenerate the final `summary.json` on the designated assembler after all site packages are collected
   - before copying Japan delivery assets from another machine, stop the corresponding remote Japan site processes so the copied day package is complete and stable
-- Country-specific source overrides:
   - `England`: representative source is Companies House `officers` pages, using current officers only. Join multiple names with semicolons in page order. Prefer human names; if no human names exist, use current company-entity officers.
   - `England`: website email extraction is rule-based only. Do not use the website LLM path for England representative extraction or England website email extraction.
 - Never package delivery site by site when multiple sites belong to the same country, unless that country is explicitly listed in the country-specific overrides above.
@@ -246,6 +251,7 @@ This repository is a multi-country company data collection workspace. Each count
 - `India/`
 - `Indonesia/`
 - `Japan/`
+- `UnitedArabEmirates/`
 - `Taiwan/`
 - `UnitedStates/`
 - `Malaysia/`
@@ -291,6 +297,13 @@ There is no single root build step. Work inside the target country directory for
 - `cd Taiwan && python -m pip install -r requirements.txt`
 - `cd Taiwan && python run.py ieatpe`
 - `python product.py Taiwan day1`
+- `cd UnitedArabEmirates && python -m pip install -r requirements.txt`
+- `cd UnitedArabEmirates && python run.py dubaibusinessdirectory`
+- `cd UnitedArabEmirates && python run.py hidubai`
+- `cd UnitedArabEmirates && python run.py dayofdubai`
+- `cd UnitedArabEmirates && python run.py dubaibizdirectory`
+- `cd UnitedArabEmirates && python run.py wiza`
+- `python product.py UnitedArabEmirates day1`
 - `cd UnitedStates && python -m pip install -r requirements.txt`
 - `cd UnitedStates && python run.py dnb`
 - `python product.py UnitedStates day1`

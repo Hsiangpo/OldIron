@@ -514,10 +514,13 @@ class FirecrawlEmailServiceLifecycleTests(unittest.TestCase):
             "https://kishubaiko.jp/info@kishubaiko.jp",
             "owner@template.com",
             "example.mail@site.com.br",
+            "john.smith@xyzmail.com",
+            "hello@01gov.com",
+            "athello@01gov.com",
             "ceo.personal@gmail.com",
         ]
         self.assertEqual(
-            ["info@alpha.co.jp", "ceo.personal@gmail.com"],
+            ["info@alpha.co.jp", "hello@01gov.com", "ceo.personal@gmail.com"],
             split_emails(values),
         )
 
