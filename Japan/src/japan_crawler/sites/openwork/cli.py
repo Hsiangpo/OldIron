@@ -39,6 +39,39 @@ def _p1_zero_progress(stats: dict[str, int]) -> bool:
     return int(stats.get("pages_done", 0)) <= 0 and int(stats.get("new_companies", 0)) <= 0
 
 
+def _has_openwork_pending_work(output_dir: Path, name: str) -> bool:
+    """只有数据库里真的没有待处理记录，才允许空轮询结束。"""
+    db_path = output_dir / "openwork_store.db"
+    if not db_path.exists():
+        return False
+    sql_by_name = {
+        "pipeline2_gmap": """
+            SELECT 1
+            FROM companies
+            WHERE (website = '' OR website IS NULL)
+              AND coalesce(gmap_status, 'pending') != 'done'
+            LIMIT 1
+        """,
+        "pipeline3_email": """
+            SELECT 1
+            FROM companies
+            WHERE website != '' AND website IS NOT NULL
+              AND coalesce(email_status, 'pending') != 'done'
+            LIMIT 1
+        """,
+    }
+    sql = sql_by_name.get(name)
+    if not sql:
+        return False
+    try:
+        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+            row = conn.execute(sql).fetchone()
+    except sqlite3.Error as exc:
+        LOGGER.warning("[%s] 检查 pending 失败，按仍有任务处理：%s", name, exc)
+        return True
+    return row is not None
+
+
 def run_openwork(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="OpenWork 日本企业信息采集")
     parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email", "auth"])
@@ -200,9 +233,17 @@ def _openwork_p1_entry(
             detail_workers=detail_workers,
         )
         if _p1_zero_progress(stats):
-            p1_failed.set()
-            stop_event.set()
-            result_queue.put(("pipeline1_list", stats, "P1: P1 启动失败或零进展，停止空轮询。"))
+            has_backlog = (
+                _has_openwork_pending_work(Path(output_dir), "pipeline2_gmap")
+                or _has_openwork_pending_work(Path(output_dir), "pipeline3_email")
+            )
+            if has_backlog:
+                LOGGER.warning("[pipeline1_list] P1 本轮零进展，但库里仍有 backlog，继续让 P2/P3 续跑。")
+                result_queue.put(("pipeline1_list", stats, ""))
+            else:
+                p1_failed.set()
+                stop_event.set()
+                result_queue.put(("pipeline1_list", stats, "P1: P1 启动失败或零进展，且无 backlog。"))
         else:
             result_queue.put(("pipeline1_list", stats, ""))
     except Exception as exc:  # noqa: BLE001
@@ -244,10 +285,14 @@ def _openwork_loop_entry(
                 if p1_failed.is_set():
                     break
                 if p1_done.is_set():
-                    idle_rounds += 1
-                    if idle_rounds >= _MAX_IDLE_ROUNDS:
-                        LOGGER.info("[%s] 连续空轮询 %d 次，结束。", name, idle_rounds)
-                        break
+                    if _has_openwork_pending_work(Path(output_dir), name):
+                        LOGGER.info("[%s] 仍有待处理记录，继续轮询。", name)
+                        idle_rounds = 0
+                    else:
+                        idle_rounds += 1
+                        if idle_rounds >= _MAX_IDLE_ROUNDS:
+                            LOGGER.info("[%s] 连续空轮询 %d 次，结束。", name, idle_rounds)
+                            break
                 if stop_event.wait(_POLL_INTERVAL):
                     break
                 continue

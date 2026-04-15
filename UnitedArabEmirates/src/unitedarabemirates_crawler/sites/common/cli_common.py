@@ -6,6 +6,7 @@ import argparse
 import logging
 import multiprocessing as mp
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -121,9 +122,13 @@ def _run_all_concurrent(
             total_found += int(stats.get("found", 0))
             if int(stats.get("processed", 0)) == 0:
                 if p1_done.is_set():
-                    idle_rounds += 1
-                    if idle_rounds >= MAX_IDLE_ROUNDS:
-                        break
+                    if _has_pending_work(output_dir, kind):
+                        LOGGER.info("%s 仍有待处理记录，继续轮询。", kind)
+                        idle_rounds = 0
+                    else:
+                        idle_rounds += 1
+                        if idle_rounds >= MAX_IDLE_ROUNDS:
+                            break
                 time.sleep(POLL_INTERVAL)
                 continue
             idle_rounds = 0
@@ -304,6 +309,39 @@ def _close_batch_queue(queue: mp.Queue) -> None:
         queue.join_thread()
     except Exception:  # noqa: BLE001
         pass
+
+
+def _has_pending_work(output_dir: Path, kind: str) -> bool:
+    """只有数据库里确实没有 pending，空轮询才允许退出。"""
+    db_path = output_dir / "companies.db"
+    if not db_path.exists():
+        return False
+    sql_by_kind = {
+        "pipeline2_gmap": """
+            SELECT 1
+            FROM companies
+            WHERE (website = '' OR website IS NULL)
+              AND coalesce(gmap_status, 'pending') != 'done'
+            LIMIT 1
+        """,
+        "pipeline3_email": """
+            SELECT 1
+            FROM companies
+            WHERE website != '' AND website IS NOT NULL
+              AND coalesce(email_status, 'pending') != 'done'
+            LIMIT 1
+        """,
+    }
+    sql = sql_by_kind.get(kind)
+    if not sql:
+        return False
+    try:
+        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+            row = conn.execute(sql).fetchone()
+    except sqlite3.Error as exc:
+        LOGGER.warning("%s 检查 pending 失败，按仍有任务处理：%s", kind, exc)
+        return True
+    return row is not None
 
 
 def _print_all_summary(results: dict[str, dict[str, int]], total: int, errors: list[str]) -> None:
