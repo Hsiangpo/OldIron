@@ -28,14 +28,13 @@ mkdir -p output/wiza/session
 ```bash
 python run.py wiza all
 python run.py wiza list
-python run.py wiza gmap
 python run.py wiza email
 ```
 
 常用参数：
 
 ```bash
-python run.py wiza all --max-pages 5 --list-workers 8 --gmap-workers 64 --email-workers 64
+python run.py wiza all --max-pages 5 --list-workers 8 --email-workers 64
 ```
 
 ## Delivery
@@ -62,7 +61,7 @@ Germany/output/delivery/Germany_day001/
 
 - 同站点按 `company_name` 去重。
 - 跨站点允许重复出现在不同站点交付文件里。
-- `wiza` 的 `P1` 不取站内联系人，代表人只在 `P3` 官网里提取。
+- `wiza` 的 `P1` 不取站内联系人，也不跑 GMap，代表人只在 `P3` 官网里提取。
 - 邮箱遵循当前共享规则：只从官网规则提取，不走 LLM。
 - `wiza` 固定只抓 `HQ Location = Germany`。
 - `wiza` 的登录态文件路径是 `output/wiza/session/login_state.json`。

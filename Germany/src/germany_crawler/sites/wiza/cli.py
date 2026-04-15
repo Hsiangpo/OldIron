@@ -20,6 +20,7 @@ def run_site(argv: list[str]) -> int:
             output_dir=SITE_ROOT / "output" / "wiza",
             argv=argv,
             run_list=run_pipeline_list,
+            enable_gmap=False,
         )
     except WizaUsageLimitError as exc:
         print(f"Wiza 暂停：{exc}")

@@ -37,7 +37,7 @@
 | Denmark | `proff`、`virk` | Proff/Virk → GMap → 协议爬虫+LLM → delivery | 站点直出优先，缺邮箱用协议爬虫+LLM 补强 |
 | Brazil | `dnb` | DNB 列表 API → 隐藏详情 API → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
 | England | `companyname` | Excel 名单 → GMap → Companies House officers → 规则邮箱提取 → delivery | 代表人来自 Companies House，邮箱走规则提取 |
-| Germany | `wiza` | Wiza 登录态协议列表 → GMap 补官网（缺失时） → 协议爬虫+LLM → per-site delivery | 官网邮箱走规则，代表人只来自官网 LLM |
+| Germany | `wiza` | Wiza 登录态协议列表 → 官网协议爬虫+LLM → per-site delivery | 官网邮箱走规则，代表人只来自官网 LLM |
 | UnitedStates | `dnb` | DNB API → DNB 详情 → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
 | UnitedArabEmirates | `dubaibusinessdirectory`、`hidubai`、`dayofdubai`、`dubaibizdirectory`、`wiza` | 目录页/接口/协议详情（`dubaibizdirectory` 复用 cf cookie jar，`wiza` 复用登录态） → GMap → 协议爬虫+LLM → per-site delivery | 官网邮箱走规则，官网代表人走 LLM |
 | Taiwan | `ieatpe` | 会员协议接口 → 详情接口 → delivery | 站点直出 |
