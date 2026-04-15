@@ -174,9 +174,13 @@
 - Country-specific delivery overrides:
   - `Japan`: per-site day delivery. Write one CSV + one keys file per site under `Japan/output/delivery/Japan_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `Brazil`: per-site day delivery. Write one CSV + one keys file per site under `Brazil/output/delivery/Brazil_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+  - `Germany`: per-site day delivery. Write one CSV + one keys file per site under `Germany/output/delivery/Germany_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `UnitedStates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedStates/output/delivery/UnitedStates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `UnitedArabEmirates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedArabEmirates/output/delivery/UnitedArabEmirates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
 - Country-specific source overrides:
+  - `Germany`: delivery keeps one CSV + one keys file per site. Same-site dedupe uses `company_name` only.
+  - `Germany`: cross-site duplicates are allowed to appear in different site delivery files.
+  - `Germany`: `wiza` 的 `P1` 不抓站内联系人，代表人只来自 `P3` 官网 LLM。
   - `UnitedArabEmirates`: delivery keeps one CSV + one keys file per site. Same-site dedupe uses `company_name` only.
   - `UnitedArabEmirates`: cross-site duplicates are allowed to appear in different site delivery files.
   - `UnitedArabEmirates`: representative output keeps `P1;P3` order. If `P1` is empty, keep only `P3`.
@@ -249,6 +253,7 @@ This repository is a multi-country company data collection workspace. Each count
 - `Denmark/`
 - `Brazil/`
 - `England/`
+- `Germany/`
 - `India/`
 - `Indonesia/`
 - `Japan/`
@@ -278,6 +283,9 @@ There is no single root build step. Work inside the target country directory for
 - `cd England && python -m pip install -r requirements.txt`
 - `cd England && python run.py companyname`
 - `python product.py England day1`
+- `cd Germany && python -m pip install -r requirements.txt`
+- `cd Germany && python run.py wiza`
+- `python product.py Germany day1`
 - `cd Brazil && python -m pip install -r requirements.txt`
 - `cd Brazil && python run.py dnb`
 - `python product.py Brazil day1`

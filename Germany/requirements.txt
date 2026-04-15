@@ -1,0 +1,6 @@
+python-dotenv
+curl_cffi
+beautifulsoup4
+openai
+markdownify
+urllib3
