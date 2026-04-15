@@ -12,6 +12,17 @@ python -m pip install -r requirements.txt
 python run.py wiza
 ```
 
+首次启动前，还需要准备两样本地运行态：
+
+```bash
+cp .env.example .env
+mkdir -p output/wiza/session
+```
+
+- `.env` 里至少要填可用的 `LLM_API_KEY`
+- `output/wiza/session/login_state.json` 里要放可用的 Wiza 登录态
+- 没有这两个运行态时，`list` 可能还能跑一部分，但 `email/all` 会在官网补充阶段直接失败
+
 统一模式：
 
 ```bash
@@ -55,3 +66,4 @@ Germany/output/delivery/Germany_day001/
 - 邮箱遵循当前共享规则：只从官网规则提取，不走 LLM。
 - `wiza` 固定只抓 `HQ Location = Germany`。
 - `wiza` 的登录态文件路径是 `output/wiza/session/login_state.json`。
+- `wiza` 的 `P3` 依赖 `.env` 里的 LLM 配置；如果 key 失效，会在官网补充日志里直接报 `401/无效的令牌`。
