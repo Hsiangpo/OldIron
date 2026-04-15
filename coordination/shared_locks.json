@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-15T00:55:08Z",
+  "updated_at": "2026-04-15T01:14:39Z",
   "locks": [
     {
       "lock_id": "lock-fix-fc-email-init-20260409-1",
@@ -14,45 +14,6 @@
       "heartbeat_at": "2026-04-09T13:02:29Z",
       "expires_at": "2026-04-09T13:22:29Z",
       "notes": "Avoid eager fc_email imports so delivery can run when asyncio/_overlapped is broken on Windows"
-    },
-    {
-      "lock_id": "lock-coord-2026-04-14-germany-wiza-shared-1",
-      "status": "locked",
-      "path": "AGENTS.md",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
-      "task_id": "coord-2026-04-14-germany-wiza-shared",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-15T00:55:08Z",
-      "heartbeat_at": "2026-04-15T00:55:08Z",
-      "expires_at": "2026-04-15T02:55:08Z",
-      "notes": "Register Germany Wiza country and delivery rules"
-    },
-    {
-      "lock_id": "lock-coord-2026-04-14-germany-wiza-shared-2",
-      "status": "locked",
-      "path": "README.md",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
-      "task_id": "coord-2026-04-14-germany-wiza-shared",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-15T00:55:08Z",
-      "heartbeat_at": "2026-04-15T00:55:08Z",
-      "expires_at": "2026-04-15T02:55:08Z",
-      "notes": "Register Germany Wiza country and delivery rules"
-    },
-    {
-      "lock_id": "lock-coord-2026-04-14-germany-wiza-shared-3",
-      "status": "locked",
-      "path": "product.py",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
-      "task_id": "coord-2026-04-14-germany-wiza-shared",
-      "github_ref": "not-created",
-      "locked_at": "2026-04-15T00:55:08Z",
-      "heartbeat_at": "2026-04-15T00:55:08Z",
-      "expires_at": "2026-04-15T02:55:08Z",
-      "notes": "Register Germany Wiza country and delivery rules"
     }
   ]
 }

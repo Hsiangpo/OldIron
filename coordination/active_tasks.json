@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-15T00:55:08Z",
+  "updated_at": "2026-04-15T01:14:39Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -23,54 +23,6 @@
       "started_at": "2026-04-09T11:52:51Z",
       "last_heartbeat_at": "2026-04-09T13:02:29Z",
       "notes": "Avoid eager fc_email imports so delivery can run when asyncio/_overlapped is broken on Windows"
-    },
-    {
-      "task_id": "coord-2026-04-14-germany-wiza-local",
-      "status": "in_progress",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "Germany"
-      ],
-      "planned_files": [
-        "Germany/run.py"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-04-15T00:55:08Z",
-      "last_heartbeat_at": "2026-04-15T00:55:08Z",
-      "notes": "Implement Germany Wiza country-local crawler"
-    },
-    {
-      "task_id": "coord-2026-04-14-germany-wiza-shared",
-      "status": "in_progress",
-      "machine": "Machine 2",
-      "agent": "codex-mac",
-      "change_class": "shared_zone",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "AGENTS.md",
-        "README.md",
-        "product.py"
-      ],
-      "planned_files": [
-        "AGENTS.md",
-        "README.md",
-        "product.py"
-      ],
-      "shared_lock_ids": [
-        "lock-coord-2026-04-14-germany-wiza-shared-1",
-        "lock-coord-2026-04-14-germany-wiza-shared-2",
-        "lock-coord-2026-04-14-germany-wiza-shared-3"
-      ],
-      "github_ref": "not-created",
-      "started_at": "2026-04-15T00:55:08Z",
-      "last_heartbeat_at": "2026-04-15T00:55:08Z",
-      "notes": "Register Germany Wiza country and delivery rules"
     }
   ]
 }
