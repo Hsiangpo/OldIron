@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-16T00:38:06Z",
+  "updated_at": "2026-04-16T00:48:20Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -71,6 +71,32 @@
       "started_at": "2026-04-16T00:38:06Z",
       "last_heartbeat_at": "2026-04-16T00:38:06Z",
       "notes": "Adjust UAE delivery for Wiza Snov people_json output"
+    },
+    {
+      "task_id": "uae-wiza-snov-docs-20260416",
+      "status": "in_progress",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "uae-wiza-snov-docs"
+      ],
+      "planned_files": [
+        "AGENTS.md",
+        "README.md",
+        "UnitedArabEmirates/README.md",
+        "UnitedArabEmirates/.env.example"
+      ],
+      "shared_lock_ids": [
+        "lock-uae-wiza-snov-docs-20260416-1",
+        "lock-uae-wiza-snov-docs-20260416-2"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-16T00:48:20Z",
+      "last_heartbeat_at": "2026-04-16T00:48:20Z",
+      "notes": "Document UAE Wiza Snov route and env requirements"
     }
   ]
 }
