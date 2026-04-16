@@ -455,7 +455,7 @@ class UaeBasicTestCase(unittest.TestCase):
                     }
                 ]
             )
-            self.assertTrue(cli_common._has_pending_work(output_dir, "pipeline3_email", site_name="wiza"))
+            self.assertTrue(cli_common._has_pending_work(output_dir, "pipeline3_email", site_name="wizasnov"))
             self.assertFalse(cli_common._has_pending_work(output_dir, "pipeline3_email", site_name="hidubai"))
 
     def test_run_batch_with_timeout_propagates_snov_permission_error(self) -> None:

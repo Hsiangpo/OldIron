@@ -115,7 +115,7 @@ def _load_site_records(db_path: Path, *, site_name: str) -> list[dict[str, str]]
 
 
 def _is_delivery_qualified(record: dict[str, str], *, site_name: str) -> bool:
-    if site_name == "wiza":
+    if site_name == "wizasnov":
         return bool(
             str(record.get("company_name", "")).strip()
             and str(record.get("emails", "")).strip()
@@ -143,7 +143,7 @@ def _record_key(record: dict[str, str]) -> str:
 
 
 def _write_site_csv(csv_path: Path, records: list[dict[str, str]], *, site_name: str) -> None:
-    if site_name == "wiza":
+    if site_name == "wizasnov":
         fieldnames = ["company_name", "website", "people_json", "emails", "phone"]
     else:
         fieldnames = ["company_name", "representative", "emails", "website", "phone", "evidence_url"]
@@ -154,7 +154,7 @@ def _write_site_csv(csv_path: Path, records: list[dict[str, str]], *, site_name:
 
 
 def _is_pipeline_completed(record: dict[str, str], *, site_name: str) -> bool:
-    if site_name == "wiza":
+    if site_name == "wizasnov":
         return str(record.get("email_status", "")).strip().lower() == "done"
     return (
         str(record.get("gmap_status", "")).strip().lower() == "done"

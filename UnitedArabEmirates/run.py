@@ -27,6 +27,7 @@ USAGE_TEXT = """用法：
   dayofdubai              — Day Of Dubai
   dubaibizdirectory       — DubaiBizDirectory
   wiza                    — Wiza
+  wizasnov                — Wiza Snov
 """
 
 BASE_REQUIRED_MODULES = (
@@ -102,6 +103,10 @@ def _dispatch(argv: list[str]) -> int:
         return run_site(argv[1:])
     if site == "wiza":
         from unitedarabemirates_crawler.sites.wiza.cli import run_site
+
+        return run_site(argv[1:])
+    if site == "wizasnov":
+        from unitedarabemirates_crawler.sites.wizasnov.cli import run_site
 
         return run_site(argv[1:])
     print(f"不支持的网站: {argv[0]}")

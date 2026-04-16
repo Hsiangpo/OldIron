@@ -29,7 +29,7 @@ from oldiron_core.snov.client import _encode_form_data
 from oldiron_core.snov.service import _build_candidates
 from unitedarabemirates_crawler.delivery import build_delivery_bundle
 from unitedarabemirates_crawler.sites.common.store import UaeCompanyStore
-from unitedarabemirates_crawler.sites.wiza.snov_pipeline import run_pipeline_snov
+from unitedarabemirates_crawler.sites.wizasnov.snov_pipeline import run_pipeline_snov
 
 
 class _FakeLlm:
@@ -250,13 +250,13 @@ class WizaSnovTests(unittest.TestCase):
                 ]
             )
             with patch(
-                "unitedarabemirates_crawler.sites.wiza.snov_pipeline.SnovServiceSettings.from_env",
+                "unitedarabemirates_crawler.sites.wizasnov.snov_pipeline.SnovServiceSettings.from_env",
                 return_value=settings,
             ), patch(
-                "unitedarabemirates_crawler.sites.wiza.snov_pipeline.SnovClient",
+                "unitedarabemirates_crawler.sites.wizasnov.snov_pipeline.SnovClient",
                 _PipelineFakeClient,
             ), patch(
-                "unitedarabemirates_crawler.sites.wiza.snov_pipeline.SnovService",
+                "unitedarabemirates_crawler.sites.wizasnov.snov_pipeline.SnovService",
                 _PipelineFakeService,
             ):
                 stats = run_pipeline_snov(output_dir=output_dir, max_items=1, concurrency=1)
@@ -348,13 +348,13 @@ class WizaSnovTests(unittest.TestCase):
                 ]
             )
             with patch(
-                "unitedarabemirates_crawler.sites.wiza.snov_pipeline.SnovServiceSettings.from_env",
+                "unitedarabemirates_crawler.sites.wizasnov.snov_pipeline.SnovServiceSettings.from_env",
                 return_value=settings,
             ), patch(
-                "unitedarabemirates_crawler.sites.wiza.snov_pipeline.SnovClient",
+                "unitedarabemirates_crawler.sites.wizasnov.snov_pipeline.SnovClient",
                 _PipelineFakeClient,
             ), patch(
-                "unitedarabemirates_crawler.sites.wiza.snov_pipeline.SnovService",
+                "unitedarabemirates_crawler.sites.wizasnov.snov_pipeline.SnovService",
                 _PipelineNoHitService,
             ):
                 stats = run_pipeline_snov(output_dir=output_dir, max_items=1, concurrency=1)
@@ -375,7 +375,7 @@ class WizaSnovTests(unittest.TestCase):
             root = Path(tmp_dir)
             data_root = root / "data"
             delivery_root = root / "delivery"
-            site_dir = data_root / "wiza"
+            site_dir = data_root / "wizasnov"
             site_dir.mkdir(parents=True, exist_ok=True)
             store = UaeCompanyStore(site_dir / "companies.db")
             store.upsert_companies(
@@ -407,7 +407,7 @@ class WizaSnovTests(unittest.TestCase):
             finally:
                 conn.close()
             summary = build_delivery_bundle(data_root, delivery_root, "day1")
-            csv_path = delivery_root / "UnitedArabEmirates_day001" / "wiza.csv"
+            csv_path = delivery_root / "UnitedArabEmirates_day001" / "wizasnov.csv"
             with csv_path.open("r", encoding="utf-8-sig", newline="") as fp:
                 rows = list(csv.reader(fp))
         self.assertEqual(summary["delta_companies"], 1)
@@ -423,7 +423,7 @@ class WizaSnovTests(unittest.TestCase):
             root = Path(tmp_dir)
             data_root = root / "data"
             delivery_root = root / "delivery"
-            site_dir = data_root / "wiza"
+            site_dir = data_root / "wizasnov"
             site_dir.mkdir(parents=True, exist_ok=True)
             store = UaeCompanyStore(site_dir / "companies.db")
             store.upsert_companies(
@@ -446,7 +446,7 @@ class WizaSnovTests(unittest.TestCase):
                 mark_done=True,
             )
             summary = build_delivery_bundle(data_root, delivery_root, "day1")
-            csv_path = delivery_root / "UnitedArabEmirates_day001" / "wiza.csv"
+            csv_path = delivery_root / "UnitedArabEmirates_day001" / "wizasnov.csv"
         self.assertEqual(summary["delta_companies"], 0)
         self.assertFalse(csv_path.exists())
 

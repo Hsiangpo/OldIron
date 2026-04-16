@@ -388,7 +388,7 @@ def _has_pending_work(output_dir: Path, kind: str, *, site_name: str = "") -> bo
 
 
 def _email_pending_sql(site_name: str) -> str:
-    if site_name == "wiza":
+    if site_name == "wizasnov":
         return """
             SELECT 1
             FROM companies
@@ -405,7 +405,7 @@ def _email_pending_sql(site_name: str) -> str:
 
 
 def _fatal_error_types(site_name: str, kind: str) -> tuple[str, ...]:
-    if site_name == "wiza" and kind == "pipeline3_email":
+    if site_name == "wizasnov" and kind == "pipeline3_email":
         return ("SnovAuthError", "SnovQuotaError", "SnovPermissionError")
     return ()
 
