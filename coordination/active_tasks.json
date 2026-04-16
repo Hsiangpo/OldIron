@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-16T00:53:47Z",
+  "updated_at": "2026-04-16T05:37:00Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -23,6 +23,41 @@
       "started_at": "2026-04-09T11:52:51Z",
       "last_heartbeat_at": "2026-04-09T13:02:29Z",
       "notes": "Avoid eager fc_email imports so delivery can run when asyncio/_overlapped is broken on Windows"
+    },
+    {
+      "task_id": "uae-wiza-snov-fix-20260415",
+      "status": "in_progress",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "UnitedArabEmirates/wiza",
+        "shared/oldiron_core/snov"
+      ],
+      "planned_files": [
+        "shared/oldiron_core/snov/client.py",
+        "shared/oldiron_core/snov/service.py",
+        "UnitedArabEmirates/src/unitedarabemirates_crawler/sites/common/store.py",
+        "UnitedArabEmirates/src/unitedarabemirates_crawler/sites/common/cli_common.py",
+        "UnitedArabEmirates/src/unitedarabemirates_crawler/sites/wiza/snov_pipeline.py",
+        "UnitedArabEmirates/src/unitedarabemirates_crawler/delivery.py",
+        "UnitedArabEmirates/tests/test_wiza_snov.py",
+        "UnitedArabEmirates/tests/test_uae_basic.py",
+        "AGENTS.md",
+        "UnitedArabEmirates/README.md"
+      ],
+      "shared_lock_ids": [
+        "lock-uae-wiza-snov-fix-20260415-1",
+        "lock-uae-wiza-snov-fix-20260415-2",
+        "lock-uae-wiza-snov-fix-20260415-3",
+        "lock-uae-wiza-snov-fix-20260415-4"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-16T05:37:00Z",
+      "last_heartbeat_at": "2026-04-16T05:37:00Z",
+      "notes": "Fix UAE wiza Snov queueing, delivery gate, hard-failure propagation, and shared Snov fallback/retry behavior"
     }
   ]
 }

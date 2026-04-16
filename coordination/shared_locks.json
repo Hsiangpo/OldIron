@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-16T00:53:47Z",
+  "updated_at": "2026-04-16T05:37:00Z",
   "locks": [
     {
       "lock_id": "lock-fix-fc-email-init-20260409-1",
@@ -14,6 +14,58 @@
       "heartbeat_at": "2026-04-09T13:02:29Z",
       "expires_at": "2026-04-09T13:22:29Z",
       "notes": "Avoid eager fc_email imports so delivery can run when asyncio/_overlapped is broken on Windows"
+    },
+    {
+      "lock_id": "lock-uae-wiza-snov-fix-20260415-1",
+      "status": "locked",
+      "path": "shared/oldiron_core/snov",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "uae-wiza-snov-fix-20260415",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-16T05:37:00Z",
+      "heartbeat_at": "2026-04-16T05:37:00Z",
+      "expires_at": "2026-04-16T07:07:00Z",
+      "notes": "Fix UAE wiza Snov queueing, delivery gate, hard-failure propagation, and shared Snov fallback/retry behavior"
+    },
+    {
+      "lock_id": "lock-uae-wiza-snov-fix-20260415-2",
+      "status": "locked",
+      "path": "UnitedArabEmirates/src/unitedarabemirates_crawler/delivery.py",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "uae-wiza-snov-fix-20260415",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-16T05:37:00Z",
+      "heartbeat_at": "2026-04-16T05:37:00Z",
+      "expires_at": "2026-04-16T07:07:00Z",
+      "notes": "Fix UAE wiza Snov queueing, delivery gate, hard-failure propagation, and shared Snov fallback/retry behavior"
+    },
+    {
+      "lock_id": "lock-uae-wiza-snov-fix-20260415-3",
+      "status": "locked",
+      "path": "AGENTS.md",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "uae-wiza-snov-fix-20260415",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-16T05:37:00Z",
+      "heartbeat_at": "2026-04-16T05:37:00Z",
+      "expires_at": "2026-04-16T07:07:00Z",
+      "notes": "Fix UAE wiza Snov queueing, delivery gate, hard-failure propagation, and shared Snov fallback/retry behavior"
+    },
+    {
+      "lock_id": "lock-uae-wiza-snov-fix-20260415-4",
+      "status": "locked",
+      "path": "UnitedArabEmirates/README.md",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "uae-wiza-snov-fix-20260415",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-16T05:37:00Z",
+      "heartbeat_at": "2026-04-16T05:37:00Z",
+      "expires_at": "2026-04-16T07:07:00Z",
+      "notes": "Fix UAE wiza Snov queueing, delivery gate, hard-failure propagation, and shared Snov fallback/retry behavior"
     }
   ]
 }
