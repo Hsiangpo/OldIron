@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-16T00:25:33Z",
+  "updated_at": "2026-04-16T00:38:06Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -49,6 +49,28 @@
       "started_at": "2026-04-16T00:25:33Z",
       "last_heartbeat_at": "2026-04-16T00:25:33Z",
       "notes": "Add shared Snov pipeline for UAE Wiza domain emails plus selected contacts"
+    },
+    {
+      "task_id": "uae-wiza-snov-delivery-20260416",
+      "status": "in_progress",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "uae-wiza-snov-delivery"
+      ],
+      "planned_files": [
+        "UnitedArabEmirates/src/unitedarabemirates_crawler/delivery.py"
+      ],
+      "shared_lock_ids": [
+        "lock-uae-wiza-snov-delivery-20260416-1"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-16T00:38:06Z",
+      "last_heartbeat_at": "2026-04-16T00:38:06Z",
+      "notes": "Adjust UAE delivery for Wiza Snov people_json output"
     }
   ]
 }
