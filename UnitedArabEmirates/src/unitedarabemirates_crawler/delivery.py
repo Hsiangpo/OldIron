@@ -38,9 +38,9 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
             db_path = site_dir / "companies.db"
             if not db_path.exists():
                 continue
-            records = _load_site_records(db_path)
+            records = _load_site_records(db_path, site_name=site_dir.name)
             raw_count = len(records)
-            qualified = [record for record in records if _is_delivery_qualified(record)]
+            qualified = [record for record in records if _is_delivery_qualified(record, site_name=site_dir.name)]
             baseline_keys = _load_site_baseline_keys(Path(delivery_root), site_dir.name, baseline_day)
             delta_records = [record for record in qualified if _record_key(record) not in baseline_keys]
             current_keys = sorted(baseline_keys | {_record_key(record) for record in qualified})
@@ -51,7 +51,7 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
             total_current_companies += len(qualified)
             total_delta_companies += len(delta_records)
             if delta_records:
-                _write_site_csv(delivery_dir / f"{site_dir.name}.csv", delta_records)
+                _write_site_csv(delivery_dir / f"{site_dir.name}.csv", delta_records, site_name=site_dir.name)
                 (delivery_dir / f"{site_dir.name}.keys.txt").write_text("\n".join(current_keys), encoding="utf-8")
             else:
                 skipped_sites_no_delta.append(site_dir.name)
@@ -72,7 +72,7 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
     return summary
 
 
-def _load_site_records(db_path: Path) -> list[dict[str, str]]:
+def _load_site_records(db_path: Path, *, site_name: str) -> list[dict[str, str]]:
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     try:
@@ -80,6 +80,7 @@ def _load_site_records(db_path: Path) -> list[dict[str, str]]:
             """
             SELECT company_name,
                    representative_final AS representative,
+                   people_json,
                    emails,
                    website,
                    phone,
@@ -100,6 +101,7 @@ def _load_site_records(db_path: Path) -> list[dict[str, str]]:
             {
                 "company_name": str(row["company_name"] or "").strip(),
                 "representative": str(row["representative"] or "").strip(),
+                "people_json": str(row["people_json"] or "").strip(),
                 "emails": "; ".join(split_emails(str(row["emails"] or "").strip())),
                 "website": str(row["website"] or "").strip(),
                 "phone": str(row["phone"] or "").strip(),
@@ -112,7 +114,15 @@ def _load_site_records(db_path: Path) -> list[dict[str, str]]:
     return records
 
 
-def _is_delivery_qualified(record: dict[str, str]) -> bool:
+def _is_delivery_qualified(record: dict[str, str], *, site_name: str) -> bool:
+    if site_name == "wiza":
+        return bool(
+            str(record.get("company_name", "")).strip()
+            and str(record.get("website", "")).strip()
+            and str(record.get("emails", "")).strip()
+            and str(record.get("people_json", "")).strip()
+            and _is_pipeline_completed(record)
+        )
     return bool(
         str(record.get("company_name", "")).strip()
         and str(record.get("website", "")).strip()
@@ -133,8 +143,11 @@ def _record_key(record: dict[str, str]) -> str:
     return "".join(ch.lower() for ch in str(record.get("company_name", "")).strip() if ch.isalnum())
 
 
-def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
-    fieldnames = ["company_name", "representative", "emails", "website", "phone", "evidence_url"]
+def _write_site_csv(csv_path: Path, records: list[dict[str, str]], *, site_name: str) -> None:
+    if site_name == "wiza":
+        fieldnames = ["company_name", "website", "people_json", "emails", "phone"]
+    else:
+        fieldnames = ["company_name", "representative", "emails", "website", "phone", "evidence_url"]
     with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()

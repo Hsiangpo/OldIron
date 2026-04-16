@@ -187,6 +187,11 @@
   - `UnitedArabEmirates`: representative output keeps `P1;P3` order. If `P1` is empty, keep only `P3`.
   - `UnitedArabEmirates`: `P1` representative comes from site-native contact/contact-person fields when present, but output should keep only person names.
   - `UnitedArabEmirates`: delivery gate is country-specific. A record is deliverable when `company_name` and `website` are present and the post-list pipelines have finished for that record (`gmap_status='done'` and `email_status='done'`). Representative and emails may be empty for delivery.
+  - `UnitedArabEmirates`: `wiza` does not run GMap.
+  - `UnitedArabEmirates`: `wiza` `P1` only collects `company_name + website + phone` from Wiza protocol list pages; it does not enter Wiza contacts pages.
+  - `UnitedArabEmirates`: `wiza` `P3` uses shared `Snov` only, not website protocol crawling. It fetches domain emails, prospects, then uses LLM to pick top 4 leaders plus finance and accounting contacts.
+  - `UnitedArabEmirates`: `wiza` delivery output columns are `company_name, website, people_json, emails, phone`.
+  - `UnitedArabEmirates`: `wiza` delivery gate requires `company_name + people_json + emails`; `phone` may be empty.
 - Japan multi-machine same-day rule:
   - different machines may run the same `Japan dayN` only when the split is by site ownership
   - never let two machines produce the same Japan site package for the same `dayN`

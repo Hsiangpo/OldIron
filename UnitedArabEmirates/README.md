@@ -29,6 +29,14 @@ python run.py <site> gmap
 python run.py <site> email
 ```
 
+`wiza` 当前只支持：
+
+```bash
+python run.py wiza all
+python run.py wiza list
+python run.py wiza email
+```
+
 常用参数：
 
 ```bash
@@ -67,5 +75,9 @@ UnitedArabEmirates/output/delivery/UnitedArabEmirates_day001/
 - `dubaibizdirectory` 至少需要一次有效 `cf_clearance`；程序会自动续写 `CAKEPHP` 到 `output/dubaibizdirectory/session/cookie_state.json`。
 - `wiza` 的 P1 也是纯协议链路：`curl_cffi + 本地登录态文件`。
 - `wiza` 固定只抓 `HQ Location = United Arab Emirates`，不再用 `EMEA/MENA` 泛筛选。
-- `wiza` 站内联系人只先打 `CXO` 过滤；规则优先选一把手，歧义时才用 LLM 小范围判定。
+- `wiza` 不跑 GMap，P3 改为 `Snov` 专线。
+- `wiza` 的 P3 先拉域名邮箱（`domain-emails + generic-contacts`），再拉该域名下的全部人员与职位。
+- `wiza` 只保留 LLM 从 Snov 人员列表里挑出的关键联系人：最大的 4 个角色 + 财务 + 会计；姓名保留原文，职位翻成中文，邮箱单独挂在 `people_json`。
+- `wiza` 的交付 CSV 列固定为：`company_name, website, people_json, emails, phone`。
 - `wiza` 的登录态文件路径是 `output/wiza/session/login_state.json`。
+- `wiza` 的 Snov 凭据从 `UnitedArabEmirates/.env` 读取：`SNOV_CLIENT_ID / SNOV_CLIENT_SECRET`。

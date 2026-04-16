@@ -37,17 +37,25 @@ def run_site_cli(
     output_dir: Path,
     argv: list[str],
     run_list: Callable[..., dict[str, int]],
+    run_email: Callable[..., dict[str, int]] = run_pipeline_email,
+    enable_gmap: bool = True,
 ) -> int:
     """统一站点入口。"""
     _ensure_stdio_utf8()
+    mode_choices = ["all", "list", "email"]
+    if enable_gmap:
+        mode_choices.insert(2, "gmap")
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("mode", nargs="?", default="all", choices=["all", "list", "gmap", "email"])
+    parser.add_argument("mode", nargs="?", default="all", choices=mode_choices)
     parser.add_argument("--delay", type=float, default=1.5)
     parser.add_argument("--proxy", type=str, default="")
     parser.add_argument("--max-pages", type=int, default=0)
     parser.add_argument("--list-workers", type=int, default=8)
     parser.add_argument("--max-items", type=int, default=0)
-    parser.add_argument("--gmap-workers", type=int, default=64)
+    if enable_gmap:
+        parser.add_argument("--gmap-workers", type=int, default=64)
+    else:
+        parser.set_defaults(gmap_workers=0)
     parser.add_argument("--email-workers", type=int, default=64)
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args(argv)
@@ -59,7 +67,15 @@ def run_site_cli(
     output_dir.mkdir(parents=True, exist_ok=True)
     proxy = args.proxy or os.getenv("HTTP_PROXY", "http://127.0.0.1:7897")
     if args.mode == "all":
-        return _run_all_concurrent(site_name, output_dir, proxy, args, run_list)
+        return _run_all_concurrent(
+            site_name,
+            output_dir,
+            proxy,
+            args,
+            run_list,
+            run_email=run_email,
+            enable_gmap=enable_gmap,
+        )
     results: dict[str, dict[str, int]] = {}
     if args.mode == "list":
         results["pipeline1_list"] = run_list(
@@ -76,7 +92,7 @@ def run_site_cli(
             concurrency=args.gmap_workers,
         )
     if args.mode == "email":
-        results["pipeline3_email"] = run_pipeline_email(
+        results["pipeline3_email"] = run_email(
             output_dir=output_dir,
             max_items=args.max_items,
             concurrency=args.email_workers,
@@ -91,6 +107,9 @@ def _run_all_concurrent(
     proxy: str,
     args,
     run_list: Callable[..., dict[str, int]],
+    *,
+    run_email: Callable[..., dict[str, int]],
+    enable_gmap: bool,
 ) -> int:
     p1_done = threading.Event()
     results: dict[str, dict[str, int]] = {}
@@ -134,21 +153,24 @@ def _run_all_concurrent(
             idle_rounds = 0
         results[kind] = {"processed": total_processed, "found": total_found}
 
-    threads = [
-        threading.Thread(target=_p1_worker, name=f"{site_name}-p1", daemon=True),
+    threads = [threading.Thread(target=_p1_worker, name=f"{site_name}-p1", daemon=True)]
+    if enable_gmap:
+        threads.append(
+            threading.Thread(
+                target=_loop_worker,
+                args=("pipeline2_gmap", run_pipeline_gmap, args.gmap_workers),
+                name=f"{site_name}-p2",
+                daemon=True,
+            )
+        )
+    threads.append(
         threading.Thread(
             target=_loop_worker,
-            args=("pipeline2_gmap", run_pipeline_gmap, args.gmap_workers),
-            name=f"{site_name}-p2",
-            daemon=True,
-        ),
-        threading.Thread(
-            target=_loop_worker,
-            args=("pipeline3_email", run_pipeline_email, args.email_workers),
+            args=("pipeline3_email", run_email, args.email_workers),
             name=f"{site_name}-p3",
             daemon=True,
-        ),
-    ]
+        )
+    )
     for thread in threads:
         thread.start()
     for thread in threads:

@@ -39,7 +39,7 @@
 | England | `companyname` | Excel 名单 → GMap → Companies House officers → 规则邮箱提取 → delivery | 代表人来自 Companies House，邮箱走规则提取 |
 | Germany | `wiza` | Wiza 登录态协议列表 → 官网协议爬虫+LLM → per-site delivery | 官网邮箱走规则，代表人只来自官网 LLM |
 | UnitedStates | `dnb` | DNB API → DNB 详情 → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
-| UnitedArabEmirates | `dubaibusinessdirectory`、`hidubai`、`dayofdubai`、`dubaibizdirectory`、`wiza` | 目录页/接口/协议详情（`dubaibizdirectory` 复用 cf cookie jar，`wiza` 复用登录态） → GMap → 协议爬虫+LLM → per-site delivery | 官网邮箱走规则，官网代表人走 LLM |
+| UnitedArabEmirates | `dubaibusinessdirectory`、`hidubai`、`dayofdubai`、`dubaibizdirectory`、`wiza` | UAE 目录站点仍走目录页/接口/协议详情 → GMap → 协议爬虫+LLM；`wiza` 复用登录态抓列表后，直接走 Snov 域名邮箱 + Snov 人员列表 + LLM 选关键联系人 → per-site delivery | `wiza` 不走官网规则邮箱/官网代表人链路 |
 | Taiwan | `ieatpe` | 会员协议接口 → 详情接口 → delivery | 站点直出 |
 | SouthKorea | `catch`、`incheon`、`dart` 等 | 列表/详情 → 官网 → 邮箱 → 交付 | Snov 为主 |
 | Japan | `bizmaps`、`hellowork`、`xlsximport` | 站点列表/导入 → 官网/邮箱补齐 → delivery | 协议爬虫+LLM + 站点字段 |

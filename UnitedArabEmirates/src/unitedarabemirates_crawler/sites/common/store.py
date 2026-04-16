@@ -93,6 +93,7 @@ class UaeCompanyStore:
                         representative_p1 TEXT DEFAULT '',
                         representative_p3 TEXT DEFAULT '',
                         representative_final TEXT DEFAULT '',
+                        people_json TEXT DEFAULT '',
                         website TEXT DEFAULT '',
                         address TEXT DEFAULT '',
                         phone TEXT DEFAULT '',
@@ -114,6 +115,7 @@ class UaeCompanyStore:
                 )
                 self._ensure_column(conn, "companies", "source_pdl_id", "TEXT DEFAULT ''")
                 self._ensure_column(conn, "companies", "p1_status", "TEXT DEFAULT 'pending'")
+                self._ensure_column(conn, "companies", "people_json", "TEXT DEFAULT ''")
                 conn.commit()
             finally:
                 conn.close()
@@ -138,9 +140,10 @@ class UaeCompanyStore:
                     """
                     INSERT INTO companies (
                         record_id, company_name, source_pdl_id, p1_status, representative_p1, representative_final,
+                        people_json,
                         website, address, phone, emails, detail_url, summary,
                         evidence_url, gmap_status, email_status, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(record_id) DO UPDATE SET
                         company_name = excluded.company_name,
                         source_pdl_id = CASE
@@ -160,6 +163,10 @@ class UaeCompanyStore:
                         representative_final = CASE
                             WHEN excluded.representative_final != '' THEN excluded.representative_final
                             ELSE companies.representative_final
+                        END,
+                        people_json = CASE
+                            WHEN excluded.people_json != '' THEN excluded.people_json
+                            ELSE companies.people_json
                         END,
                         website = CASE WHEN excluded.website != '' THEN excluded.website ELSE companies.website END,
                         address = CASE WHEN excluded.address != '' THEN excluded.address ELSE companies.address END,
@@ -192,6 +199,7 @@ class UaeCompanyStore:
                         str(company.get("p1_status", "pending")).strip() or "pending",
                         str(company.get("representative_p1", "")).strip(),
                         str(company.get("representative_final", "")).strip(),
+                        str(company.get("people_json", "")).strip(),
                         str(company.get("website", "")).strip(),
                         str(company.get("address", "")).strip(),
                         str(company.get("phone", "")).strip(),
@@ -347,6 +355,9 @@ class UaeCompanyStore:
         representative_p3: str,
         representative_final: str,
         evidence_url: str,
+        *,
+        people_json: str = "",
+        website: str = "",
     ) -> None:
         def _action(conn: sqlite3.Connection) -> None:
             current = conn.execute(
@@ -363,6 +374,8 @@ class UaeCompanyStore:
                 SET emails = ?,
                     representative_p3 = ?,
                     representative_final = ?,
+                    people_json = CASE WHEN ? != '' THEN ? ELSE people_json END,
+                    website = CASE WHEN ? != '' THEN ? ELSE website END,
                     evidence_url = CASE WHEN ? != '' THEN ? ELSE evidence_url END,
                     email_status = 'done',
                     updated_at = ?
@@ -372,6 +385,10 @@ class UaeCompanyStore:
                     merged_emails,
                     representative_p3,
                     representative_final,
+                    people_json,
+                    people_json,
+                    website,
+                    website,
                     evidence_url,
                     evidence_url,
                     _now_text(),
@@ -385,7 +402,7 @@ class UaeCompanyStore:
         conn = self._conn()
         rows = conn.execute(
             """
-            SELECT company_name, representative_final AS representative, emails,
+            SELECT company_name, representative_final AS representative, people_json, emails,
                    website, phone, evidence_url
             FROM companies
             ORDER BY company_name
