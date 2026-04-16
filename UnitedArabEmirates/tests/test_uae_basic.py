@@ -40,8 +40,13 @@ from unitedarabemirates_crawler.sites.common.store import UaeCompanyStore
 from unitedarabemirates_crawler.sites.wiza.client import load_runtime_login_state as load_wiza_login_state
 from unitedarabemirates_crawler.sites.wiza.client import parse_cookie_header as parse_wiza_cookie_header
 from unitedarabemirates_crawler.sites.wiza.pipeline import run_pipeline_list as run_wiza_pipeline_list
+from oldiron_core.snov import SnovAuthError
 
 from bs4 import BeautifulSoup
+
+
+def _raise_snov_auth_runner(**kwargs) -> dict[str, int]:
+    raise SnovAuthError("bad snov auth")
 
 
 class UaeBasicTestCase(unittest.TestCase):
@@ -417,6 +422,36 @@ class UaeBasicTestCase(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row[0], "done")
         self.assertEqual(row[1], "")
+
+    def test_run_batch_with_timeout_propagates_snov_auth_error(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            with self.assertRaises(cli_common.BatchFatalError):
+                cli_common._run_batch_with_timeout(
+                    kind="pipeline3_email",
+                    runner=_raise_snov_auth_runner,
+                    output_dir=Path(tmp_dir),
+                    max_items=1,
+                    concurrency=1,
+                    fatal_error_types=("SnovAuthError",),
+                )
+
+    def test_wiza_pending_checker_does_not_exit_early_when_blank_website_rows_remain(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            store = UaeCompanyStore(output_dir / "companies.db")
+            store.upsert_companies(
+                [
+                    {
+                        "company_name": "Example LLC",
+                        "source_pdl_id": "pdl_123",
+                        "website": "",
+                        "emails": "",
+                        "p1_status": "done",
+                    }
+                ]
+            )
+            self.assertTrue(cli_common._has_pending_work(output_dir, "pipeline3_email", site_name="wiza"))
+            self.assertFalse(cli_common._has_pending_work(output_dir, "pipeline3_email", site_name="hidubai"))
 
 
 if __name__ == "__main__":

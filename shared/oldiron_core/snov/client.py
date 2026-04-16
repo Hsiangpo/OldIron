@@ -44,6 +44,7 @@ class SnovClientConfig:
     requests_per_minute: int = 50
     poll_interval_seconds: float = 2.0
     poll_timeout_seconds: float = 90.0
+    retry_timeout_seconds: float = 120.0
 
     @classmethod
     def from_env(cls) -> SnovClientConfig:
@@ -56,6 +57,7 @@ class SnovClientConfig:
             requests_per_minute=max(int(os.getenv("SNOV_REQUESTS_PER_MINUTE", "50") or 50), 1),
             poll_interval_seconds=max(float(os.getenv("SNOV_POLL_INTERVAL_SECONDS", "2") or 2), 0.5),
             poll_timeout_seconds=max(float(os.getenv("SNOV_POLL_TIMEOUT_SECONDS", "90") or 90), 10.0),
+            retry_timeout_seconds=max(float(os.getenv("SNOV_RETRY_TIMEOUT_SECONDS", "120") or 120), 10.0),
         )
 
     def validate(self) -> None:
@@ -140,7 +142,7 @@ class SnovClient:
         task_hash = _extract_task_hash(payload)
         if not task_hash:
             raise SnovApiError(f"Snov 任务创建失败：{path}")
-        return self._build_absolute_url(f"/result/{task_hash}")
+        return self._fallback_result_url(path, task_hash)
 
     def _read_task_pages(self, result_url: str) -> list[dict[str, Any]]:
         pages: list[dict[str, Any]] = []
@@ -171,15 +173,28 @@ class SnovClient:
     ) -> dict[str, Any]:
         tried_credentials: set[int] = set()
         transient_backoff = 2.0
+        retry_deadline = time.monotonic() + self._config.retry_timeout_seconds
         while True:
             credential_index = self._credential_index
-            token = self._get_access_token(credential_index)
             url = path_or_url if absolute_url else self._build_absolute_url(path_or_url)
+            try:
+                token = self._get_access_token(credential_index)
+            except SnovAuthError as exc:
+                self._clear_token(credential_index)
+                tried_credentials.add(credential_index)
+                if self._advance_credential(tried_credentials):
+                    continue
+                raise SnovAuthError(str(exc) or "Snov 凭据无效") from exc
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Snov token 获取异常，%ss 后重试：url=%s error=%s", transient_backoff, url, exc)
+                _sleep_until_retry(retry_deadline, transient_backoff, f"Snov token 获取超时：{url}")
+                transient_backoff = min(transient_backoff * 2, 60.0)
+                continue
             try:
                 response = self._send_request(method, url, token=token, data=data)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("Snov 请求异常，%ss 后重试：url=%s error=%s", transient_backoff, url, exc)
-                time.sleep(transient_backoff)
+                _sleep_until_retry(retry_deadline, transient_backoff, f"Snov 请求重试超时：{url}")
                 transient_backoff = min(transient_backoff * 2, 60.0)
                 continue
             payload = _safe_json(response)
@@ -193,12 +208,12 @@ class SnovClient:
             if response.status_code == 429 or _contains_any(error_text, _RATE_LIMIT_NEEDLES):
                 delay = _retry_delay_seconds(response.headers.get("Retry-After"), transient_backoff)
                 LOGGER.warning("Snov 命中限速，%ss 后继续：url=%s", delay, url)
-                time.sleep(delay)
+                _sleep_until_retry(retry_deadline, delay, f"Snov 限速重试超时：{url}")
                 transient_backoff = min(max(delay * 1.5, transient_backoff), 60.0)
                 continue
             if response.status_code in _TRANSIENT_STATUS:
                 LOGGER.warning("Snov 上游临时错误，%ss 后重试：url=%s status=%s", transient_backoff, url, response.status_code)
-                time.sleep(transient_backoff)
+                _sleep_until_retry(retry_deadline, transient_backoff, f"Snov 临时错误重试超时：{url}")
                 transient_backoff = min(transient_backoff * 2, 60.0)
                 continue
             if _contains_any(error_text, _QUOTA_NEEDLES):
@@ -274,6 +289,25 @@ class SnovClient:
             return str(path_or_url)
         return urljoin(self._config.base_url.rstrip("/") + "/", str(path_or_url or "").lstrip("/"))
 
+    def _fallback_result_url(self, path: str, task_hash: str) -> str:
+        normalized_path = str(path or "").strip()
+        if normalized_path.startswith("http"):
+            normalized_path = "/" + normalized_path.split(self._config.base_url.rstrip("/"), 1)[-1].lstrip("/")
+        if normalized_path.startswith("/v2/company-domain-by-name/start"):
+            return self._build_absolute_url(f"/v2/company-domain-by-name/result?task_hash={task_hash}")
+        mapping = (
+            ("/v2/domain-search/prospects/search-emails/start", f"/v2/domain-search/prospects/search-emails/result/{task_hash}"),
+            ("/v2/domain-search/prospects/start", f"/v2/domain-search/prospects/result/{task_hash}"),
+            ("/v2/domain-search/domain-emails/start", f"/v2/domain-search/domain-emails/result/{task_hash}"),
+            ("/v2/domain-search/generic-contacts/start", f"/v2/domain-search/generic-contacts/result/{task_hash}"),
+            ("/v2/domain-search/start", f"/v2/domain-search/result/{task_hash}"),
+            ("/v2/li-profiles-by-urls/start", f"/v2/li-profiles-by-urls/result?task_hash={task_hash}"),
+        )
+        for prefix, result_path in mapping:
+            if normalized_path.startswith(prefix):
+                return self._build_absolute_url(result_path)
+        return self._build_absolute_url(f"/result/{task_hash}")
+
 
 def _build_session(config: SnovClientConfig) -> cffi_requests.Session:
     proxies = {}
@@ -336,10 +370,14 @@ def _extract_first_int(payload: dict[str, Any], *, default: int) -> int:
 
 
 def _extract_task_hash(payload: dict[str, Any]) -> str:
-    for key in ("task_hash", "taskHash", "hash"):
-        value = str(payload.get(key) or "").strip()
-        if value:
-            return value
+    candidates: list[Any] = [payload, payload.get("data"), payload.get("meta")]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("task_hash", "taskHash", "hash"):
+            value = str(candidate.get(key) or "").strip()
+            if value:
+                return value
     return ""
 
 
@@ -360,21 +398,30 @@ def _extract_link(payload: dict[str, Any], name: str) -> str:
 
 
 def _extract_first_domain(payload: dict[str, Any]) -> str:
-    candidates: list[Any] = []
-    data = payload.get("data")
-    if isinstance(data, list):
-        candidates.extend(data)
-    elif isinstance(data, dict):
-        candidates.append(data)
-    candidates.append(payload)
-    for item in candidates:
-        if not isinstance(item, dict):
-            continue
-        for key in ("domain", "company_domain", "website", "url"):
-            value = _normalize_domain_value(item.get(key))
-            if value:
-                return value
+    for value in _walk_domain_candidates(payload):
+        normalized = _normalize_domain_value(value)
+        if normalized:
+            return normalized
     return ""
+
+
+def _walk_domain_candidates(node: Any) -> list[Any]:
+    found: list[Any] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key in ("domain", "company_domain", "website", "url"):
+                if key in value:
+                    found.append(value.get(key))
+            for child in value.values():
+                walk(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(node)
+    return found
 
 
 def _collect_emails_from_pages(pages: list[dict[str, Any]]) -> list[str]:
@@ -488,6 +535,13 @@ def _retry_delay_seconds(retry_after: str | None, default_seconds: float) -> flo
     if raw.isdigit():
         return max(float(raw), 1.0)
     return max(default_seconds, 1.0)
+
+
+def _sleep_until_retry(deadline: float, delay_seconds: float, timeout_message: str) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SnovApiError(timeout_message)
+    time.sleep(min(max(delay_seconds, 0.0), remaining))
 
 
 def _contains_any(text: str, needles: tuple[str, ...]) -> bool:

@@ -23,6 +23,9 @@ from oldiron_core.snov import SnovCredential
 from oldiron_core.snov import SnovProspect
 from oldiron_core.snov import SnovService
 from oldiron_core.snov import SnovServiceSettings
+from oldiron_core.snov.client import _extract_first_domain
+from oldiron_core.snov.client import _extract_task_hash
+from oldiron_core.snov.service import _build_candidates
 from unitedarabemirates_crawler.delivery import build_delivery_bundle
 from unitedarabemirates_crawler.sites.common.store import UaeCompanyStore
 from unitedarabemirates_crawler.sites.wiza.snov_pipeline import run_pipeline_snov
@@ -123,6 +126,44 @@ class _PipelineFakeService:
 
 
 class WizaSnovTests(unittest.TestCase):
+    def test_extract_task_hash_reads_nested_data(self) -> None:
+        payload = {"data": {"task_hash": "abc123"}, "meta": {"names": ["Example LLC"]}}
+        self.assertEqual(_extract_task_hash(payload), "abc123")
+
+    def test_extract_first_domain_reads_nested_result_domain(self) -> None:
+        payload = {
+            "status": "completed",
+            "data": [
+                {
+                    "name": "Example LLC",
+                    "result": {
+                        "domain": "example.ae",
+                    },
+                }
+            ],
+        }
+        self.assertEqual(_extract_first_domain(payload), "example.ae")
+
+    def test_build_candidates_rejects_ceo_office_false_positive(self) -> None:
+        prospects = [
+            SnovProspect(
+                name="Office Support",
+                title="Chief Executive Officer Office Assistance",
+                prospect_hash="office",
+                email_lookup_path="",
+                source_page="https://example.com/about",
+            ),
+            SnovProspect(
+                name="Real Chief",
+                title="Chief Executive Officer",
+                prospect_hash="real",
+                email_lookup_path="",
+                source_page="https://example.com/about",
+            ),
+        ]
+        candidates = _build_candidates(prospects)
+        self.assertEqual([item.name for item in candidates], ["Real Chief"])
+
     def test_snov_service_builds_people_json_and_fallback_domain(self) -> None:
         settings = SnovServiceSettings(
             client_config=SnovClientConfig(credentials=(SnovCredential("id", "secret"),)),
@@ -170,7 +211,8 @@ class WizaSnovTests(unittest.TestCase):
                 [
                     {
                         "company_name": "Example LLC",
-                        "website": "https://acmeholdings.ae",
+                        "website": "",
+                        "source_pdl_id": "pdl_123",
                         "p1_status": "done",
                         "emails": "",
                     }
@@ -191,7 +233,8 @@ class WizaSnovTests(unittest.TestCase):
             conn = sqlite3.connect(str(output_dir / "companies.db"))
             try:
                 row = conn.execute(
-                    "SELECT emails, representative_final, people_json, email_status FROM companies WHERE record_id = 'examplellc'"
+                    "SELECT emails, representative_final, people_json, email_status, website, gmap_status "
+                    "FROM companies WHERE record_id = 'examplellc'"
                 ).fetchone()
             finally:
                 conn.close()
@@ -201,6 +244,54 @@ class WizaSnovTests(unittest.TestCase):
         self.assertIn("info@acmeholdings.ae", row[0])
         self.assertEqual(row[1], "Alice Chief;Bob Finance")
         self.assertIn("首席执行官", row[2])
+        self.assertEqual(row[4], "https://resolved.example.com")
+        self.assertEqual(row[5], "done")
+
+    def test_save_email_result_preserves_existing_representative_when_rerun_is_empty(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            store = UaeCompanyStore(output_dir / "companies.db")
+            store.upsert_companies(
+                [
+                    {
+                        "company_name": "Example LLC",
+                        "website": "https://example.ae",
+                        "representative_final": "Alice Chief",
+                    }
+                ]
+            )
+            store.save_email_result(
+                "examplellc",
+                ["info@example.ae"],
+                "Alice Chief",
+                "Alice Chief",
+                "https://example.ae",
+                people_json='[{"name":"Alice Chief","title_zh":"首席执行官","emails":["ceo@example.ae"]}]',
+                website="https://example.ae",
+                mark_done=True,
+            )
+            store.save_email_result(
+                "examplellc",
+                [],
+                "",
+                "",
+                "",
+                people_json="",
+                website="",
+                mark_done=False,
+            )
+            conn = sqlite3.connect(str(output_dir / "companies.db"))
+            try:
+                row = conn.execute(
+                    "SELECT representative_p3, representative_final, people_json, email_status "
+                    "FROM companies WHERE record_id = 'examplellc'"
+                ).fetchone()
+            finally:
+                conn.close()
+        self.assertEqual(row[0], "Alice Chief")
+        self.assertEqual(row[1], "Alice Chief")
+        self.assertIn("首席执行官", row[2])
+        self.assertEqual(row[3], "done")
 
     def test_uae_delivery_wiza_uses_people_json_columns(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -214,7 +305,7 @@ class WizaSnovTests(unittest.TestCase):
                 [
                     {
                         "company_name": "Example LLC",
-                        "website": "https://acmeholdings.ae",
+                        "website": "",
                         "emails": "info@acmeholdings.ae",
                         "people_json": '[{"name":"Alice Chief","title_zh":"首席执行官","emails":["ceo@acmeholdings.ae"]}]',
                         "representative_final": "Alice Chief",
@@ -229,12 +320,23 @@ class WizaSnovTests(unittest.TestCase):
                 "https://acmeholdings.ae",
                 people_json='[{"name":"Alice Chief","title_zh":"首席执行官","emails":["ceo@acmeholdings.ae"]}]',
                 website="https://acmeholdings.ae",
+                mark_done=True,
             )
+            conn = sqlite3.connect(str(site_dir / "companies.db"))
+            try:
+                statuses = conn.execute(
+                    "SELECT gmap_status, email_status, website FROM companies WHERE record_id = 'examplellc'"
+                ).fetchone()
+            finally:
+                conn.close()
             summary = build_delivery_bundle(data_root, delivery_root, "day1")
             csv_path = delivery_root / "UnitedArabEmirates_day001" / "wiza.csv"
             with csv_path.open("r", encoding="utf-8-sig", newline="") as fp:
                 rows = list(csv.reader(fp))
         self.assertEqual(summary["delta_companies"], 1)
+        self.assertEqual(statuses[0], "done")
+        self.assertEqual(statuses[1], "done")
+        self.assertEqual(statuses[2], "https://acmeholdings.ae")
         self.assertEqual(rows[0], ["company_name", "website", "people_json", "emails", "phone"])
         self.assertEqual(rows[1][0], "Example LLC")
         self.assertIn("首席执行官", rows[1][2])

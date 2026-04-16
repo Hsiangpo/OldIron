@@ -30,7 +30,7 @@ def run_pipeline_snov(
     """用 Snov 直接补域名邮箱和关键联系人。"""
     store = UaeCompanyStore(output_dir / "companies.db")
     batch_limit = max_items or min(max(int(concurrency or 1), 1), DEFAULT_BATCH_SIZE)
-    pending = store.get_email_pending(batch_limit)
+    pending = store.get_email_pending(batch_limit, require_website=False)
     if not pending:
         LOGGER.info("没有需要 Snov 补充的公司")
         return {"processed": 0, "found": 0}
@@ -72,6 +72,7 @@ def run_pipeline_snov(
                 except Exception as exc:  # noqa: BLE001
                     LOGGER.warning("Wiza Snov 补充失败，保留 pending：%s | %s", company["company_name"], exc)
                     continue
+                mark_done = bool(result.domain_emails and result.people and result.people_json)
                 store.save_email_result(
                     record_id,
                     list(result.domain_emails),
@@ -80,7 +81,17 @@ def run_pipeline_snov(
                     result.website,
                     people_json=result.people_json,
                     website=result.website,
+                    mark_done=mark_done,
                 )
+                if not mark_done:
+                    LOGGER.info(
+                        "Wiza Snov 结果不完整，保留 pending：company=%s website=%s emails=%d people=%d",
+                        company["company_name"],
+                        result.website,
+                        len(result.domain_emails),
+                        len(result.people),
+                    )
+                    continue
                 processed += 1
                 if result.domain_emails and result.people:
                     found += 1

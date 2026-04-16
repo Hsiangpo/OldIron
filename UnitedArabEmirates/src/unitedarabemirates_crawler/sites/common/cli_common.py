@@ -30,6 +30,10 @@ P2P3_BATCH_TIMEOUT_SECONDS = 180
 P2P3_TIMEOUT_BACKOFF_SECONDS = 5
 
 
+class BatchFatalError(RuntimeError):
+    """子进程已经确认是硬错误，父进程应立即收口。"""
+
+
 def run_site_cli(
     *,
     site_name: str,
@@ -112,8 +116,14 @@ def _run_all_concurrent(
     enable_gmap: bool,
 ) -> int:
     p1_done = threading.Event()
+    stop_event = threading.Event()
     results: dict[str, dict[str, int]] = {}
     errors: list[str] = []
+    errors_lock = threading.Lock()
+
+    def _record_error(message: str) -> None:
+        with errors_lock:
+            errors.append(message)
 
     def _p1_worker() -> None:
         try:
@@ -121,7 +131,7 @@ def _run_all_concurrent(
             if result is not None:
                 results["pipeline1_list"] = result
             if error:
-                errors.append(error)
+                _record_error(error)
         finally:
             p1_done.set()
 
@@ -129,29 +139,42 @@ def _run_all_concurrent(
         idle_rounds = 0
         total_processed = 0
         total_found = 0
-        while True:
-            stats = _run_batch_with_timeout(
-                kind=kind,
-                runner=runner,
-                output_dir=output_dir,
-                max_items=args.max_items,
-                concurrency=workers,
-            )
-            total_processed += int(stats.get("processed", 0))
-            total_found += int(stats.get("found", 0))
-            if int(stats.get("processed", 0)) == 0:
-                if p1_done.is_set():
-                    if _has_pending_work(output_dir, kind):
-                        LOGGER.info("%s 仍有待处理记录，继续轮询。", kind)
-                        idle_rounds = 0
-                    else:
-                        idle_rounds += 1
-                        if idle_rounds >= MAX_IDLE_ROUNDS:
-                            break
-                time.sleep(POLL_INTERVAL)
-                continue
-            idle_rounds = 0
-        results[kind] = {"processed": total_processed, "found": total_found}
+        try:
+            while not stop_event.is_set():
+                stats = _run_batch_with_timeout(
+                    kind=kind,
+                    runner=runner,
+                    output_dir=output_dir,
+                    max_items=args.max_items,
+                    concurrency=workers,
+                    fatal_error_types=_fatal_error_types(site_name, kind),
+                )
+                total_processed += int(stats.get("processed", 0))
+                total_found += int(stats.get("found", 0))
+                if int(stats.get("processed", 0)) == 0:
+                    if p1_done.is_set():
+                        if _has_pending_work(output_dir, kind, site_name=site_name):
+                            LOGGER.info("%s 仍有待处理记录，继续轮询。", kind)
+                            idle_rounds = 0
+                        else:
+                            idle_rounds += 1
+                            if idle_rounds >= MAX_IDLE_ROUNDS:
+                                break
+                    time.sleep(POLL_INTERVAL)
+                    continue
+                idle_rounds = 0
+        except BatchFatalError as exc:
+            stop_event.set()
+            _record_error(f"{kind}: {exc}")
+            LOGGER.error("%s 出现硬错误，停止当前站点 all 模式：%s", kind, exc)
+            return
+        except Exception as exc:  # noqa: BLE001
+            stop_event.set()
+            _record_error(f"{kind}: {exc}")
+            LOGGER.error("%s 线程异常，停止当前站点 all 模式：%s", kind, exc, exc_info=True)
+            return
+        if not stop_event.is_set():
+            results[kind] = {"processed": total_processed, "found": total_found}
 
     threads = [threading.Thread(target=_p1_worker, name=f"{site_name}-p1", daemon=True)]
     if enable_gmap:
@@ -260,6 +283,7 @@ def _run_batch_with_timeout(
     output_dir: Path,
     max_items: int,
     concurrency: int,
+    fatal_error_types: tuple[str, ...] = (),
 ) -> dict[str, int]:
     """把 P2/P3 批次放到子进程里，避免整条线被慢站点永久卡死。"""
     ctx = mp.get_context("spawn")
@@ -288,7 +312,10 @@ def _run_batch_with_timeout(
         stats = payload.get("stats")
         if isinstance(stats, dict):
             return stats
+    error_type = str(payload.get("error_type") or "").strip()
     error_text = str(payload.get("error") or f"exitcode={process.exitcode}")
+    if error_type and error_type in fatal_error_types:
+        raise BatchFatalError(error_text)
     LOGGER.warning("%s 批次执行失败，稍后续跑：%s", kind, error_text)
     time.sleep(P2P3_TIMEOUT_BACKOFF_SECONDS)
     return {"processed": 0, "found": 0}
@@ -305,7 +332,7 @@ def _batch_worker_entry(
     try:
         stats = runner(output_dir=output_dir, max_items=max_items, concurrency=concurrency)
     except Exception as exc:  # noqa: BLE001
-        queue.put({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+        queue.put({"ok": False, "error": f"{type(exc).__name__}: {exc}", "error_type": type(exc).__name__})
         return
     queue.put({"ok": True, "stats": stats})
 
@@ -333,7 +360,7 @@ def _close_batch_queue(queue: mp.Queue) -> None:
         pass
 
 
-def _has_pending_work(output_dir: Path, kind: str) -> bool:
+def _has_pending_work(output_dir: Path, kind: str, *, site_name: str = "") -> bool:
     """只有数据库里确实没有 pending，空轮询才允许退出。"""
     db_path = output_dir / "companies.db"
     if not db_path.exists():
@@ -346,13 +373,7 @@ def _has_pending_work(output_dir: Path, kind: str) -> bool:
               AND coalesce(gmap_status, 'pending') != 'done'
             LIMIT 1
         """,
-        "pipeline3_email": """
-            SELECT 1
-            FROM companies
-            WHERE website != '' AND website IS NOT NULL
-              AND coalesce(email_status, 'pending') != 'done'
-            LIMIT 1
-        """,
+        "pipeline3_email": _email_pending_sql(site_name),
     }
     sql = sql_by_kind.get(kind)
     if not sql:
@@ -364,6 +385,29 @@ def _has_pending_work(output_dir: Path, kind: str) -> bool:
         LOGGER.warning("%s 检查 pending 失败，按仍有任务处理：%s", kind, exc)
         return True
     return row is not None
+
+
+def _email_pending_sql(site_name: str) -> str:
+    if site_name == "wiza":
+        return """
+            SELECT 1
+            FROM companies
+            WHERE coalesce(email_status, 'pending') != 'done'
+            LIMIT 1
+        """
+    return """
+        SELECT 1
+        FROM companies
+        WHERE website != '' AND website IS NOT NULL
+          AND coalesce(email_status, 'pending') != 'done'
+        LIMIT 1
+    """
+
+
+def _fatal_error_types(site_name: str, kind: str) -> tuple[str, ...]:
+    if site_name == "wiza" and kind == "pipeline3_email":
+        return ("SnovAuthError", "SnovQuotaError")
+    return ()
 
 
 def _print_all_summary(results: dict[str, dict[str, int]], total: int, errors: list[str]) -> None:

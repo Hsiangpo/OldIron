@@ -51,6 +51,18 @@ _ACCOUNTING_PATTERNS = (
     (r"\baccounts manager\b", 170),
     (r"\bfinance and accounts\b", 170),
 )
+_TITLE_BLOCK_PATTERNS = (
+    r"\bassistant to\b",
+    r"\bassistance\b",
+    r"\bcoordinator\b",
+    r"\bchief of staff\b",
+    r"\boffice of the ceo\b",
+    r"\bexecutive assistant\b.*\bceo\b",
+    r"\bexecutive office\b",
+    r"\bceo office\b",
+    r"chief executive officer[’']?s office",
+    r"chief executive officer office",
+)
 
 
 @dataclass(slots=True)
@@ -237,6 +249,8 @@ def _build_candidates(prospects: list[SnovProspect]) -> list[_Candidate]:
         title = str(prospect.title or "").strip()
         if not name or not title:
             continue
+        if _is_blocked_title(title):
+            continue
         lookup_key = _prospect_lookup_key(prospect)
         leader_score = _score_patterns(title, _LEADER_PATTERNS)
         finance_score = _score_patterns(title, _FINANCE_PATTERNS)
@@ -268,6 +282,13 @@ def _score_patterns(title: str, patterns: tuple[tuple[str, int], ...]) -> int:
         if re.search(pattern, lowered, flags=re.I):
             best = max(best, score)
     return best
+
+
+def _is_blocked_title(title: str) -> bool:
+    lowered = str(title or "").strip().lower()
+    if not lowered:
+        return True
+    return any(re.search(pattern, lowered, flags=re.I) for pattern in _TITLE_BLOCK_PATTERNS)
 
 
 def _build_selector_prompt(*, company_name: str, candidates: list[_Candidate]) -> str:
@@ -361,6 +382,8 @@ def _fallback_selected_candidates(candidates: list[_Candidate]) -> list[_Selecte
 
 def _fallback_title_zh(title: str) -> str:
     lowered = str(title or "").lower()
+    if _is_blocked_title(title):
+        return title
     if "chief executive officer" in lowered or re.search(r"\bceo\b", lowered):
         return "首席执行官"
     if "managing director" in lowered:

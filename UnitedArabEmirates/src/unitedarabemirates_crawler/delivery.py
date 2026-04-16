@@ -118,15 +118,14 @@ def _is_delivery_qualified(record: dict[str, str], *, site_name: str) -> bool:
     if site_name == "wiza":
         return bool(
             str(record.get("company_name", "")).strip()
-            and str(record.get("website", "")).strip()
             and str(record.get("emails", "")).strip()
             and str(record.get("people_json", "")).strip()
-            and _is_pipeline_completed(record)
+            and _is_pipeline_completed(record, site_name=site_name)
         )
     return bool(
         str(record.get("company_name", "")).strip()
         and str(record.get("website", "")).strip()
-        and _is_pipeline_completed(record)
+        and _is_pipeline_completed(record, site_name=site_name)
     )
 
 
@@ -154,7 +153,9 @@ def _write_site_csv(csv_path: Path, records: list[dict[str, str]], *, site_name:
         writer.writerows(records)
 
 
-def _is_pipeline_completed(record: dict[str, str]) -> bool:
+def _is_pipeline_completed(record: dict[str, str], *, site_name: str) -> bool:
+    if site_name == "wiza":
+        return str(record.get("email_status", "")).strip().lower() == "done"
     return (
         str(record.get("gmap_status", "")).strip().lower() == "done"
         and str(record.get("email_status", "")).strip().lower() == "done"

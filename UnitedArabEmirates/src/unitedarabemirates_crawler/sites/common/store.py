@@ -281,13 +281,14 @@ class UaeCompanyStore:
             )
         )
 
-    def get_email_pending(self, limit: int = 0) -> list[dict[str, str]]:
+    def get_email_pending(self, limit: int = 0, *, require_website: bool = True) -> list[dict[str, str]]:
         conn = self._conn()
-        sql = """
-            SELECT record_id, company_name, representative_p1, website, emails
+        website_where = "website != '' AND website IS NOT NULL AND" if require_website else ""
+        sql = f"""
+            SELECT record_id, company_name, representative_p1, website, emails, source_pdl_id
             FROM companies
-            WHERE website != '' AND website IS NOT NULL
-              AND (email_status = 'pending' OR email_status IS NULL)
+            WHERE {website_where}
+                  (email_status = 'pending' OR email_status IS NULL)
             ORDER BY record_id
         """
         if limit > 0:
@@ -358,39 +359,46 @@ class UaeCompanyStore:
         *,
         people_json: str = "",
         website: str = "",
+        mark_done: bool = True,
     ) -> None:
         def _action(conn: sqlite3.Connection) -> None:
             current = conn.execute(
-                "SELECT emails FROM companies WHERE record_id = ?",
+                "SELECT emails, email_status FROM companies WHERE record_id = ?",
                 (record_id,),
             ).fetchone()
             merged_emails = _merge_semicolon_values(
                 str(current["emails"] if current else "").strip(),
                 ";".join(emails),
             )
+            next_email_status = "done" if mark_done else str(current["email_status"] if current else "").strip() or "pending"
             conn.execute(
                 """
                 UPDATE companies
                 SET emails = ?,
-                    representative_p3 = ?,
-                    representative_final = ?,
+                    representative_p3 = CASE WHEN ? != '' THEN ? ELSE representative_p3 END,
+                    representative_final = CASE WHEN ? != '' THEN ? ELSE representative_final END,
                     people_json = CASE WHEN ? != '' THEN ? ELSE people_json END,
                     website = CASE WHEN ? != '' THEN ? ELSE website END,
+                    gmap_status = CASE WHEN ? != '' THEN 'done' ELSE gmap_status END,
                     evidence_url = CASE WHEN ? != '' THEN ? ELSE evidence_url END,
-                    email_status = 'done',
+                    email_status = ?,
                     updated_at = ?
                 WHERE record_id = ?
                 """,
                 (
                     merged_emails,
                     representative_p3,
+                    representative_p3,
+                    representative_final,
                     representative_final,
                     people_json,
                     people_json,
                     website,
                     website,
+                    website,
                     evidence_url,
                     evidence_url,
+                    next_email_status,
                     _now_text(),
                     record_id,
                 ),
