@@ -119,7 +119,7 @@ def _is_delivery_qualified(record: dict[str, str], *, site_name: str) -> bool:
         return bool(
             str(record.get("company_name", "")).strip()
             and str(record.get("emails", "")).strip()
-            and str(record.get("people_json", "")).strip()
+            and _has_people_payload(record.get("people_json", ""))
             and _is_pipeline_completed(record, site_name=site_name)
         )
     return bool(
@@ -160,3 +160,14 @@ def _is_pipeline_completed(record: dict[str, str], *, site_name: str) -> bool:
         str(record.get("gmap_status", "")).strip().lower() == "done"
         and str(record.get("email_status", "")).strip().lower() == "done"
     )
+
+
+def _has_people_payload(raw_value: str) -> bool:
+    text = str(raw_value or "").strip()
+    if not text:
+        return False
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return False
+    return isinstance(payload, list) and any(isinstance(item, dict) and str(item.get("name", "")).strip() for item in payload)

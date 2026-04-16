@@ -126,6 +126,25 @@ class _PipelineFakeService:
         return _Result()
 
 
+class _PipelineNoHitService:
+    def __init__(self, settings, client=None) -> None:  # noqa: ANN001
+        self.settings = settings
+        self.client = client
+
+    def close(self) -> None:
+        return None
+
+    def discover_company(self, *, company_name: str, homepage: str):  # noqa: ANN201
+        class _Result:
+            website = ""
+            domain_emails: list[str] = []
+            representative_names = ""
+            people_json = "[]"
+            people: list[object] = []
+
+        return _Result()
+
+
 class WizaSnovTests(unittest.TestCase):
     def test_extract_task_hash_reads_nested_data(self) -> None:
         payload = {"data": {"task_hash": "abc123"}, "meta": {"names": ["Example LLC"]}}
@@ -305,6 +324,52 @@ class WizaSnovTests(unittest.TestCase):
         self.assertIn("首席执行官", row[2])
         self.assertEqual(row[3], "done")
 
+    def test_run_pipeline_snov_nohit_row_is_closed_not_left_pending(self) -> None:
+        settings = SnovServiceSettings(
+            client_config=SnovClientConfig(credentials=(SnovCredential("id", "secret"),)),
+            llm_api_key="test-key",
+            llm_base_url="https://gpt-agent.cc/v1",
+            llm_model="claude-sonnet-4-6",
+            llm_reasoning_effort="",
+            llm_api_style="chat",
+            llm_timeout_seconds=60,
+        )
+        with TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            store = UaeCompanyStore(output_dir / "companies.db")
+            store.upsert_companies(
+                [
+                    {
+                        "company_name": "No Hit LLC",
+                        "website": "",
+                        "source_pdl_id": "pdl_999",
+                        "p1_status": "done",
+                    }
+                ]
+            )
+            with patch(
+                "unitedarabemirates_crawler.sites.wiza.snov_pipeline.SnovServiceSettings.from_env",
+                return_value=settings,
+            ), patch(
+                "unitedarabemirates_crawler.sites.wiza.snov_pipeline.SnovClient",
+                _PipelineFakeClient,
+            ), patch(
+                "unitedarabemirates_crawler.sites.wiza.snov_pipeline.SnovService",
+                _PipelineNoHitService,
+            ):
+                stats = run_pipeline_snov(output_dir=output_dir, max_items=1, concurrency=1)
+            conn = sqlite3.connect(str(output_dir / "companies.db"))
+            try:
+                row = conn.execute(
+                    "SELECT email_status, people_json, emails FROM companies WHERE record_id = 'nohitllc'"
+                ).fetchone()
+            finally:
+                conn.close()
+        self.assertEqual(stats, {"processed": 1, "found": 0})
+        self.assertEqual(row[0], "done")
+        self.assertEqual(row[1], "[]")
+        self.assertEqual(row[2], "")
+
     def test_uae_delivery_wiza_uses_people_json_columns(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -352,6 +417,38 @@ class WizaSnovTests(unittest.TestCase):
         self.assertEqual(rows[0], ["company_name", "website", "people_json", "emails", "phone"])
         self.assertEqual(rows[1][0], "Example LLC")
         self.assertIn("首席执行官", rows[1][2])
+
+    def test_uae_delivery_wiza_rejects_empty_people_array(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_root = root / "data"
+            delivery_root = root / "delivery"
+            site_dir = data_root / "wiza"
+            site_dir.mkdir(parents=True, exist_ok=True)
+            store = UaeCompanyStore(site_dir / "companies.db")
+            store.upsert_companies(
+                [
+                    {
+                        "company_name": "No Hit LLC",
+                        "website": "https://example.ae",
+                        "emails": "info@example.ae",
+                    }
+                ]
+            )
+            store.save_email_result(
+                "nohitllc",
+                ["info@example.ae"],
+                "",
+                "",
+                "https://example.ae",
+                people_json="[]",
+                website="https://example.ae",
+                mark_done=True,
+            )
+            summary = build_delivery_bundle(data_root, delivery_root, "day1")
+            csv_path = delivery_root / "UnitedArabEmirates_day001" / "wiza.csv"
+        self.assertEqual(summary["delta_companies"], 0)
+        self.assertFalse(csv_path.exists())
 
 
 if __name__ == "__main__":
