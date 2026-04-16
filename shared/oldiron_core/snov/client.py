@@ -23,6 +23,7 @@ _TRANSIENT_STATUS = {408, 425, 500, 502, 503, 504}
 _AUTH_NEEDLES = ("unauthorized", "invalid_client", "invalid token", "invalid_token", "access denied")
 _QUOTA_NEEDLES = ("credit", "quota", "limit reached", "limit exceeded", "insufficient")
 _RATE_LIMIT_NEEDLES = ("too many requests", "rate limit", "try again later")
+_PERMISSION_NEEDLES = ("dont have permissions", "don't have permissions", "permission denied")
 
 
 @dataclass(slots=True)
@@ -86,6 +87,10 @@ class SnovAuthError(SnovApiError):
 
 class SnovQuotaError(SnovApiError):
     """Snov 额度不足。"""
+
+
+class SnovPermissionError(SnovApiError):
+    """Snov 账号无对应接口权限。"""
 
 
 class SnovClient:
@@ -221,6 +226,8 @@ class SnovClient:
                 if self._advance_credential(tried_credentials):
                     continue
                 raise SnovQuotaError(error_text or "Snov 额度不足")
+            if response.status_code == 403 or _contains_any(error_text, _PERMISSION_NEEDLES):
+                raise SnovPermissionError(error_text or "Snov 账号没有对应接口权限")
             if response.status_code >= 400:
                 raise SnovApiError(error_text or f"Snov 请求失败：status={response.status_code}")
             return payload
@@ -231,7 +238,13 @@ class SnovClient:
             "Authorization": f"Bearer {token}",
         }
         self._wait_for_rate_window()
-        return self._session.request(method, url, headers=headers, data=data, timeout=self._config.timeout_seconds)
+        return self._session.request(
+            method,
+            url,
+            headers=headers,
+            data=_encode_form_data(data),
+            timeout=self._config.timeout_seconds,
+        )
 
     def _get_access_token(self, credential_index: int) -> str:
         cached = self._tokens.get(credential_index)
@@ -542,6 +555,23 @@ def _sleep_until_retry(deadline: float, delay_seconds: float, timeout_message: s
     if remaining <= 0:
         raise SnovApiError(timeout_message)
     time.sleep(min(max(delay_seconds, 0.0), remaining))
+
+
+def _encode_form_data(data: dict[str, Any] | None) -> list[tuple[str, str]] | dict[str, Any] | None:
+    if not data:
+        return data
+    encoded: list[tuple[str, str]] = []
+    has_sequence = False
+    for key, value in data.items():
+        if isinstance(value, (list, tuple)):
+            has_sequence = True
+            for item in value:
+                encoded.append((str(key), "" if item is None else str(item)))
+            continue
+        encoded.append((str(key), "" if value is None else str(value)))
+    if has_sequence:
+        return encoded
+    return data
 
 
 def _contains_any(text: str, needles: tuple[str, ...]) -> bool:

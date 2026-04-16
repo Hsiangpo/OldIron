@@ -5,6 +5,7 @@ from .client import SnovAuthError
 from .client import SnovClient
 from .client import SnovClientConfig
 from .client import SnovCredential
+from .client import SnovPermissionError
 from .client import SnovProspect
 from .client import SnovQuotaError
 from .service import SnovContact
@@ -20,6 +21,7 @@ __all__ = [
     "SnovCredential",
     "SnovContact",
     "SnovDiscoveryResult",
+    "SnovPermissionError",
     "SnovProspect",
     "SnovQuotaError",
     "SnovService",

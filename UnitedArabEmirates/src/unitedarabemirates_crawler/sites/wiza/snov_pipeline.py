@@ -10,6 +10,7 @@ from pathlib import Path
 
 from oldiron_core.snov import SnovAuthError
 from oldiron_core.snov import SnovClient
+from oldiron_core.snov import SnovPermissionError
 from oldiron_core.snov import SnovQuotaError
 from oldiron_core.snov import SnovService
 from oldiron_core.snov import SnovServiceSettings
@@ -67,7 +68,7 @@ def run_pipeline_snov(
                 company = futures[future]
                 try:
                     record_id, result = future.result()
-                except (SnovAuthError, SnovQuotaError):
+                except (SnovAuthError, SnovQuotaError, SnovPermissionError):
                     raise
                 except Exception as exc:  # noqa: BLE001
                     LOGGER.warning("Wiza Snov 补充失败，保留 pending：%s | %s", company["company_name"], exc)

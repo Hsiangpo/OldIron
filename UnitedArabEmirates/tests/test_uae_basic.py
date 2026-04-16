@@ -41,12 +41,17 @@ from unitedarabemirates_crawler.sites.wiza.client import load_runtime_login_stat
 from unitedarabemirates_crawler.sites.wiza.client import parse_cookie_header as parse_wiza_cookie_header
 from unitedarabemirates_crawler.sites.wiza.pipeline import run_pipeline_list as run_wiza_pipeline_list
 from oldiron_core.snov import SnovAuthError
+from oldiron_core.snov import SnovPermissionError
 
 from bs4 import BeautifulSoup
 
 
 def _raise_snov_auth_runner(**kwargs) -> dict[str, int]:
     raise SnovAuthError("bad snov auth")
+
+
+def _raise_snov_permission_runner(**kwargs) -> dict[str, int]:
+    raise SnovPermissionError("permission denied")
 
 
 class UaeBasicTestCase(unittest.TestCase):
@@ -452,6 +457,18 @@ class UaeBasicTestCase(unittest.TestCase):
             )
             self.assertTrue(cli_common._has_pending_work(output_dir, "pipeline3_email", site_name="wiza"))
             self.assertFalse(cli_common._has_pending_work(output_dir, "pipeline3_email", site_name="hidubai"))
+
+    def test_run_batch_with_timeout_propagates_snov_permission_error(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            with self.assertRaises(cli_common.BatchFatalError):
+                cli_common._run_batch_with_timeout(
+                    kind="pipeline3_email",
+                    runner=_raise_snov_permission_runner,
+                    output_dir=Path(tmp_dir),
+                    max_items=1,
+                    concurrency=1,
+                    fatal_error_types=("SnovPermissionError",),
+                )
 
 
 if __name__ == "__main__":

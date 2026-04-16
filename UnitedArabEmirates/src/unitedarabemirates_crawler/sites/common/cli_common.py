@@ -406,7 +406,7 @@ def _email_pending_sql(site_name: str) -> str:
 
 def _fatal_error_types(site_name: str, kind: str) -> tuple[str, ...]:
     if site_name == "wiza" and kind == "pipeline3_email":
-        return ("SnovAuthError", "SnovQuotaError")
+        return ("SnovAuthError", "SnovQuotaError", "SnovPermissionError")
     return ()
 
 

@@ -25,6 +25,7 @@ from oldiron_core.snov import SnovService
 from oldiron_core.snov import SnovServiceSettings
 from oldiron_core.snov.client import _extract_first_domain
 from oldiron_core.snov.client import _extract_task_hash
+from oldiron_core.snov.client import _encode_form_data
 from oldiron_core.snov.service import _build_candidates
 from unitedarabemirates_crawler.delivery import build_delivery_bundle
 from unitedarabemirates_crawler.sites.common.store import UaeCompanyStore
@@ -129,6 +130,17 @@ class WizaSnovTests(unittest.TestCase):
     def test_extract_task_hash_reads_nested_data(self) -> None:
         payload = {"data": {"task_hash": "abc123"}, "meta": {"names": ["Example LLC"]}}
         self.assertEqual(_extract_task_hash(payload), "abc123")
+
+    def test_encode_form_data_expands_array_fields(self) -> None:
+        payload = _encode_form_data({"names[]": ["BMW AGMC", "COSL"], "webhook_url": "https://example.com/hook"})
+        self.assertEqual(
+            payload,
+            [
+                ("names[]", "BMW AGMC"),
+                ("names[]", "COSL"),
+                ("webhook_url", "https://example.com/hook"),
+            ],
+        )
 
     def test_extract_first_domain_reads_nested_result_domain(self) -> None:
         payload = {
