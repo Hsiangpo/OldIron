@@ -123,22 +123,50 @@ def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
         writer.writerows(records)
 
 
+def _write_websites_csv(csv_path: Path, websites: list[str]) -> None:
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=["website"])
+        writer.writeheader()
+        writer.writerows({"website": website} for website in websites)
+
+
 def _build_websites_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) -> dict[str, object]:
     day, latest = _validate_websites_day_sequence(Path(delivery_root), "Germany", day_label)
     delivery_dir = Path(delivery_root) / f"Germany_websites_day{day:03d}"
     baseline_day = max(day - 1, 0)
     prepare_delivery_dir(delivery_dir)
-    current_websites = _load_current_websites(data_root)
-    baseline_keys = _load_websites_baseline_keys(Path(delivery_root), "Germany", baseline_day)
-    delta_websites = [item for item in current_websites if item not in baseline_keys]
-    (delivery_dir / "websites.txt").write_text("\n".join(delta_websites), encoding="utf-8")
-    (delivery_dir / "keys.txt").write_text("\n".join(current_websites), encoding="utf-8")
+    total_current_websites = 0
+    total_delta_websites = 0
+    site_stats: dict[str, dict[str, int]] = {}
+    skipped_sites_no_delta: list[str] = []
+    for site_dir in _iter_website_site_dirs(Path(data_root)):
+        current_websites = _load_site_websites(site_dir / "websites.txt")
+        baseline_keys = _load_site_websites_baseline_keys(
+            Path(delivery_root),
+            "Germany",
+            site_dir.name,
+            baseline_day,
+        )
+        delta_websites = [item for item in current_websites if item not in baseline_keys]
+        if delta_websites:
+            _write_websites_csv(delivery_dir / f"{site_dir.name}.csv", delta_websites)
+        else:
+            skipped_sites_no_delta.append(site_dir.name)
+        (delivery_dir / f"{site_dir.name}.keys.txt").write_text("\n".join(current_websites), encoding="utf-8")
+        site_stats[site_dir.name] = {
+            "qualified_current": len(current_websites),
+            "delta": len(delta_websites),
+        }
+        total_current_websites += len(current_websites)
+        total_delta_websites += len(delta_websites)
     summary = {
         "country": "Germany",
         "day": day,
         "baseline_day": 0 if latest == 0 else baseline_day,
-        "delta_websites": len(delta_websites),
-        "total_current_websites": len(current_websites),
+        "delta_websites": total_delta_websites,
+        "total_current_websites": total_current_websites,
+        "sites": site_stats,
+        "skipped_sites_no_delta": skipped_sites_no_delta,
     }
     (delivery_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
@@ -166,27 +194,37 @@ def _validate_websites_day_sequence(delivery_root: Path, country_name: str, day_
     return target_day, latest
 
 
-def _load_current_websites(data_root: Path) -> list[str]:
-    websites: set[str] = set()
-    if not Path(data_root).exists():
+def _iter_website_site_dirs(data_root: Path) -> list[Path]:
+    if not data_root.exists():
         return []
-    for site_dir in sorted(Path(data_root).iterdir()):
+    selected: list[Path] = []
+    for site_dir in sorted(data_root.iterdir()):
         if not site_dir.is_dir() or site_dir.name == "delivery":
             continue
-        websites_path = site_dir / "websites.txt"
-        if not websites_path.exists():
+        if not (site_dir / "websites.txt").exists():
             continue
-        for line in websites_path.read_text(encoding="utf-8").splitlines():
-            website = str(line or "").strip()
-            if website:
-                websites.add(website)
+        selected.append(site_dir)
+    return selected
+
+
+def _load_site_websites(site_websites_path: Path) -> list[str]:
+    websites: set[str] = set()
+    for line in site_websites_path.read_text(encoding="utf-8").splitlines():
+        website = str(line or "").strip()
+        if website:
+            websites.add(website)
     return sorted(websites)
 
 
-def _load_websites_baseline_keys(delivery_root: Path, country_name: str, baseline_day: int) -> set[str]:
+def _load_site_websites_baseline_keys(
+    delivery_root: Path,
+    country_name: str,
+    site_name: str,
+    baseline_day: int,
+) -> set[str]:
     if baseline_day <= 0:
         return set()
-    keys_path = delivery_root / f"{country_name}_websites_day{baseline_day:03d}" / "keys.txt"
+    keys_path = delivery_root / f"{country_name}_websites_day{baseline_day:03d}" / f"{site_name}.keys.txt"
     if not keys_path.exists():
         return set()
     return {line.strip() for line in keys_path.read_text(encoding="utf-8").splitlines() if line.strip()}

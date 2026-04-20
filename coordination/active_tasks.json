@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-20T16:52:42Z",
+  "updated_at": "2026-04-20T16:54:41Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -45,32 +45,6 @@
       "started_at": "2026-04-20T13:39:50Z",
       "last_heartbeat_at": "2026-04-20T13:39:50Z",
       "notes": "Monitor long-running England/Germany Wiza website list jobs, inspect logs/DB, fix site-local issues and restart if needed"
-    },
-    {
-      "task_id": "fix-websites-delivery-csv-20260420",
-      "status": "in_progress",
-      "machine": "machine2-macos",
-      "agent": "codex",
-      "change_class": "shared_zone",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "websites-delivery-csv"
-      ],
-      "planned_files": [
-        "product.py",
-        "England/src/england_crawler/delivery.py",
-        "Germany/src/germany_crawler/delivery.py"
-      ],
-      "shared_lock_ids": [
-        "lock-fix-websites-delivery-csv-20260420-1",
-        "lock-fix-websites-delivery-csv-20260420-2",
-        "lock-fix-websites-delivery-csv-20260420-3"
-      ],
-      "github_ref": "not-created",
-      "started_at": "2026-04-20T16:45:56Z",
-      "last_heartbeat_at": "2026-04-20T16:52:42Z",
-      "notes": "Switch England/Germany websites day delivery from txt to csv and verify with real day1 packaging"
     }
   ]
 }

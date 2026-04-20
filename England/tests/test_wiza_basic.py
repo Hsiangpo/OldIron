@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import sys
 import unittest
 from pathlib import Path
@@ -30,10 +31,16 @@ class EnglandWizaTests(unittest.TestCase):
             root = Path(tmp_dir)
             data_root = root / "output"
             delivery_root = root / "delivery"
-            site_dir = data_root / "wiza"
-            site_dir.mkdir(parents=True, exist_ok=True)
-            (site_dir / "websites.txt").write_text(
+            wiza_dir = data_root / "wiza"
+            wiza_dir.mkdir(parents=True, exist_ok=True)
+            (wiza_dir / "websites.txt").write_text(
                 "https://example.co.uk\nhttps://example.co.uk\nhttps://another.co.uk\n",
+                encoding="utf-8",
+            )
+            kompass_dir = data_root / "kompass"
+            kompass_dir.mkdir(parents=True, exist_ok=True)
+            (kompass_dir / "websites.txt").write_text(
+                "https://kompass-only.co.uk\n",
                 encoding="utf-8",
             )
             (delivery_root / "England_day001").mkdir(parents=True, exist_ok=True)
@@ -41,13 +48,28 @@ class EnglandWizaTests(unittest.TestCase):
             summary = build_delivery_bundle(data_root, delivery_root, "day1", delivery_kind="websites")
 
             package_dir = delivery_root / "England_websites_day001"
-            lines = (package_dir / "websites.txt").read_text(encoding="utf-8").splitlines()
+            with (package_dir / "wiza.csv").open("r", encoding="utf-8-sig", newline="") as fp:
+                wiza_rows = list(csv.DictReader(fp))
+            with (package_dir / "kompass.csv").open("r", encoding="utf-8-sig", newline="") as fp:
+                kompass_rows = list(csv.DictReader(fp))
 
         self.assertEqual(summary["day"], 1)
         self.assertEqual(summary["baseline_day"], 0)
-        self.assertEqual(summary["delta_websites"], 2)
-        self.assertEqual(summary["total_current_websites"], 2)
-        self.assertEqual(lines, ["https://another.co.uk", "https://example.co.uk"])
+        self.assertEqual(summary["delta_websites"], 3)
+        self.assertEqual(summary["total_current_websites"], 3)
+        self.assertEqual(summary["sites"], {
+            "kompass": {"qualified_current": 1, "delta": 1},
+            "wiza": {"qualified_current": 2, "delta": 2},
+        })
+        self.assertEqual(summary["skipped_sites_no_delta"], [])
+        self.assertFalse((package_dir / "websites.csv").exists())
+        self.assertEqual(wiza_rows, [
+            {"website": "https://another.co.uk"},
+            {"website": "https://example.co.uk"},
+        ])
+        self.assertEqual(kompass_rows, [
+            {"website": "https://kompass-only.co.uk"},
+        ])
 
 
 if __name__ == "__main__":

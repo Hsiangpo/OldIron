@@ -175,8 +175,10 @@
   - `Japan`: per-site day delivery. Write one CSV + one keys file per site under `Japan/output/delivery/Japan_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `Brazil`: per-site day delivery. Write one CSV + one keys file per site under `Brazil/output/delivery/Brazil_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `Germany`: per-site day delivery. Write one CSV + one keys file per site under `Germany/output/delivery/Germany_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+  - `Germany`: `python product.py Germany websites dayN` uses per-site website delivery under `Germany/output/delivery/Germany_websites_dayNNN/`. Write `<site>.csv` + `<site>.keys.txt` per site; do not merge all sites into one `websites.csv`.
   - `UnitedStates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedStates/output/delivery/UnitedStates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `UnitedArabEmirates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedArabEmirates/output/delivery/UnitedArabEmirates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+  - `England`: `python product.py England websites dayN` uses per-site website delivery under `England/output/delivery/England_websites_dayNNN/`. Write `<site>.csv` + `<site>.keys.txt` per site; do not merge all sites into one `websites.csv`.
 - Country-specific source overrides:
   - `Germany`: delivery keeps one CSV + one keys file per site. Same-site dedupe uses `company_name` only.
   - `Germany`: cross-site duplicates are allowed to appear in different site delivery files.
