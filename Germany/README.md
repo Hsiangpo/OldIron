@@ -1,7 +1,8 @@
 # Germany
 
-德国当前接入 1 个站点：
+德国当前接入 2 个站点：
 
+- `kompass`
 - `wiza`
 
 ## Runtime
@@ -9,6 +10,7 @@
 ```bash
 cd Germany
 python -m pip install -r requirements.txt
+python run.py kompass
 python run.py wiza
 ```
 
@@ -27,6 +29,7 @@ mkdir -p output/wiza/session
 运行命令：
 
 ```bash
+python run.py kompass list --max-pages 3
 python run.py wiza list
 python run.py wiza
 ```
@@ -36,6 +39,14 @@ python run.py wiza
 ```bash
 python run.py wiza list --max-pages 5 --list-workers 8
 ```
+
+`kompass` 运行说明：
+
+- `kompass` 只跑列表页，不进入公司详情页，也不跑 GMap/P3
+- `kompass` 默认读取 `Germany/.env` 里的 `KOMPASS_COOKIE_HEADER` 与 `KOMPASS_USER_AGENT`
+- 也支持把同样信息写入 `output/kompass/session/login_state.json`
+- 若命中 DataDome challenge，会直接报错停止，避免静默跑空
+- 运行后会生成 `output/kompass/websites.txt`
 
 ## Delivery
 

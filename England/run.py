@@ -39,6 +39,7 @@ USAGE_TEXT = """用法：
 
 站点：
   companyname  — 从 Excel 公司名单出发，GMap + 邮箱补充
+  kompass      — Kompass 英国官网列表
   wiza         — Wiza 英国网站列表
 """
 
@@ -96,6 +97,10 @@ def _dispatch(argv: list[str]) -> int:
         from england_crawler.sites.companyname.cli import run_companyname
 
         return run_companyname(rest)
+    if site == "kompass":
+        from england_crawler.sites.kompass.cli import run_site
+
+        return run_site(rest)
     if site == "wiza":
         from england_crawler.sites.wiza.cli import run_site
 

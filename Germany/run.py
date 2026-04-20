@@ -22,6 +22,7 @@ USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
 
 站点：
+  kompass                 — Kompass Germany
   wiza                    — Wiza Germany
 """
 
@@ -80,6 +81,10 @@ def _dispatch(argv: list[str]) -> int:
         return 1
     _load_project_env()
     site = argv[0].strip().lower()
+    if site == "kompass":
+        from germany_crawler.sites.kompass.cli import run_site
+
+        return run_site(argv[1:])
     if site == "wiza":
         from germany_crawler.sites.wiza.cli import run_site
 
