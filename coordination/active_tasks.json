@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-16T09:08:51Z",
+  "updated_at": "2026-04-20T13:11:21Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -23,6 +23,54 @@
       "started_at": "2026-04-09T11:52:51Z",
       "last_heartbeat_at": "2026-04-09T13:02:29Z",
       "notes": "Avoid eager fc_email imports so delivery can run when asyncio/_overlapped is broken on Windows"
+    },
+    {
+      "task_id": "england-germany-wiza-websites-20260420",
+      "status": "in_progress",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "England/src/england_crawler/sites/wiza",
+        "Germany/src/germany_crawler/sites/wiza",
+        "product.py",
+        "England/src/england_crawler/delivery.py",
+        "Germany/src/germany_crawler/delivery.py",
+        "England/run.py",
+        "England/tests",
+        "Germany/tests/test_wiza_basic.py",
+        "England/README.md",
+        "Germany/README.md"
+      ],
+      "planned_files": [
+        "product.py",
+        "England/run.py",
+        "England/src/england_crawler/delivery.py",
+        "England/src/england_crawler/sites/wiza/__init__.py",
+        "England/src/england_crawler/sites/wiza/client.py",
+        "England/src/england_crawler/sites/wiza/cli.py",
+        "England/src/england_crawler/sites/wiza/pipeline.py",
+        "England/tests/test_wiza_basic.py",
+        "England/README.md",
+        "Germany/src/germany_crawler/sites/wiza/cli.py",
+        "Germany/src/germany_crawler/sites/wiza/pipeline.py",
+        "Germany/src/germany_crawler/delivery.py",
+        "Germany/tests/test_wiza_basic.py",
+        "Germany/README.md",
+        "coordination/active_tasks.json",
+        "coordination/shared_locks.json"
+      ],
+      "shared_lock_ids": [
+        "lock-england-germany-wiza-websites-20260420-1",
+        "lock-england-germany-wiza-websites-20260420-2",
+        "lock-england-germany-wiza-websites-20260420-3"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-04-20T13:11:21Z",
+      "last_heartbeat_at": "2026-04-20T13:11:21Z",
+      "notes": "England+Germany Wiza website-only list and product websites dayN delivery"
     }
   ]
 }
