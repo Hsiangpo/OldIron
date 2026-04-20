@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-20T13:21:56Z",
+  "updated_at": "2026-04-20T16:45:56Z",
   "locks": [
     {
       "lock_id": "lock-fix-fc-email-init-20260409-1",
@@ -14,6 +14,45 @@
       "heartbeat_at": "2026-04-09T13:02:29Z",
       "expires_at": "2026-04-09T13:22:29Z",
       "notes": "Avoid eager fc_email imports so delivery can run when asyncio/_overlapped is broken on Windows"
+    },
+    {
+      "lock_id": "lock-fix-websites-delivery-csv-20260420-1",
+      "status": "locked",
+      "path": "product.py",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "fix-websites-delivery-csv-20260420",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-20T16:45:56Z",
+      "heartbeat_at": "2026-04-20T16:45:56Z",
+      "expires_at": "2026-04-20T17:45:56Z",
+      "notes": "Switch England/Germany websites day delivery from txt to csv and verify with real day1 packaging"
+    },
+    {
+      "lock_id": "lock-fix-websites-delivery-csv-20260420-2",
+      "status": "locked",
+      "path": "England/src/england_crawler/delivery.py",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "fix-websites-delivery-csv-20260420",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-20T16:45:56Z",
+      "heartbeat_at": "2026-04-20T16:45:56Z",
+      "expires_at": "2026-04-20T17:45:56Z",
+      "notes": "Switch England/Germany websites day delivery from txt to csv and verify with real day1 packaging"
+    },
+    {
+      "lock_id": "lock-fix-websites-delivery-csv-20260420-3",
+      "status": "locked",
+      "path": "Germany/src/germany_crawler/delivery.py",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "fix-websites-delivery-csv-20260420",
+      "github_ref": "not-created",
+      "locked_at": "2026-04-20T16:45:56Z",
+      "heartbeat_at": "2026-04-20T16:45:56Z",
+      "expires_at": "2026-04-20T17:45:56Z",
+      "notes": "Switch England/Germany websites day delivery from txt to csv and verify with real day1 packaging"
     }
   ]
 }
