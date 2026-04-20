@@ -73,7 +73,15 @@ def run_pipeline_list(
                 _save_checkpoint(output_dir, page_number - 1, "done")
                 store.update_checkpoint("list", page_number - 1, "done")
                 break
-            new_companies += store.upsert_companies(companies)
+            total_before = store.get_company_count()
+            store.upsert_companies(companies)
+            inserted = store.get_company_count() - total_before
+            if inserted <= 0:
+                LOGGER.warning("Kompass 页 %d 未新增任何公司，疑似分页回卷，停止续跑。", page_number)
+                _save_checkpoint(output_dir, page_number - 1, "done")
+                store.update_checkpoint("list", page_number - 1, "done")
+                break
+            new_companies += inserted
             processed_pages += 1
             _save_checkpoint(output_dir, page_number, "running")
             store.update_checkpoint("list", page_number, "running")

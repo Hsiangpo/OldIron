@@ -4,6 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +94,37 @@ class EnglandKompassTests(unittest.TestCase):
         self.assertEqual(result["pages"], 0)
         self.assertEqual(result["total_companies"], 3)
         self.assertEqual(lines, ["https://northernfab.co.uk", "https://www.acme.co.uk/"])
+
+    def test_run_pipeline_list_stops_when_page_repeats_without_new_companies(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            store = EnglandKompassStore(output_dir / "companies.db")
+            store.upsert_companies(
+                [
+                    {"company_name": "Acme Industrial Ltd", "website": "https://www.acme.co.uk/"},
+                    {"company_name": "Northern Fabrication Ltd", "website": "https://northernfab.co.uk"},
+                ]
+            )
+
+            class FakeClient:
+                def __init__(self, output_dir: Path, proxy: str) -> None:
+                    del output_dir, proxy
+
+                def fetch_list_page(self, page_number: int) -> str:
+                    self.page_number = page_number
+                    return SAMPLE_HTML
+
+                def close(self) -> None:
+                    return None
+
+            with patch("england_crawler.sites.kompass.pipeline.KompassClient", FakeClient):
+                result = run_pipeline_list(output_dir=output_dir, request_delay=0, proxy="", max_pages=0)
+
+            checkpoint = (output_dir / "list_checkpoint.json").read_text(encoding="utf-8")
+
+        self.assertEqual(result["pages"], 0)
+        self.assertEqual(result["new_companies"], 0)
+        self.assertIn('"status": "done"', checkpoint)
 
 
 if __name__ == "__main__":
