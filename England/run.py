@@ -39,12 +39,15 @@ USAGE_TEXT = """用法：
 
 站点：
   companyname  — 从 Excel 公司名单出发，GMap + 邮箱补充
+  wiza         — Wiza 英国网站列表
 """
 
 BASE_REQUIRED_MODULES = (
     ("dotenv", "python-dotenv"),
-    ("openpyxl", "openpyxl"),
     ("curl_cffi", "curl_cffi"),
+)
+COMPANYNAME_REQUIRED_MODULES = (
+    ("openpyxl", "openpyxl"),
     ("openai", "openai"),
 )
 
@@ -60,9 +63,12 @@ def _load_project_env() -> bool:
 
 
 def _ensure_runtime_dependencies(site: str) -> bool:
+    required_modules = list(BASE_REQUIRED_MODULES)
+    if site == "companyname":
+        required_modules.extend(COMPANYNAME_REQUIRED_MODULES)
     missing = [
         package_name
-        for module_name, package_name in BASE_REQUIRED_MODULES
+        for module_name, package_name in required_modules
         if importlib.util.find_spec(module_name) is None
     ]
     if not missing:
@@ -90,6 +96,10 @@ def _dispatch(argv: list[str]) -> int:
         from england_crawler.sites.companyname.cli import run_companyname
 
         return run_companyname(rest)
+    if site == "wiza":
+        from england_crawler.sites.wiza.cli import run_site
+
+        return run_site(rest)
 
     print(f"不支持的网站: {argv[0]}")
     print(USAGE_TEXT)

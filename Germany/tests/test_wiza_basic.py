@@ -17,6 +17,7 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
 from germany_crawler.sites.common import cli_common
+from germany_crawler.delivery import build_delivery_bundle
 from germany_crawler.sites.common.enrich import merge_representatives
 from germany_crawler.sites.common.enrich import normalize_person_name
 from germany_crawler.sites.common.enrich import normalize_website_url
@@ -185,6 +186,54 @@ class GermanyWizaTestCase(unittest.TestCase):
             rows = store.get_p1_pending()
         self.assertEqual(result["pages"], 0)
         self.assertEqual(rows, [])
+
+    def test_wiza_list_done_checkpoint_exports_unique_websites_txt(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            store = GermanyCompanyStore(output_dir / "companies.db")
+            store.upsert_companies(
+                [
+                    {"company_name": "Example GmbH", "website": "https://example.de"},
+                    {"company_name": "Example Holdings", "website": "https://example.de"},
+                    {"company_name": "Another GmbH", "website": "https://another.de"},
+                    {"company_name": "Blank GmbH", "website": ""},
+                ]
+            )
+            (output_dir / "list_checkpoint.json").write_text(
+                '{"page": 1, "search_after": [], "status": "done"}',
+                encoding="utf-8",
+            )
+
+            run_wiza_pipeline_list(output_dir=output_dir, request_delay=0, proxy="", max_pages=0, concurrency=1)
+
+            websites_path = output_dir / "websites.txt"
+            lines = websites_path.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(lines, ["https://another.de", "https://example.de"])
+
+    def test_germany_websites_delivery_uses_independent_day_sequence(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_root = root / "output"
+            delivery_root = root / "delivery"
+            site_dir = data_root / "wiza"
+            site_dir.mkdir(parents=True, exist_ok=True)
+            (site_dir / "websites.txt").write_text(
+                "https://example.de\nhttps://example.de\nhttps://another.de\n",
+                encoding="utf-8",
+            )
+            (delivery_root / "Germany_day001").mkdir(parents=True, exist_ok=True)
+
+            summary = build_delivery_bundle(data_root, delivery_root, "day1", delivery_kind="websites")
+
+            package_dir = delivery_root / "Germany_websites_day001"
+            lines = (package_dir / "websites.txt").read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(summary["day"], 1)
+        self.assertEqual(summary["baseline_day"], 0)
+        self.assertEqual(summary["delta_websites"], 2)
+        self.assertEqual(summary["total_current_websites"], 2)
+        self.assertEqual(lines, ["https://another.de", "https://example.de"])
 
 
 if __name__ == "__main__":

@@ -24,7 +24,9 @@ COUNTRY_BUILDERS: dict[str, str] = {
 
 def _usage() -> int:
     print("用法：python product.py <国家目录名> dayN")
+    print("或：python product.py <国家目录名> websites dayN")
     print("示例：python product.py England day1")
+    print("示例：python product.py England websites day1")
     return 1
 
 
@@ -43,31 +45,46 @@ def _import_country_builder(country: str):
     return getattr(module, "build_delivery_bundle", None)
 
 
-def _run_shared_country_delivery(country: str, day_label: str) -> int:
+def _run_shared_country_delivery(country: str, day_label: str, delivery_kind: str = "companies") -> int:
     builder = _import_country_builder(country)
     if builder is None:
         return _run_legacy_country_delivery(country, day_label)
     country_dir = _country_root(country)
     delivery_root = country_dir / "output" / "delivery"
     try:
-        summary = builder(
-            data_root=country_dir / "output",
-            delivery_root=delivery_root,
-            day_label=day_label,
-        )
+        if delivery_kind == "websites":
+            summary = builder(
+                data_root=country_dir / "output",
+                delivery_root=delivery_root,
+                day_label=day_label,
+                delivery_kind=delivery_kind,
+            )
+        else:
+            summary = builder(
+                data_root=country_dir / "output",
+                delivery_root=delivery_root,
+                day_label=day_label,
+            )
     except Exception as exc:
         print(f"执行失败：{exc}")
         return 1
     day = int(summary["day"])
+    delta_key = "delta_websites" if delivery_kind == "websites" else "delta_companies"
+    total_key = "total_current_websites" if delivery_kind == "websites" else "total_current_companies"
+    target_dir = (
+        delivery_root / f"{country}_websites_day{day:03d}"
+        if delivery_kind == "websites"
+        else delivery_root / f"{country}_day{day:03d}"
+    )
     print(
         "交付完成：day{day}，基线 day{baseline}，当日增量 {delta}，当前总量 {total}".format(
             day=day,
             baseline=int(summary["baseline_day"]),
-            delta=int(summary["delta_companies"]),
-            total=int(summary["total_current_companies"]),
+            delta=int(summary[delta_key]),
+            total=int(summary[total_key]),
         )
     )
-    print(f"目录：{delivery_root / f'{country}_day{day:03d}'}")
+    print(f"目录：{target_dir}")
     return 0
 
 
@@ -98,13 +115,19 @@ def _run_legacy_country_delivery(country: str, day_label: str) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
+    delivery_kind = "companies"
+    if len(argv) == 2:
+        country = str(argv[0] or "").strip()
+        day_label = str(argv[1] or "").strip()
+    elif len(argv) == 3 and str(argv[1] or "").strip().lower() == "websites":
+        country = str(argv[0] or "").strip()
+        day_label = str(argv[2] or "").strip()
+        delivery_kind = "websites"
+    else:
         return _usage()
-    country = str(argv[0] or "").strip()
-    day_label = str(argv[1] or "").strip()
     if not country or not day_label:
         return _usage()
-    return _run_shared_country_delivery(country, day_label)
+    return _run_shared_country_delivery(country, day_label, delivery_kind=delivery_kind)
 
 
 if __name__ == "__main__":

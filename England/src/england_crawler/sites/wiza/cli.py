@@ -16,7 +16,7 @@ SITE_ROOT = Path(__file__).resolve().parents[4]
 
 
 def run_site(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Wiza 德国网站列表采集")
+    parser = argparse.ArgumentParser(description="Wiza 英国网站列表采集")
     parser.add_argument("mode", nargs="?", default="list", choices=["list"])
     parser.add_argument("--delay", type=float, default=1.5)
     parser.add_argument("--proxy", type=str, default="")

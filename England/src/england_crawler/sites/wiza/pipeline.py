@@ -1,22 +1,38 @@
-"""Wiza Germany Pipeline 1。"""
+"""Wiza England Pipeline 1。"""
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import math
+import re
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from ..common.enrich import normalize_website_url
-from ..common.store import GermanyCompanyStore
 from .client import WizaClient
+from .store import EnglandWizaStore
 
 
-LOGGER = logging.getLogger("germany.wiza.pipeline")
+LOGGER = logging.getLogger("england.wiza.pipeline")
 CHECKPOINT_NAME = "list_checkpoint.json"
 PAGE_SIZE = 100
+_BAD_WEBSITE_HOSTS = {
+    "share.google",
+    "facebook.com",
+    "www.facebook.com",
+    "instagram.com",
+    "www.instagram.com",
+    "twitter.com",
+    "www.twitter.com",
+    "x.com",
+    "www.x.com",
+    "linkedin.com",
+    "www.linkedin.com",
+    "maps.app.goo.gl",
+}
 
 
 def run_pipeline_list(
@@ -27,15 +43,13 @@ def run_pipeline_list(
     max_pages: int = 0,
     concurrency: int = 8,
 ) -> dict[str, int]:
-    """抓取 Wiza Germany 公司列表，不进入站内联系人详情。"""
+    """抓取 Wiza United Kingdom 公司列表，仅保留网站。"""
+    del concurrency
     output_dir.mkdir(parents=True, exist_ok=True)
-    store = GermanyCompanyStore(output_dir / "companies.db")
-    finalized = _finalize_legacy_pending_p1(store)
+    store = EnglandWizaStore(output_dir / "companies.db")
     checkpoint = _load_checkpoint(output_dir)
     if checkpoint.get("status") == "done" and max_pages <= 0:
         _export_websites(output_dir, store)
-        if finalized:
-            LOGGER.info("Wiza 历史 P1 已停用并收口：%d 家", finalized)
         return {"pages": 0, "new_companies": 0, "total_companies": store.get_company_count()}
     client = WizaClient(output_dir, proxy)
     page_number = int(checkpoint.get("page") or 0) + 1
@@ -75,62 +89,44 @@ def run_pipeline_list(
     }
 
 
-def _finalize_legacy_pending_p1(store: GermanyCompanyStore) -> int:
-    """把旧库里遗留的站内详情任务统一收口为 done。"""
-    return store.finalize_pending_p1()
-
-
 def _build_company_records(items: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """列表页只保留公司基础字段与官网。"""
     results: list[dict[str, str]] = []
     for item in items:
-        record = _build_company_record(item)
-        if record["company_name"]:
-            results.append(record)
+        company_name = str(item.get("name") or "").strip()
+        website = _normalize_company_website(str(item.get("website") or "").strip())
+        if company_name:
+            results.append({"company_name": company_name, "website": website})
     return results
-
-
-def _build_company_record(item: dict[str, Any]) -> dict[str, str]:
-    company_name = str(item.get("name") or "").strip()
-    website = _normalize_company_website(str(item.get("website") or "").strip())
-    linkedin_url = _normalize_linkedin_url(str(item.get("linkedin_url") or "").strip())
-    return {
-        "company_name": company_name,
-        "source_pdl_id": str(item.get("pdl_id") or "").strip(),
-        "p1_status": "done",
-        "representative_p1": "",
-        "representative_final": "",
-        "website": website,
-        "address": str(item.get("location_name") or "").strip(),
-        "phone": "",
-        "emails": "",
-        "detail_url": linkedin_url or "https://wiza.co/app/prospect",
-        "summary": _build_summary(item),
-        "evidence_url": linkedin_url or "https://wiza.co/app/prospect",
-    }
 
 
 def _normalize_company_website(value: str) -> str:
     text = str(value or "").strip()
     if text and "://" not in text:
         text = f"https://{text}"
-    return normalize_website_url(text)
+    return _normalize_website_url(text)
 
 
-def _normalize_linkedin_url(value: str) -> str:
-    text = str(value or "").strip()
-    if text and "://" not in text:
-        text = f"https://{text}"
-    return text
-
-
-def _build_summary(item: dict[str, Any]) -> str:
-    parts = [
-        str(item.get("industry") or "").strip(),
-        str(item.get("size") or "").strip(),
-        str(item.get("inferred_revenue") or "").strip(),
-    ]
-    return " | ".join(part for part in parts if part)
+def _normalize_website_url(value: str) -> str:
+    text = html.unescape(str(value or "")).strip(" \t\r\n,;|<>[](){}'\"")
+    if not text:
+        return ""
+    matched = re.search(r"https?://[^\s<>'\"]+", text, flags=re.I)
+    if matched is not None:
+        text = matched.group(0)
+    text = text.rstrip(".,;:)")
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    host = str(parsed.netloc or "").strip().lower()
+    if not host or "+" in host or "." not in host or host in _BAD_WEBSITE_HOSTS:
+        return ""
+    suffix = host.rsplit(".", 1)[-1]
+    if not re.fullmatch(r"[a-z]{2,24}", suffix):
+        return ""
+    normalized = f"{parsed.scheme}://{host}{parsed.path or ''}"
+    if parsed.query:
+        normalized = f"{normalized}?{parsed.query}"
+    return normalized
 
 
 def _estimate_total_pages(total: int, total_relation: str, page_size: int) -> int:
@@ -159,16 +155,8 @@ def _save_checkpoint(output_dir: Path, page: int, search_after: list[Any], statu
         "search_after": list(search_after or []),
         "status": str(status or "running"),
     }
-    checkpoint_path = output_dir / CHECKPOINT_NAME
-    checkpoint_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (output_dir / CHECKPOINT_NAME).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _export_websites(output_dir: Path, store: GermanyCompanyStore) -> None:
-    websites = sorted(
-        {
-            str(item.get("website", "")).strip()
-            for item in store.export_all_companies()
-            if str(item.get("website", "")).strip()
-        }
-    )
-    (output_dir / "websites.txt").write_text("\n".join(websites), encoding="utf-8")
+def _export_websites(output_dir: Path, store: EnglandWizaStore) -> None:
+    (output_dir / "websites.txt").write_text("\n".join(store.export_websites()), encoding="utf-8")

@@ -42,7 +42,34 @@ class RootProductTests(unittest.TestCase):
             self.assertEqual(country_dir / "output" / "delivery", called["delivery_root"])
             self.assertEqual("day1", called["day_label"])
 
+    def test_main_runs_shared_builder_websites_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            country_dir = Path(tmp) / "England"
+            (country_dir / "output" / "delivery").mkdir(parents=True, exist_ok=True)
+            called: dict[str, object] = {}
+
+            def fake_builder(*, data_root: Path, delivery_root: Path, day_label: str, delivery_kind: str):
+                called["data_root"] = data_root
+                called["delivery_root"] = delivery_root
+                called["day_label"] = day_label
+                called["delivery_kind"] = delivery_kind
+                return {
+                    "day": 1,
+                    "baseline_day": 0,
+                    "delta_websites": 3,
+                    "total_current_websites": 5,
+                }
+
+            with patch.object(product, "_country_root", return_value=country_dir):
+                with patch.object(product, "_import_country_builder", return_value=fake_builder):
+                    code = product.main(["England", "websites", "day1"])
+
+            self.assertEqual(0, code)
+            self.assertEqual(country_dir / "output", called["data_root"])
+            self.assertEqual(country_dir / "output" / "delivery", called["delivery_root"])
+            self.assertEqual("day1", called["day_label"])
+            self.assertEqual("websites", called["delivery_kind"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

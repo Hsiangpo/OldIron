@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+import re
 import sys
 
 
@@ -20,8 +21,16 @@ from oldiron_core.delivery.sanitize import sanitize_record
 from germany_crawler.sites.common.store import GermanyCompanyStore
 
 
-def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) -> dict[str, object]:
+def build_delivery_bundle(
+    data_root: Path,
+    delivery_root: Path,
+    day_label: str,
+    *,
+    delivery_kind: str = "companies",
+) -> dict[str, object]:
     """构建 Germany 日交付包，各站点独立落盘。"""
+    if delivery_kind == "websites":
+        return _build_websites_delivery_bundle(data_root, delivery_root, day_label)
     day, _latest = validate_day_sequence(Path(delivery_root), "Germany", day_label)
     delivery_dir = Path(delivery_root) / f"Germany_day{day:03d}"
     baseline_day = max(day - 1, 0)
@@ -112,3 +121,72 @@ def _write_site_csv(csv_path: Path, records: list[dict[str, str]]) -> None:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
+
+
+def _build_websites_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) -> dict[str, object]:
+    day, latest = _validate_websites_day_sequence(Path(delivery_root), "Germany", day_label)
+    delivery_dir = Path(delivery_root) / f"Germany_websites_day{day:03d}"
+    baseline_day = max(day - 1, 0)
+    prepare_delivery_dir(delivery_dir)
+    current_websites = _load_current_websites(data_root)
+    baseline_keys = _load_websites_baseline_keys(Path(delivery_root), "Germany", baseline_day)
+    delta_websites = [item for item in current_websites if item not in baseline_keys]
+    (delivery_dir / "websites.txt").write_text("\n".join(delta_websites), encoding="utf-8")
+    (delivery_dir / "keys.txt").write_text("\n".join(current_websites), encoding="utf-8")
+    summary = {
+        "country": "Germany",
+        "day": day,
+        "baseline_day": 0 if latest == 0 else baseline_day,
+        "delta_websites": len(delta_websites),
+        "total_current_websites": len(current_websites),
+    }
+    (delivery_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
+
+
+def _validate_websites_day_sequence(delivery_root: Path, country_name: str, day_label: str) -> tuple[int, int]:
+    from oldiron_core.delivery.engine import parse_day_label
+
+    target_day = parse_day_label(day_label)
+    pattern = re.compile(rf"{re.escape(country_name)}_websites_day(\d{{3}})$")
+    existing_days = [
+        int(matched.group(1))
+        for item in delivery_root.iterdir()
+        if item.is_dir()
+        for matched in [pattern.fullmatch(item.name)]
+        if matched
+    ] if delivery_root.exists() else []
+    latest = max(existing_days, default=0)
+    if latest == 0 and target_day != 1:
+        raise ValueError("尚未有网站交付记录，首个交付只能执行 day1。")
+    if target_day < latest:
+        raise ValueError(f"网站第{target_day}天已交付，当前最新是第{latest}天。")
+    if target_day > latest + 1:
+        raise ValueError(f"网站交付只能执行 day{latest}（重跑）或 day{latest + 1}（新一天）。")
+    return target_day, latest
+
+
+def _load_current_websites(data_root: Path) -> list[str]:
+    websites: set[str] = set()
+    if not Path(data_root).exists():
+        return []
+    for site_dir in sorted(Path(data_root).iterdir()):
+        if not site_dir.is_dir() or site_dir.name == "delivery":
+            continue
+        websites_path = site_dir / "websites.txt"
+        if not websites_path.exists():
+            continue
+        for line in websites_path.read_text(encoding="utf-8").splitlines():
+            website = str(line or "").strip()
+            if website:
+                websites.add(website)
+    return sorted(websites)
+
+
+def _load_websites_baseline_keys(delivery_root: Path, country_name: str, baseline_day: int) -> set[str]:
+    if baseline_day <= 0:
+        return set()
+    keys_path = delivery_root / f"{country_name}_websites_day{baseline_day:03d}" / "keys.txt"
+    if not keys_path.exists():
+        return set()
+    return {line.strip() for line in keys_path.read_text(encoding="utf-8").splitlines() if line.strip()}
