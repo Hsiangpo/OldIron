@@ -39,6 +39,7 @@ BAD_WEBSITE_HOSTS = {
     "www.youtube.com",
     "kompass.com",
     "us.kompass.com",
+    "mise-en-relation.svaplus.fr",
     "geo.captcha-delivery.com",
     "ct.captcha-delivery.com",
 }
@@ -94,7 +95,12 @@ def run_pipeline_list(
 def parse_companies_from_html(page_html: str) -> list[dict[str, str]]:
     """从 Kompass 列表页 HTML 提取公司名与官网。"""
     html_text = str(page_html or "")
-    company_matches = list(COMPANY_LINK_RE.finditer(html_text))
+    company_matches = [
+        matched
+        for matched in COMPANY_LINK_RE.finditer(html_text)
+        if not str(matched.group("href") or "").strip().lower().startswith("/c/p/")
+        and not _clean_text(matched.group("label")).lower().startswith("see the ")
+    ]
     results: list[dict[str, str]] = []
     seen_keys: set[str] = set()
     for index, matched in enumerate(company_matches):

@@ -17,6 +17,7 @@ if str(SHARED_PARENT) not in sys.path:
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
+from germany_crawler.sites.kompass.client import _looks_like_challenge_response
 from germany_crawler.sites.kompass.client import build_list_url
 from germany_crawler.sites.kompass.pipeline import parse_companies_from_html
 from germany_crawler.sites.kompass.pipeline import run_pipeline_list
@@ -27,6 +28,7 @@ SAMPLE_HTML = """
 <section class="results">
   <article class="card">
     <a class="title" href="/c/berlin-tools/de123456/">Berlin Tools GmbH</a>
+    <a href="/c/p/berlin-tools/de123456/">See the 11 products</a>
     <a href="https://www.facebook.com/berlin-tools">Facebook</a>
     <a class="website" href="https://www.berlin-tools.de/">www.berlin-tools.de</a>
   </article>
@@ -34,6 +36,10 @@ SAMPLE_HTML = """
     <a class="title" href="/c/hamburg-industrie/de654321/">Hamburg Industrie GmbH</a>
     <div class="meta">Website</div>
     <a class="website" href="https://hamburg-industrie.de">hamburg-industrie.de</a>
+  </article>
+  <article class="card">
+    <a class="title" href="/c/placeholder-industrie/de999999/">Placeholder Industrie GmbH</a>
+    <a class="website" href="http://mise-en-relation.svaplus.fr/">redirect</a>
   </article>
 </section>
 """
@@ -53,6 +59,16 @@ class GermanyKompassTests(unittest.TestCase):
                 {"company_name": "Hamburg Industrie GmbH", "website": "https://hamburg-industrie.de"},
             ],
         )
+
+    def test_challenge_detection_keeps_valid_datadome_page(self) -> None:
+        valid_page = """
+        <html>
+          <head><script src="https://js.datadome.co/tags.js"></script></head>
+          <body><a href="/c/berlin-tools/de123456/">Berlin Tools GmbH</a></body>
+        </html>
+        """
+        self.assertFalse(_looks_like_challenge_response(200, valid_page))
+        self.assertTrue(_looks_like_challenge_response(403, "Please enable JS and disable any ad blocker"))
 
     def test_run_pipeline_list_done_checkpoint_exports_unique_websites(self) -> None:
         with TemporaryDirectory() as tmp_dir:

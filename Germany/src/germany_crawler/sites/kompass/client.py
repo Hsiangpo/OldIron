@@ -128,12 +128,10 @@ def _read_state_file(state_path: Path) -> dict[str, str]:
 
 def _looks_like_challenge_response(status_code: int, text: str) -> bool:
     body = str(text or "").lower()
-    return status_code in {403, 429} or any(
-        marker in body
-        for marker in (
-            "please enable js and disable any ad blocker",
-            "captcha-delivery.com",
-            "geo.captcha-delivery.com",
-            "datadome",
-        )
-    )
+    if status_code in {403, 429}:
+        return True
+    if "please enable js and disable any ad blocker" in body:
+        return True
+    if "captcha-delivery.com" in body and "/businessplace/z/" not in body and "/c/" not in body:
+        return True
+    return False
