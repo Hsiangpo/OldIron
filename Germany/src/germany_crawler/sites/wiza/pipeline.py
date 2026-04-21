@@ -17,6 +17,10 @@ from .client import WizaClient
 LOGGER = logging.getLogger("germany.wiza.pipeline")
 CHECKPOINT_NAME = "list_checkpoint.json"
 PAGE_SIZE = 100
+EXPORT_INTERVAL_PAGES = 10
+USAGE_LIMIT_WAIT_SECONDS = 60
+TRANSIENT_WAIT_SECONDS = 30
+CHALLENGE_WAIT_SECONDS = 300
 
 
 def run_pipeline_list(
@@ -44,7 +48,18 @@ def run_pipeline_list(
     new_companies = 0
     try:
         while True:
-            page = client.search_companies(search_after=search_after, page_size=PAGE_SIZE)
+            try:
+                page = client.search_companies(search_after=search_after, page_size=PAGE_SIZE)
+            except Exception as exc:  # noqa: BLE001
+                if _handle_retryable_error(
+                    output_dir=output_dir,
+                    store=store,
+                    exc=exc,
+                    page_number=page_number,
+                    search_after=search_after,
+                ):
+                    continue
+                raise
             if not page.items:
                 _save_checkpoint(output_dir, page_number - 1, [], "done")
                 store.update_checkpoint("list", page_number - 1, "done")
@@ -56,6 +71,8 @@ def run_pipeline_list(
             _save_checkpoint(output_dir, page_number, page.last_sort, "running")
             store.update_checkpoint("list", page_number, "running")
             LOGGER.info("Wiza 页 %d/%s：解析 %d 家", page_number, total_pages or "?", len(companies))
+            if _should_export_websites(processed_pages):
+                _export_websites(output_dir, store)
             if max_pages > 0 and processed_pages >= max_pages:
                 break
             if not page.last_sort:
@@ -67,7 +84,7 @@ def run_pipeline_list(
             time.sleep(max(request_delay, 0.0))
     finally:
         client.close()
-    _export_websites(output_dir, store)
+        _export_websites(output_dir, store)
     return {
         "pages": processed_pages,
         "new_companies": new_companies,
@@ -172,3 +189,92 @@ def _export_websites(output_dir: Path, store: GermanyCompanyStore) -> None:
         }
     )
     (output_dir / "websites.txt").write_text("\n".join(websites), encoding="utf-8")
+
+
+def _should_export_websites(processed_pages: int) -> bool:
+    return processed_pages <= 1 or processed_pages % EXPORT_INTERVAL_PAGES == 0
+
+
+def _handle_retryable_error(
+    *,
+    output_dir: Path,
+    store: GermanyCompanyStore,
+    exc: Exception,
+    page_number: int,
+    search_after: list[Any] | None,
+) -> bool:
+    wait_seconds = _resolve_retry_wait_seconds(exc)
+    if wait_seconds <= 0:
+        return False
+    checkpoint_page = max(page_number - 1, 0)
+    checkpoint_sort = list(search_after or [])
+    _save_checkpoint(output_dir, checkpoint_page, checkpoint_sort, "running")
+    store.update_checkpoint("list", checkpoint_page, "running")
+    _export_websites(output_dir, store)
+    LOGGER.warning(
+        "Wiza 列表命中%s，等待 %ds 后自动继续：page=%d error=%s",
+        _describe_retryable_error(exc),
+        wait_seconds,
+        page_number,
+        exc,
+    )
+    time.sleep(wait_seconds)
+    return True
+
+
+def _resolve_retry_wait_seconds(exc: Exception) -> int:
+    if _looks_like_usage_limit_error(exc):
+        return USAGE_LIMIT_WAIT_SECONDS
+    if _looks_like_challenge_hold_error(exc):
+        return CHALLENGE_WAIT_SECONDS
+    if _looks_like_transient_p1_error(exc):
+        return TRANSIENT_WAIT_SECONDS
+    return 0
+
+
+def _describe_retryable_error(exc: Exception) -> str:
+    if _looks_like_usage_limit_error(exc):
+        return "站点额度限制"
+    if _looks_like_challenge_hold_error(exc):
+        return "站点验证拦截"
+    return "临时上游异常"
+
+
+def _looks_like_usage_limit_error(exc: Exception) -> bool:
+    name = exc.__class__.__name__.lower()
+    message = str(exc or "").lower()
+    return "usagelimit" in name or "usage limit" in message or "额度已用尽" in message
+
+
+def _looks_like_transient_p1_error(exc: Exception) -> bool:
+    name = exc.__class__.__name__.lower()
+    message = str(exc or "").lower()
+    if name in {"jsondecodeerror", "sslerror", "connectionerror", "toomanyredirects", "timeout", "timeouterror"}:
+        return True
+    transient_markers = (
+        "expecting value: line 1 column 1",
+        "connection timed out",
+        "operation timed out",
+        "empty reply from server",
+        "maximum (30) redirects followed",
+        "tls connect error",
+        "invalid library",
+        "curl: (28)",
+        "curl: (35)",
+        "curl: (47)",
+        "curl: (52)",
+    )
+    return any(marker in message for marker in transient_markers)
+
+
+def _looks_like_challenge_hold_error(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    markers = (
+        "cf cookie 已失效",
+        "sorry, you have been blocked",
+        "attention required! | cloudflare",
+        "performing security verification",
+        "browser refresh",
+        "target page, context or browser has been closed",
+    )
+    return any(marker in message for marker in markers)
