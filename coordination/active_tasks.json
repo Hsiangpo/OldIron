@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-20T16:54:41Z",
+  "updated_at": "2026-04-21T00:19:11Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -43,7 +43,7 @@
       "shared_lock_ids": [],
       "github_ref": "not-created",
       "started_at": "2026-04-20T13:39:50Z",
-      "last_heartbeat_at": "2026-04-20T13:39:50Z",
+      "last_heartbeat_at": "2026-04-20T22:32:20Z",
       "notes": "Monitor long-running England/Germany Wiza website list jobs, inspect logs/DB, fix site-local issues and restart if needed"
     }
   ]

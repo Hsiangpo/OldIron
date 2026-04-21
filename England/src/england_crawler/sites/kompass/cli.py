@@ -18,6 +18,7 @@ def run_site(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Kompass 英国官网列表采集")
     parser.add_argument("mode", nargs="?", default="list", choices=["list"])
     parser.add_argument("--delay", type=float, default=1.5)
+    parser.add_argument("--concurrency", type=int, default=2)
     parser.add_argument("--proxy", type=str, default="")
     parser.add_argument("--max-pages", type=int, default=0)
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -32,6 +33,7 @@ def run_site(argv: list[str]) -> int:
         result = run_pipeline_list(
             output_dir=SITE_ROOT / "output" / "kompass",
             request_delay=args.delay,
+            concurrency=args.concurrency,
             proxy=args.proxy,
             max_pages=args.max_pages,
         )

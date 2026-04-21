@@ -76,22 +76,32 @@ class EnglandKompassStore:
         inserted = 0
         for company in companies:
             company_name = str(company.get("company_name", "")).strip()
+            website = str(company.get("website", "")).strip()
             record_id = _normalize_company_key(company_name)
             if not record_id or not company_name:
                 continue
             before = conn.total_changes
             conn.execute(
                 """
-                INSERT INTO companies (record_id, company_name, website, updated_at)
+                INSERT OR IGNORE INTO companies (record_id, company_name, website, updated_at)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(record_id) DO UPDATE SET
-                    company_name = excluded.company_name,
-                    website = CASE WHEN excluded.website != '' THEN excluded.website ELSE companies.website END,
-                    updated_at = excluded.updated_at
                 """,
-                (record_id, company_name, str(company.get("website", "")).strip(), _now_text()),
+                (record_id, company_name, website, _now_text()),
             )
-            inserted += int(conn.total_changes > before)
+            is_new_record = conn.total_changes > before
+            inserted += int(is_new_record)
+            if is_new_record:
+                continue
+            conn.execute(
+                """
+                UPDATE companies
+                SET company_name = ?,
+                    website = CASE WHEN ? != '' THEN ? ELSE website END,
+                    updated_at = ?
+                WHERE record_id = ?
+                """,
+                (company_name, website, website, _now_text(), record_id),
+            )
         conn.commit()
         return inserted
 

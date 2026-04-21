@@ -34,10 +34,19 @@ class KompassChallengeError(RuntimeError):
 
 def build_list_url(page_number: int) -> str:
     """构造分页 URL。"""
+    return build_seed_page_url(f"https://us.kompass.com/businessplace/z/{COUNTRY_CODE}/", page_number)
+
+
+def build_seed_page_url(seed_url: str, page_number: int) -> str:
+    """基于种子 URL 构造分页 URL。"""
+    base = str(seed_url or "").strip()
+    if not base:
+        return ""
+    base = base if base.endswith("/") else f"{base}/"
     page = max(int(page_number or 1), 1)
     if page == 1:
-        return f"https://us.kompass.com/businessplace/z/{COUNTRY_CODE}/"
-    return f"https://us.kompass.com/businessplace/z/{COUNTRY_CODE}/page-{page}/"
+        return base
+    return f"{base}page-{page}/"
 
 
 class KompassClient:
@@ -70,10 +79,14 @@ class KompassClient:
 
     def fetch_list_page(self, page_number: int) -> str:
         """抓取单页 HTML。"""
-        url = build_list_url(page_number)
+        return self.fetch_page(build_list_url(page_number), referer=build_list_url(max(page_number - 1, 1)))
+
+    def fetch_page(self, url: str, *, referer: str = "") -> str:
+        """抓取任意 Kompass 列表页 HTML。"""
+        target_url = str(url or "").strip()
         response = self._session.get(
-            url,
-            headers={"Referer": build_list_url(max(page_number - 1, 1))},
+            target_url,
+            headers={"Referer": referer or target_url},
             timeout=30,
             allow_redirects=True,
         )
@@ -82,13 +95,16 @@ class KompassClient:
             return ""
         if _looks_like_challenge_response(response.status_code, text):
             raise KompassChallengeError(
-                "Kompass 当前返回 DataDome challenge。"
-                " 请先用浏览器打开列表页通过一次验证，"
+                "Kompass 当前返回验证或封锁页。"
+                " 当前出口 IP 可能已被拦截，"
+                " 请先用浏览器确认该 IP 能正常打开列表页，"
+                " 必要时更换出口 IP 后再重试。"
+                " 通过浏览器放行后，"
                 f" 再把 Cookie 写入 .env 的 {ENV_COOKIE_HEADER}"
                 f" 或 output/kompass/session/{LOGIN_STATE_NAME} 后重试。"
             )
         if response.status_code >= 400:
-            raise RuntimeError(f"Kompass 请求失败：status={response.status_code} url={url}")
+            raise RuntimeError(f"Kompass 请求失败：status={response.status_code} url={target_url}")
         return text
 
 
@@ -130,7 +146,11 @@ def _looks_like_challenge_response(status_code: int, text: str) -> bool:
     body = str(text or "").lower()
     if status_code in {403, 429}:
         return True
+    if status_code == 405 and ("support.bip@kompass.com" in body or "please contact your local kompass" in body):
+        return True
     if "please enable js and disable any ad blocker" in body:
+        return True
+    if "ebolaccess/kickass" in body:
         return True
     if "captcha-delivery.com" in body and "/businessplace/z/" not in body and "/c/" not in body:
         return True
