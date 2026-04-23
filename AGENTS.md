@@ -177,6 +177,8 @@
   - `Germany`: per-site day delivery. Write one CSV + one keys file per site under `Germany/output/delivery/Germany_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `Germany`: `python product.py Germany websites dayN` uses per-site website delivery under `Germany/output/delivery/Germany_websites_dayNNN/`. Write `<site>.csv` + `<site>.keys.txt` per site; do not merge all sites into one `websites.csv`.
   - `UnitedStates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedStates/output/delivery/UnitedStates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
+  - `UnitedStates`: `python product.py UnitedStates websites dayN` uses per-site website delivery under `UnitedStates/output/delivery/UnitedStates_websites_dayNNN/`. Write `<site>.csv` + `<site>.keys.txt` per site; do not merge all sites into one `websites.csv`.
+  - `Italy`: `python product.py Italy websites dayN` uses per-site website delivery under `Italy/output/delivery/Italy_websites_dayNNN/`. Write `<site>.csv` + `<site>.keys.txt` per site; do not merge all sites into one `websites.csv`.
   - `UnitedArabEmirates`: per-site day delivery. Write one CSV + one keys file per site under `UnitedArabEmirates/output/delivery/UnitedArabEmirates_dayNNN/`. Do not merge sites into one country-level `companies.csv`.
   - `England`: `python product.py England websites dayN` uses per-site website delivery under `England/output/delivery/England_websites_dayNNN/`. Write `<site>.csv` + `<site>.keys.txt` per site; do not merge all sites into one `websites.csv`.
 - Country-specific source overrides:
@@ -184,6 +186,10 @@
   - `Germany`: cross-site duplicates are allowed to appear in different site delivery files.
   - `Germany`: `wiza` 不跑 GMap。
   - `Germany`: `wiza` 的 `P1` 不抓站内联系人，代表人只来自 `P3` 官网 LLM。
+  - `UnitedStates`: `wiza` 只抓官网列表，不进入详情页，不跑 GMap/P2/P3。
+  - `UnitedStates`: `wiza` 的网站交付按完整 URL 去重。
+  - `Italy`: `wiza` 只抓官网列表，不进入详情页，不跑 GMap/P2/P3。
+  - `Italy`: `wiza` 的网站交付按完整 URL 去重。
   - `UnitedArabEmirates`: delivery keeps one CSV + one keys file per site. Same-site dedupe uses `company_name` only.
   - `UnitedArabEmirates`: cross-site duplicates are allowed to appear in different site delivery files.
   - `UnitedArabEmirates`: representative output keeps `P1;P3` order. If `P1` is empty, keep only `P3`.
@@ -266,6 +272,7 @@ This repository is a multi-country company data collection workspace. Each count
 - `India/`
 - `Indonesia/`
 - `Japan/`
+- `Italy/`
 - `UnitedArabEmirates/`
 - `Taiwan/`
 - `UnitedStates/`
@@ -295,6 +302,7 @@ There is no single root build step. Work inside the target country directory for
 - `cd Germany && python -m pip install -r requirements.txt`
 - `cd Germany && python run.py wiza`
 - `python product.py Germany day1`
+- `python product.py Germany websites day1`
 - `cd Brazil && python -m pip install -r requirements.txt`
 - `cd Brazil && python run.py dnb`
 - `python product.py Brazil day1`
@@ -325,10 +333,16 @@ There is no single root build step. Work inside the target country directory for
 - `python product.py UnitedArabEmirates day1`
 - `cd UnitedStates && python -m pip install -r requirements.txt`
 - `cd UnitedStates && python run.py dnb`
+- `cd UnitedStates && python run.py wiza`
 - `python product.py UnitedStates day1`
+- `python product.py UnitedStates websites day1`
+- `cd Italy && python -m pip install -r requirements.txt`
+- `cd Italy && python run.py wiza`
+- `python product.py Italy websites day1`
 - `cd Japan && python -m pytest test -v`
 - `cd Taiwan && python -m unittest tests -v`
 - `cd UnitedStates && python -m unittest tests -v`
+- `cd Italy && python -m unittest tests -v`
 - `cd Thailand && pytest tests -q`
 
 ## Coding Style And Naming Conventions

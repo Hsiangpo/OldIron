@@ -1,5 +1,3 @@
-"""美国 run.py 分发测试。"""
-
 from __future__ import annotations
 
 import importlib.util
@@ -21,7 +19,7 @@ if str(SHARED_DIR) not in sys.path:
 
 
 def _load_run_module():
-    spec = importlib.util.spec_from_file_location("unitedstates_run", ROOT / "run.py")
+    spec = importlib.util.spec_from_file_location("italy_run", ROOT / "run.py")
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -29,22 +27,10 @@ def _load_run_module():
 
 
 class RunDispatchTests(unittest.TestCase):
-    def test_dispatches_to_dnb_cli(self) -> None:
-        run_module = _load_run_module()
-        with patch.object(run_module.importlib.util, "find_spec", return_value=object()):
-            with patch("unitedstates_crawler.sites.dnb.cli.run_dnb", return_value=0) as run_dnb:
-                result = run_module._dispatch(["dnb"])
-        self.assertEqual(0, result)
-        run_dnb.assert_called_once_with([])
-
     def test_dispatches_to_wiza_cli(self) -> None:
         run_module = _load_run_module()
         with patch.object(run_module.importlib.util, "find_spec", return_value=object()):
-            with patch("unitedstates_crawler.sites.wiza.cli.run_site", return_value=0) as run_site:
+            with patch("italy_crawler.sites.wiza.cli.run_site", return_value=0) as run_site:
                 result = run_module._dispatch(["wiza", "list"])
         self.assertEqual(0, result)
         run_site.assert_called_once_with(["list"])
-
-
-if __name__ == "__main__":
-    unittest.main()

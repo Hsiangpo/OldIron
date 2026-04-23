@@ -22,15 +22,22 @@ USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
 
 站点：
-  dnb  — DNB 美国企业目录
+  dnb   — DNB 美国企业目录
+  wiza  — Wiza 美国官网列表
 """
 
-BASE_REQUIRED_MODULES = (
+COMMON_REQUIRED_MODULES = (
     ("dotenv", "python-dotenv"),
     ("curl_cffi", "curl_cffi"),
-    ("playwright", "playwright"),
-    ("openai", "openai"),
 )
+SITE_REQUIRED_MODULES = {
+    "dnb": (
+        *COMMON_REQUIRED_MODULES,
+        ("playwright", "playwright"),
+        ("openai", "openai"),
+    ),
+    "wiza": COMMON_REQUIRED_MODULES,
+}
 
 
 def _load_project_env() -> bool:
@@ -43,10 +50,10 @@ def _load_project_env() -> bool:
     return True
 
 
-def _ensure_runtime_dependencies() -> bool:
+def _ensure_runtime_dependencies(required_modules: tuple[tuple[str, str], ...]) -> bool:
     missing: list[str] = []
     incompatible: list[str] = []
-    for module_name, package_name in BASE_REQUIRED_MODULES:
+    for module_name, package_name in required_modules:
         if importlib.util.find_spec(module_name) is None:
             missing.append(package_name)
             continue
@@ -81,16 +88,23 @@ def _dispatch(argv: list[str]) -> int:
         _load_project_env()
         print(USAGE_TEXT)
         return 0
-    if not _ensure_runtime_dependencies():
+    site = argv[0].strip().lower()
+    required_modules = SITE_REQUIRED_MODULES.get(site)
+    if required_modules is None:
+        print(f"不支持的网站: {argv[0]}")
+        print(USAGE_TEXT)
+        return 1
+    if not _ensure_runtime_dependencies(required_modules):
         return 1
     _load_project_env()
-    site = argv[0].strip().lower()
     if site == "dnb":
         from unitedstates_crawler.sites.dnb.cli import run_dnb
 
         return run_dnb(argv[1:])
-    print(f"不支持的网站: {argv[0]}")
-    print(USAGE_TEXT)
+    if site == "wiza":
+        from unitedstates_crawler.sites.wiza.cli import run_site
+
+        return run_site(argv[1:])
     return 1
 
 

@@ -116,6 +116,24 @@ class DeliveryTests(unittest.TestCase):
             self.assertFalse((root / "delivery" / "UnitedStates_day002" / "dnb.csv").exists())
             self.assertFalse((root / "delivery" / "UnitedStates_day002" / "dnb.keys.txt").exists())
 
+    def test_websites_day1_outputs_per_site_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            wiza_dir = root / "output" / "wiza"
+            wiza_dir.mkdir(parents=True)
+            (wiza_dir / "websites.txt").write_text(
+                "https://example.com\nhttps://example.com\nhttps://acme.com\n",
+                encoding="utf-8",
+            )
+
+            summary = build_delivery_bundle(root / "output", root / "delivery", "day1", delivery_kind="websites")
+
+            package_dir = root / "delivery" / "UnitedStates_websites_day001"
+            self.assertEqual(2, summary["delta_websites"])
+            self.assertEqual(2, summary["total_current_websites"])
+            self.assertTrue((package_dir / "wiza.csv").exists())
+            self.assertTrue((package_dir / "wiza.keys.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

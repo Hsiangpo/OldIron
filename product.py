@@ -14,6 +14,7 @@ COUNTRY_BUILDERS: dict[str, str] = {
     "Brazil": "brazil_crawler.delivery",
     "Denmark": "denmark_crawler.delivery",
     "Germany": "germany_crawler.delivery",
+    "Italy": "italy_crawler.delivery",
     "Finland": "finland_crawler.delivery",
     "Japan": "japan_crawler.delivery",
     "Taiwan": "taiwan_crawler.delivery",

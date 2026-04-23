@@ -9,7 +9,7 @@
 - 一个站点可以拆多阶段流水线
 - 不同国家可以复用同一类能力（官网补齐、联系方式提取、增量交付等）
 
-当前仓库已经覆盖英国、丹麦、德国、韩国、日本、印尼、马来西亚、泰国、印度，以及新接入的美国、台湾、阿联酋方向。
+当前仓库已经覆盖英国、丹麦、德国、韩国、日本、印尼、马来西亚、泰国、印度，以及新接入的美国、意大利、台湾、阿联酋方向。
 
 ## 当前开发口径
 
@@ -37,8 +37,9 @@
 | Denmark | `proff`、`virk` | Proff/Virk → GMap → 协议爬虫+LLM → delivery | 站点直出优先，缺邮箱用协议爬虫+LLM 补强 |
 | Brazil | `dnb` | DNB 列表 API → 隐藏详情 API → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
 | England | `companyname` | Excel 名单 → GMap → Companies House officers → 规则邮箱提取 → delivery | 代表人来自 Companies House，邮箱走规则提取 |
-| Germany | `wiza` | Wiza 登录态协议列表 → 官网协议爬虫+LLM → per-site delivery | 官网邮箱走规则，代表人只来自官网 LLM |
-| UnitedStates | `dnb` | DNB API → DNB 详情 → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
+| Germany | `wiza` | Wiza 登录态协议列表 → 官网列表落盘 → `websites dayN` per-site delivery | 仅交付官网列表，不进详情，不跑 P2/P3 |
+| UnitedStates | `dnb`、`wiza` | DNB 仍走详情补齐链路；`wiza` 复用登录态抓官网列表并直接走 `websites dayN` | `wiza` 只交付官网列表，不跑详情/P2/P3 |
+| Italy | `wiza` | Wiza 登录态协议列表 → 官网列表落盘 → `websites dayN` per-site delivery | 仅交付官网列表，不进详情，不跑 P2/P3 |
 | UnitedArabEmirates | `dubaibusinessdirectory`、`hidubai`、`dayofdubai`、`dubaibizdirectory`、`wiza` | UAE 目录站点仍走目录页/接口/协议详情 → GMap → 协议爬虫+LLM；`wiza` 复用登录态抓列表后，直接走 Snov 域名邮箱 + Snov 人员列表 + LLM 选关键联系人 → per-site delivery | `wiza` 不走官网规则邮箱/官网代表人链路 |
 | Taiwan | `ieatpe` | 会员协议接口 → 详情接口 → delivery | 站点直出 |
 | SouthKorea | `catch`、`incheon`、`dart` 等 | 列表/详情 → 官网 → 邮箱 → 交付 | Snov 为主 |
@@ -201,10 +202,15 @@ OldIron/
 │   ├── src/germany_crawler/
 │   │   └── sites/wiza/
 │   └── output/
+├── Italy/                       # 意大利项目
+│   ├── run.py
+│   ├── src/italy_crawler/
+│   │   └── sites/wiza/
+│   └── output/
 ├── UnitedStates/                # 美国项目
 │   ├── run.py
 │   ├── src/unitedstates_crawler/
-│   │   └── sites/dnb/
+│   │   └── sites/{dnb,wiza}/
 │   └── output/
 ├── UnitedArabEmirates/          # 阿联酋项目
 │   ├── run.py
