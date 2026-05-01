@@ -1,34 +1,36 @@
-"""Verif 浏览器补充客户端。"""
+"""Verif 协议客户端。"""
 
 from __future__ import annotations
 
+import html
+import json
 import logging
+import os
 import re
-import threading
-import time
+import unicodedata
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
-from urllib.parse import urljoin
 from urllib.parse import urlparse
 
-from playwright.sync_api import BrowserContext
-from playwright.sync_api import Page
-from playwright.sync_api import sync_playwright
+from curl_cffi import requests as cffi_requests
 
 
 LOGGER = logging.getLogger(__name__)
-_CHALLENGE_TITLE_HINTS = ("just a moment", "请稍候")
-_CHALLENGE_TEXT_HINTS = (
-    "performing security verification",
-    "正在进行安全验证",
-    "enable javascript and cookies to continue",
+LOGIN_STATE_NAME = "login_state.json"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 )
-_RESULT_READY_HINTS = (
-    "results displayed",
-    "0 results displayed",
-    "sort by",
-)
+DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7"
+ENV_COOKIE_HEADER = "VERIF_COOKIE_HEADER"
+ENV_USER_AGENT = "VERIF_USER_AGENT"
+ENV_XSRF_TOKEN = "VERIF_XSRF_TOKEN"
+ENV_ACCEPT_LANGUAGE = "VERIF_ACCEPT_LANGUAGE"
+REQUIRED_COOKIE_KEYS = ("cf_clearance", "XSRF-TOKEN")
 _WEBSITE_LABELS = ("website", "web site")
 _REPRESENTATIVE_LABELS = (
     "most senior leader",
@@ -46,6 +48,14 @@ class VerifChallengeError(RuntimeError):
 
 
 @dataclass(slots=True)
+class RuntimeLoginState:
+    cookie_header: str
+    user_agent: str
+    xsrf_token: str
+    accept_language: str
+
+
+@dataclass(slots=True)
 class VerifCompanyMatch:
     company_name: str
     representative: str
@@ -56,6 +66,37 @@ class VerifCompanyMatch:
 
 def normalize_company_key(value: str) -> str:
     return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
+
+
+def pick_best_company_hit(hits: list[dict[str, Any]], target_company_name: str) -> dict[str, Any] | None:
+    target_key = normalize_company_key(target_company_name)
+    best_hit: dict[str, Any] | None = None
+    best_score = -1
+    for hit in hits:
+        company_name = str(
+            hit.get("companyName")
+            or hit.get("companyNameOriginal")
+            or hit.get("primaryName")
+            or hit.get("primaryNameOriginal")
+            or ""
+        ).strip()
+        label_key = normalize_company_key(company_name)
+        if not label_key:
+            continue
+        score = 0
+        if label_key == target_key and target_key:
+            score += 1000
+        if target_key and target_key in label_key:
+            score += 200
+        if label_key and label_key in target_key:
+            score += 100
+        score += len(set(_tokenize_name(label_key)) & set(_tokenize_name(target_key))) * 10
+        if str(hit.get("operatingStatusDescription", "")).strip().lower() == "active":
+            score += 20
+        if score > best_score:
+            best_score = score
+            best_hit = hit
+    return best_hit
 
 
 def pick_best_company_link(items: list[tuple[str, str]], target_company_name: str) -> tuple[str, str] | None:
@@ -73,158 +114,236 @@ def pick_best_company_link(items: list[tuple[str, str]], target_company_name: st
             score += 200
         if label_key and label_key in target_key:
             score += 100
-        shared = len(set(_tokenize_name(label_key)) & set(_tokenize_name(target_key)))
-        score += shared * 10
+        score += len(set(_tokenize_name(label_key)) & set(_tokenize_name(target_key))) * 10
         if score > best_score:
             best_score = score
             best_item = (label.strip(), href.strip())
     return best_item
 
 
+def build_company_url(company_name: str, company_id: str) -> str:
+    slug = _slugify_company_name(company_name)
+    return f"https://www.verif.com/en/company/{slug}-{company_id}/"
+
+
 def extract_company_fields_from_text(page_text: str) -> tuple[str, str]:
-    lines = [line.strip(" \t\r\n:|") for line in str(page_text or "").splitlines() if line.strip(" \t\r\n:|")]
+    lines = _normalize_page_lines(page_text)
     website = _extract_value_after_labels(lines, _WEBSITE_LABELS, normalize=_normalize_website)
     representative = _extract_value_after_labels(lines, _REPRESENTATIVE_LABELS, normalize=_normalize_person)
     return website, representative
 
 
 class VerifClient:
-    """使用持久浏览器 profile 访问 Verif。"""
+    """使用 pc 重放 Verif 搜索与公司页请求。"""
 
     def __init__(
         self,
         *,
-        profile_dir: Path,
+        output_dir: Path,
         proxy_url: str,
-        timeout_seconds: float = 180.0,
-        headless: bool = False,
     ) -> None:
-        self._profile_dir = profile_dir
-        self._proxy_url = proxy_url
-        self._timeout_seconds = max(float(timeout_seconds or 0.0), 30.0)
-        self._headless = bool(headless)
-        self._lock = threading.RLock()
-        self._playwright = None
-        self._context: BrowserContext | None = None
-        self._page: Page | None = None
+        self._output_dir = Path(output_dir)
+        self._state_path = self._output_dir / "session" / LOGIN_STATE_NAME
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state = load_runtime_login_state(self._state_path)
+        _ensure_required_cookies(self._state.cookie_header)
+        self._proxy = str(proxy_url or "").strip()
+        self._session = _build_session(self._proxy, self._state.user_agent)
 
     def close(self) -> None:
-        with self._lock:
-            if self._context is not None:
-                self._context.close()
-                self._context = None
-            if self._playwright is not None:
-                self._playwright.stop()
-                self._playwright = None
-            self._page = None
+        self._save_state()
+        self._session.close()
 
     def search_company(self, company_name: str) -> VerifCompanyMatch | None:
         query = str(company_name or "").strip()
         if not query:
             return None
-        with self._lock:
-            page = self._ensure_page()
-            search_url = f"https://www.verif.com/en/searchResult/?search={quote(query)}&country=IT"
-            self._goto_and_wait_ready(page, search_url, expect_company_page=False)
-            items = self._collect_search_links(page)
-            if not items:
-                return None
-            picked = pick_best_company_link(items, query)
-            if picked is None:
-                return None
-            picked_name, company_url = picked
-            self._goto_and_wait_ready(page, company_url, expect_company_page=True)
-            page_text = page.locator("body").inner_text(timeout=5000)
-            website, representative = extract_company_fields_from_text(page_text)
-            return VerifCompanyMatch(
-                company_name=picked_name or query,
-                representative=representative,
-                website=website,
-                company_url=page.url,
-                search_url=search_url,
-            )
+        hits = self._search_company_hits(query)
+        if not hits:
+            return None
+        hit = pick_best_company_hit(hits, query)
+        if hit is None:
+            return None
+        matched_name = str(
+            hit.get("companyName")
+            or hit.get("companyNameOriginal")
+            or hit.get("primaryName")
+            or hit.get("primaryNameOriginal")
+            or query
+        ).strip() or query
+        company_id = str(hit.get("id") or hit.get("_id") or hit.get("worldbaseId") or "").strip()
+        if not company_id:
+            return None
+        company_url = build_company_url(matched_name, company_id)
+        page_text = self._fetch_company_page_text(company_url, query)
+        website, representative = extract_company_fields_from_text(page_text)
+        return VerifCompanyMatch(
+            company_name=matched_name,
+            representative=representative,
+            website=website,
+            company_url=company_url,
+            search_url=_search_url(query),
+        )
 
-    def _ensure_page(self) -> Page:
-        if self._page is not None:
-            return self._page
-        self._profile_dir.mkdir(parents=True, exist_ok=True)
-        self._playwright = sync_playwright().start()
-        launch_kwargs = {
-            "user_data_dir": str(self._profile_dir),
-            "headless": self._headless,
-            "channel": "chrome",
-            "ignore_https_errors": True,
-            "viewport": {"width": 1440, "height": 960},
+    def _search_company_hits(self, query: str) -> list[dict[str, Any]]:
+        url = _search_api_url(query)
+        response = self._session.get(
+            url,
+            headers=_build_api_headers(self._state, referer=_search_url(query)),
+            timeout=30,
+            verify=False,
+        )
+        self._save_state()
+        if response.status_code in {403, 429}:
+            raise VerifChallengeError(f"Verif search blocked: status={response.status_code}")
+        response.raise_for_status()
+        payload = response.json()
+        hits = payload.get("hits") if isinstance(payload, dict) else None
+        return [item for item in hits or [] if isinstance(item, dict)]
+
+    def _fetch_company_page_text(self, company_url: str, query: str) -> str:
+        response = self._session.get(
+            company_url,
+            headers=_build_page_headers(self._state, referer=_search_url(query)),
+            timeout=30,
+            verify=False,
+        )
+        self._save_state()
+        if response.status_code in {403, 429}:
+            raise VerifChallengeError(f"Verif company page blocked: status={response.status_code}")
+        response.raise_for_status()
+        return response.text
+
+    def _save_state(self) -> None:
+        save_runtime_login_state(self._state_path, self._state)
+
+
+def load_runtime_login_state(state_path: Path) -> RuntimeLoginState:
+    stored = _read_state_file(state_path)
+    cookie_header = str(os.getenv(ENV_COOKIE_HEADER, "") or stored.get("cookie_header") or "").strip()
+    xsrf_token = str(os.getenv(ENV_XSRF_TOKEN, "") or stored.get("xsrf_token") or "").strip()
+    if not xsrf_token:
+        xsrf_token = parse_cookie_header(cookie_header).get("XSRF-TOKEN", "")
+    return RuntimeLoginState(
+        cookie_header=cookie_header,
+        user_agent=str(os.getenv(ENV_USER_AGENT, "") or stored.get("user_agent") or DEFAULT_USER_AGENT).strip(),
+        xsrf_token=xsrf_token,
+        accept_language=str(os.getenv(ENV_ACCEPT_LANGUAGE, "") or stored.get("accept_language") or DEFAULT_ACCEPT_LANGUAGE).strip(),
+    )
+
+
+def save_runtime_login_state(state_path: Path, state: RuntimeLoginState) -> None:
+    payload = {
+        "cookie_header": state.cookie_header,
+        "user_agent": state.user_agent,
+        "xsrf_token": state.xsrf_token,
+        "accept_language": state.accept_language,
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def parse_cookie_header(cookie_text: str) -> dict[str, str]:
+    results: dict[str, str] = {}
+    for chunk in str(cookie_text or "").split(";"):
+        item = str(chunk or "").strip()
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        clean_key = str(key or "").strip()
+        clean_value = str(value or "").strip()
+        if clean_key and clean_value:
+            results[clean_key] = clean_value
+    return results
+
+
+def _ensure_required_cookies(cookie_header: str) -> None:
+    cookies = parse_cookie_header(cookie_header)
+    missing = [key for key in REQUIRED_COOKIE_KEYS if not str(cookies.get(key) or "").strip()]
+    if not missing:
+        return
+    raise RuntimeError(
+        "Verif 缺少可用登录态。"
+        f" 至少需要这些 cookie：{', '.join(missing)}。"
+        f" 请刷新 {Path('output/dnb/session') / LOGIN_STATE_NAME} 或 .env 里的 {ENV_COOKIE_HEADER}。"
+    )
+
+
+def _read_state_file(state_path: Path) -> dict[str, Any]:
+    if not state_path.exists():
+        return {}
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        LOGGER.warning("Verif 登录态文件解析失败：%s", state_path)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _build_session(proxy: str, user_agent: str) -> cffi_requests.Session:
+    proxies = {"http": proxy, "https": proxy} if proxy else {}
+    session = cffi_requests.Session(impersonate="chrome136", proxies=proxies)
+    session.trust_env = False
+    session.headers.update(
+        {
+            "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
+            "User-Agent": user_agent or DEFAULT_USER_AGENT,
         }
-        if self._proxy_url:
-            launch_kwargs["proxy"] = {"server": self._proxy_url}
-        self._context = self._playwright.chromium.launch_persistent_context(**launch_kwargs)
-        self._page = self._context.new_page()
-        return self._page
-
-    def _goto_and_wait_ready(self, page: Page, url: str, *, expect_company_page: bool) -> None:
-        page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        deadline = time.monotonic() + self._timeout_seconds
-        last_title = ""
-        last_text = ""
-        while time.monotonic() < deadline:
-            time.sleep(4)
-            last_title = page.title()
-            last_text = page.locator("body").inner_text(timeout=5000)
-            if _looks_like_verif_challenge(last_title, last_text):
-                continue
-            if expect_company_page:
-                if _company_page_ready(last_text):
-                    return None
-            elif _search_page_ready(page, last_text):
-                return None
-        raise VerifChallengeError(
-            f"Verif challenge 未在 {int(self._timeout_seconds)}s 内通过：title={last_title!r} url={page.url}"
-        )
-
-    def _collect_search_links(self, page: Page) -> list[tuple[str, str]]:
-        raw_items = page.locator("a[href*='/en/company/']").evaluate_all(
-            """nodes => nodes.map(node => ({
-                href: node.href || '',
-                text: (node.innerText || node.textContent || '').trim()
-            }))"""
-        )
-        items: list[tuple[str, str]] = []
-        for item in raw_items or []:
-            href = str(item.get("href", "") or "").strip()
-            text = str(item.get("text", "") or "").strip()
-            if not href:
-                continue
-            items.append((text, _normalize_verif_url(href)))
-        return items
+    )
+    return session
 
 
-def _looks_like_verif_challenge(title: str, body_text: str) -> bool:
-    lowered_title = str(title or "").strip().lower()
-    lowered_body = str(body_text or "").strip().lower()
-    if any(hint in lowered_title for hint in _CHALLENGE_TITLE_HINTS):
-        return True
-    return any(hint in lowered_body for hint in _CHALLENGE_TEXT_HINTS)
+def _build_api_headers(state: RuntimeLoginState, *, referer: str) -> dict[str, str]:
+    return {
+        "accept": "*/*",
+        "accept-language": state.accept_language or DEFAULT_ACCEPT_LANGUAGE,
+        "cookie": state.cookie_header,
+        "priority": "u=1, i",
+        "referer": referer,
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "user-agent": state.user_agent or DEFAULT_USER_AGENT,
+        "x-xsrf-token": state.xsrf_token,
+    }
 
 
-def _search_page_ready(page: Page, body_text: str) -> bool:
-    lowered = str(body_text or "").strip().lower()
-    if any(hint in lowered for hint in _RESULT_READY_HINTS):
-        return True
-    return page.locator("a[href*='/en/company/']").count() > 0
+def _build_page_headers(state: RuntimeLoginState, *, referer: str) -> dict[str, str]:
+    return {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "accept-language": state.accept_language or DEFAULT_ACCEPT_LANGUAGE,
+        "cookie": state.cookie_header,
+        "priority": "u=0, i",
+        "referer": referer,
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
+        "upgrade-insecure-requests": "1",
+        "user-agent": state.user_agent or DEFAULT_USER_AGENT,
+    }
 
 
-def _company_page_ready(body_text: str) -> bool:
-    lowered = str(body_text or "").strip().lower()
-    return any(label in lowered for label in (*_WEBSITE_LABELS, *_REPRESENTATIVE_LABELS))
+def _search_url(query: str) -> str:
+    return f"https://www.verif.com/en/searchResult/?search={quote(str(query or '').strip())}&country=IT"
 
 
-def _extract_value_after_labels(
-    lines: list[str],
-    labels: tuple[str, ...],
-    *,
-    normalize,
-) -> str:
+def _search_api_url(query: str) -> str:
+    return (
+        "https://www.verif.com/back-api/search"
+        f"?query={quote(str(query or '').strip())}"
+        "&isoCode=IT&resultType=organization&pageNumber=1&sortOrder=score&locale=en"
+    )
+
+
+def _slugify_company_name(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
+    normalized = re.sub(r"[^A-Za-z0-9]+", "-", normalized).strip("-")
+    normalized = re.sub(r"-{2,}", "-", normalized)
+    return normalized.upper() or "COMPANY"
+
+
+def _extract_value_after_labels(lines: list[str], labels: tuple[str, ...], *, normalize) -> str:
     lowered_labels = tuple(label.lower() for label in labels)
     for index, line in enumerate(lines):
         lowered = line.lower()
@@ -244,13 +363,6 @@ def _extract_value_after_labels(
     return ""
 
 
-def _normalize_verif_url(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    return urljoin("https://www.verif.com/", text)
-
-
 def _normalize_website(value: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -265,6 +377,7 @@ def _normalize_website(value: str) -> str:
 
 def _normalize_person(value: str) -> str:
     text = re.sub(r"\s+", " ", str(value or "").strip())
+    text = re.sub(r"^(mr|mrs|ms|dr)\s+", "", text, flags=re.I)
     if not text or len(text) > 160:
         return ""
     if any(ch.isdigit() for ch in text):
@@ -274,3 +387,15 @@ def _normalize_person(value: str) -> str:
 
 def _tokenize_name(value: str) -> list[str]:
     return [item for item in re.split(r"[^a-z0-9]+", str(value or "").lower()) if item]
+
+
+def _normalize_page_lines(page_text: str) -> list[str]:
+    text = str(page_text or "")
+    if "<" in text and ">" in text:
+        text = html.unescape(text)
+        text = re.sub(r"(?is)<(script|style|template)\b[^>]*>.*?</\1>", " ", text)
+        text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+        text = re.sub(r"(?i)</(?:p|li|td|th|div|tr|dd|dt|h[1-6]|section|article|ul|ol|table|span|a)>", "\n", text)
+        text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    return [line.strip(" \t\r\n:|") for line in text.splitlines() if line.strip(" \t\r\n:|")]

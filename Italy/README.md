@@ -36,14 +36,18 @@ python run.py dnb all
 ```bash
 cp .env.example .env
 mkdir -p output/wiza/session
-mkdir -p output/dnb/session/verif_profile
+mkdir -p output/dnb/session
 ```
 
 - `Italy/.env` 按本机现有运行方式准备即可
 - `output/wiza/session/login_state.json` 里要放可用的 Wiza 登录态
 - 运行后会生成 `output/wiza/websites.txt`
-- `dnb` 默认需要本机可启动 Chrome / Chromium
-- Verif 命中 Cloudflare 时，默认走持久浏览器 profile；首次运行可能需要等待 challenge 放行
+- `dnb` 的 DNB 列表仍可能在本机临时启动浏览器刷新 DNB cookie
+- `dnb` 的 Verif 运行态是协议方式，不是浏览器持久 profile
+- `output/dnb/session/login_state.json` 或 `Italy/.env` 里要提供可用的：
+  - `VERIF_COOKIE_HEADER`
+  - `VERIF_XSRF_TOKEN`
+  - `VERIF_USER_AGENT`
 
 ## Delivery
 

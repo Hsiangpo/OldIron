@@ -71,10 +71,8 @@ def run_pipeline_list(
 
 def run_pipeline_verif(*, store: ItalyDnbStore, config: ItalyDnbConfig, stop_event) -> None:
     client = VerifClient(
-        profile_dir=config.output_dir / "session" / "verif_profile",
+        output_dir=config.output_dir,
         proxy_url=config.proxy_url,
-        timeout_seconds=config.verif_timeout_seconds,
-        headless=config.verif_headless,
     )
     try:
         while not stop_event.is_set():
