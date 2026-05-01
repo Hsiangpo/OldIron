@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+import time
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC
@@ -35,6 +36,9 @@ ENV_XSRF_TOKEN = "VERIF_XSRF_TOKEN"
 ENV_ACCEPT_LANGUAGE = "VERIF_ACCEPT_LANGUAGE"
 ENV_CDP_URL = "VERIF_CDP_URL"
 ENV_COOKIE_SOURCE = "VERIF_COOKIE_SOURCE"
+ENV_CDP_TIMEOUT_SECONDS = "VERIF_CDP_TIMEOUT_SECONDS"
+ENV_COOKIE_CACHE_SECONDS = "VERIF_COOKIE_CACHE_SECONDS"
+ENV_COOKIE_REFRESH_MIN_SECONDS = "VERIF_COOKIE_REFRESH_MIN_SECONDS"
 REQUIRED_COOKIE_KEYS = ("cf_clearance", "XSRF-TOKEN")
 _WEBSITE_LABELS = ("website", "web site")
 _REPRESENTATIVE_LABELS = (
@@ -165,6 +169,7 @@ class VerifClient:
         query = str(company_name or "").strip()
         if not query:
             return None
+        self._wait_for_verif_window()
         hits = self._search_company_hits(query)
         if not hits:
             return None
@@ -216,6 +221,8 @@ class VerifClient:
         if response.status_code not in {403, 429}:
             response.raise_for_status()
             return response
+        self._trigger_verif_cooldown(response.status_code)
+        self._wait_for_verif_window()
         self._state = self._cookie_provider.fetch_snapshot(force=True)
         retry_headers = dict(headers)
         if "x-xsrf-token" in retry_headers:
@@ -226,12 +233,30 @@ class VerifClient:
             retry_headers["accept-language"] = self._state.accept_language
         response = self._session.get(url, headers=retry_headers, timeout=30, verify=False)
         if response.status_code in {403, 429}:
+            self._trigger_verif_cooldown(response.status_code)
             raise VerifChallengeError(f"Verif blocked after cookie refresh: status={response.status_code}")
         response.raise_for_status()
         return response
 
     def _save_state(self) -> None:
         save_runtime_login_state(self._state_path, self._state)
+
+    def _wait_for_verif_window(self) -> None:
+        while True:
+            with VerifCookieProvider._GLOBAL_LOCK:
+                block_until = VerifCookieProvider._GLOBAL_BLOCK_UNTIL_MONOTONIC
+            now = time.monotonic()
+            if now >= block_until:
+                return None
+            time.sleep(min(block_until - now, 1.5))
+
+    def _trigger_verif_cooldown(self, status_code: int) -> None:
+        cooldown_seconds = 20.0 if int(status_code) == 403 else 45.0
+        with VerifCookieProvider._GLOBAL_LOCK:
+            now = time.monotonic()
+            target = now + cooldown_seconds
+            if target > VerifCookieProvider._GLOBAL_BLOCK_UNTIL_MONOTONIC:
+                VerifCookieProvider._GLOBAL_BLOCK_UNTIL_MONOTONIC = target
 
 
 def load_runtime_login_state(state_path: Path) -> RuntimeLoginState:
@@ -413,24 +438,48 @@ def _tokenize_name(value: str) -> list[str]:
 class VerifCookieProvider:
     """从 9222 浏览器提取 Verif 运行态。"""
 
+    _GLOBAL_LOCK = threading.Lock()
+    _GLOBAL_STATE_BY_KEY: dict[str, RuntimeLoginState] = {}
+    _GLOBAL_EXPIRE_AT_BY_KEY: dict[str, float] = {}
+    _GLOBAL_LAST_REFRESH_AT_BY_KEY: dict[str, float] = {}
+    _GLOBAL_BLOCK_UNTIL_MONOTONIC = 0.0
+
     def __init__(self, state_path: Path) -> None:
         self._state_path = state_path
         self._cdp_url = str(os.getenv(ENV_CDP_URL, "http://127.0.0.1:9222") or "").strip() or "http://127.0.0.1:9222"
         self._cookie_source = str(os.getenv(ENV_COOKIE_SOURCE, "cdp") or "cdp").strip().lower()
-        self._lock = threading.Lock()
+        self._cdp_timeout_ms = int(max(float(os.getenv(ENV_CDP_TIMEOUT_SECONDS, "30") or "30"), 5.0) * 1000)
+        self._cache_ttl_seconds = max(float(os.getenv(ENV_COOKIE_CACHE_SECONDS, "600") or "600"), 1.0)
+        self._refresh_cooldown_seconds = max(float(os.getenv(ENV_COOKIE_REFRESH_MIN_SECONDS, "90") or "90"), 0.0)
 
     def fetch_snapshot(self, *, force: bool) -> RuntimeLoginState:
-        del force
-        with self._lock:
+        key = self._cache_key()
+        now = time.time()
+        with self._GLOBAL_LOCK:
+            cached = self._GLOBAL_STATE_BY_KEY.get(key)
+            cached_expire_at = self._GLOBAL_EXPIRE_AT_BY_KEY.get(key, 0.0)
+            last_refresh_at = self._GLOBAL_LAST_REFRESH_AT_BY_KEY.get(key, 0.0)
+            if cached is not None and now < cached_expire_at:
+                if not force or (now - last_refresh_at) < self._refresh_cooldown_seconds:
+                    return cached
+            file_state = load_runtime_login_state(self._state_path)
+            if _has_required_cookies(file_state.cookie_header):
+                if not force or (now - last_refresh_at) < self._refresh_cooldown_seconds:
+                    self._GLOBAL_STATE_BY_KEY[key] = file_state
+                    self._GLOBAL_EXPIRE_AT_BY_KEY[key] = now + self._cache_ttl_seconds
+                    return file_state
             if self._cookie_source != "cdp":
                 raise RuntimeError("Verif 当前只支持从 9222 浏览器提取 cookie。")
             state = self._fetch_snapshot_via_cdp()
             save_runtime_login_state(self._state_path, state)
+            self._GLOBAL_STATE_BY_KEY[key] = state
+            self._GLOBAL_EXPIRE_AT_BY_KEY[key] = now + self._cache_ttl_seconds
+            self._GLOBAL_LAST_REFRESH_AT_BY_KEY[key] = now
             return state
 
     def _fetch_snapshot_via_cdp(self) -> RuntimeLoginState:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(self._browser_ws_url(), timeout=10000)
+            browser = playwright.chromium.connect_over_cdp(self._browser_ws_url(), timeout=self._cdp_timeout_ms)
             try:
                 cookies: list[dict[str, str]] = []
                 for context in browser.contexts:
@@ -450,6 +499,9 @@ class VerifCookieProvider:
                 )
             finally:
                 browser.close()
+
+    def _cache_key(self) -> str:
+        return f"{self._state_path.resolve()}::{self._cdp_url}"
 
     def _browser_ws_url(self) -> str:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
