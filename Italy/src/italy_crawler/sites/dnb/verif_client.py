@@ -7,16 +7,19 @@ import json
 import logging
 import os
 import re
+import threading
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import urllib.request
 from urllib.parse import quote
 from urllib.parse import urlparse
 
 from curl_cffi import requests as cffi_requests
+from playwright.sync_api import sync_playwright
 
 
 LOGGER = logging.getLogger(__name__)
@@ -30,6 +33,8 @@ ENV_COOKIE_HEADER = "VERIF_COOKIE_HEADER"
 ENV_USER_AGENT = "VERIF_USER_AGENT"
 ENV_XSRF_TOKEN = "VERIF_XSRF_TOKEN"
 ENV_ACCEPT_LANGUAGE = "VERIF_ACCEPT_LANGUAGE"
+ENV_CDP_URL = "VERIF_CDP_URL"
+ENV_COOKIE_SOURCE = "VERIF_COOKIE_SOURCE"
 REQUIRED_COOKIE_KEYS = ("cf_clearance", "XSRF-TOKEN")
 _WEBSITE_LABELS = ("website", "web site")
 _REPRESENTATIVE_LABELS = (
@@ -145,8 +150,10 @@ class VerifClient:
         self._output_dir = Path(output_dir)
         self._state_path = self._output_dir / "session" / LOGIN_STATE_NAME
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._cookie_provider = VerifCookieProvider(self._state_path)
         self._state = load_runtime_login_state(self._state_path)
-        _ensure_required_cookies(self._state.cookie_header)
+        if not _has_required_cookies(self._state.cookie_header):
+            self._state = self._cookie_provider.fetch_snapshot(force=False)
         self._proxy = str(proxy_url or "").strip()
         self._session = _build_session(self._proxy, self._state.user_agent)
 
@@ -187,32 +194,41 @@ class VerifClient:
 
     def _search_company_hits(self, query: str) -> list[dict[str, Any]]:
         url = _search_api_url(query)
-        response = self._session.get(
-            url,
+        response = self._request_with_refresh(
+            url=url,
             headers=_build_api_headers(self._state, referer=_search_url(query)),
-            timeout=30,
-            verify=False,
         )
         self._save_state()
-        if response.status_code in {403, 429}:
-            raise VerifChallengeError(f"Verif search blocked: status={response.status_code}")
-        response.raise_for_status()
         payload = response.json()
         hits = payload.get("hits") if isinstance(payload, dict) else None
         return [item for item in hits or [] if isinstance(item, dict)]
 
     def _fetch_company_page_text(self, company_url: str, query: str) -> str:
-        response = self._session.get(
-            company_url,
+        response = self._request_with_refresh(
+            url=company_url,
             headers=_build_page_headers(self._state, referer=_search_url(query)),
-            timeout=30,
-            verify=False,
         )
         self._save_state()
-        if response.status_code in {403, 429}:
-            raise VerifChallengeError(f"Verif company page blocked: status={response.status_code}")
-        response.raise_for_status()
         return response.text
+
+    def _request_with_refresh(self, *, url: str, headers: dict[str, str]):
+        response = self._session.get(url, headers=headers, timeout=30, verify=False)
+        if response.status_code not in {403, 429}:
+            response.raise_for_status()
+            return response
+        self._state = self._cookie_provider.fetch_snapshot(force=True)
+        retry_headers = dict(headers)
+        if "x-xsrf-token" in retry_headers:
+            retry_headers["x-xsrf-token"] = self._state.xsrf_token
+        retry_headers["cookie"] = self._state.cookie_header
+        retry_headers["user-agent"] = self._state.user_agent
+        if "accept-language" in retry_headers:
+            retry_headers["accept-language"] = self._state.accept_language
+        response = self._session.get(url, headers=retry_headers, timeout=30, verify=False)
+        if response.status_code in {403, 429}:
+            raise VerifChallengeError(f"Verif blocked after cookie refresh: status={response.status_code}")
+        response.raise_for_status()
+        return response
 
     def _save_state(self) -> None:
         save_runtime_login_state(self._state_path, self._state)
@@ -259,15 +275,20 @@ def parse_cookie_header(cookie_text: str) -> dict[str, str]:
 
 
 def _ensure_required_cookies(cookie_header: str) -> None:
+    if _has_required_cookies(cookie_header):
+        return
     cookies = parse_cookie_header(cookie_header)
     missing = [key for key in REQUIRED_COOKIE_KEYS if not str(cookies.get(key) or "").strip()]
-    if not missing:
-        return
     raise RuntimeError(
         "Verif 缺少可用登录态。"
         f" 至少需要这些 cookie：{', '.join(missing)}。"
         f" 请刷新 {Path('output/dnb/session') / LOGIN_STATE_NAME} 或 .env 里的 {ENV_COOKIE_HEADER}。"
     )
+
+
+def _has_required_cookies(cookie_header: str) -> bool:
+    cookies = parse_cookie_header(cookie_header)
+    return all(str(cookies.get(key) or "").strip() for key in REQUIRED_COOKIE_KEYS)
 
 
 def _read_state_file(state_path: Path) -> dict[str, Any]:
@@ -387,6 +408,82 @@ def _normalize_person(value: str) -> str:
 
 def _tokenize_name(value: str) -> list[str]:
     return [item for item in re.split(r"[^a-z0-9]+", str(value or "").lower()) if item]
+
+
+class VerifCookieProvider:
+    """从 9222 浏览器提取 Verif 运行态。"""
+
+    def __init__(self, state_path: Path) -> None:
+        self._state_path = state_path
+        self._cdp_url = str(os.getenv(ENV_CDP_URL, "http://127.0.0.1:9222") or "").strip() or "http://127.0.0.1:9222"
+        self._cookie_source = str(os.getenv(ENV_COOKIE_SOURCE, "cdp") or "cdp").strip().lower()
+        self._lock = threading.Lock()
+
+    def fetch_snapshot(self, *, force: bool) -> RuntimeLoginState:
+        del force
+        with self._lock:
+            if self._cookie_source != "cdp":
+                raise RuntimeError("Verif 当前只支持从 9222 浏览器提取 cookie。")
+            state = self._fetch_snapshot_via_cdp()
+            save_runtime_login_state(self._state_path, state)
+            return state
+
+    def _fetch_snapshot_via_cdp(self) -> RuntimeLoginState:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(self._browser_ws_url(), timeout=10000)
+            try:
+                cookies: list[dict[str, str]] = []
+                for context in browser.contexts:
+                    for item in context.cookies():
+                        domain = str(item.get("domain", "") or "")
+                        if "verif.com" in domain:
+                            cookies.append(item)
+                cookie_map = self._cookie_map_from_items(cookies)
+                if not _has_required_cookies(_cookie_header_from_map(cookie_map)):
+                    raise RuntimeError("9222 浏览器里没有可用的 Verif cf cookie，请先在该浏览器里通过 Verif challenge。")
+                version = self._browser_version_payload()
+                return RuntimeLoginState(
+                    cookie_header=_cookie_header_from_map(cookie_map),
+                    user_agent=str(version.get("User-Agent") or DEFAULT_USER_AGENT).strip() or DEFAULT_USER_AGENT,
+                    xsrf_token=str(cookie_map.get("XSRF-TOKEN") or "").strip(),
+                    accept_language=DEFAULT_ACCEPT_LANGUAGE,
+                )
+            finally:
+                browser.close()
+
+    def _browser_ws_url(self) -> str:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        version = json.loads(opener.open(f"{self._cdp_url}/json/version", timeout=5).read().decode())
+        return str(version["webSocketDebuggerUrl"])
+
+    def _browser_version_payload(self) -> dict[str, Any]:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return json.loads(opener.open(f"{self._cdp_url}/json/version", timeout=5).read().decode())
+
+    def _cookie_map_from_items(self, items: list[dict[str, Any]]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for item in items:
+            name = str(item.get("name", "") or "").strip()
+            value = str(item.get("value", "") or "").strip()
+            if name and value:
+                result[name] = value
+        return result
+
+
+def _cookie_header_from_map(cookie_map: dict[str, str]) -> str:
+    preferred = ["XSRF-TOKEN", "cf_clearance", "__cf_bm"]
+    parts: list[str] = []
+    for key in preferred:
+        value = str(cookie_map.get(key) or "").strip()
+        if value:
+            parts.append(f"{key}={value}")
+    for key in sorted(cookie_map.keys()):
+        if key in preferred:
+            continue
+        value = str(cookie_map.get(key) or "").strip()
+        if value:
+            parts.append(f"{key}={value}")
+    return "; ".join(parts)
 
 
 def _normalize_page_lines(page_text: str) -> list[str]:

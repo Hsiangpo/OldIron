@@ -21,6 +21,24 @@ from .email_rules import select_email_urls
 LOGGER = logging.getLogger(__name__)
 _EMAIL_RE = re.compile(r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})", re.IGNORECASE)
 _SCRIPT_BLOCK_RE = re.compile(r"(?is)<(script|style|template)\b[^>]*>.*?</\1>")
+_FREE_MAIL_DOMAINS = {
+    "aol.com",
+    "gmail.com",
+    "googlemail.com",
+    "hotmail.com",
+    "icloud.com",
+    "live.com",
+    "mac.com",
+    "me.com",
+    "msn.com",
+    "outlook.com",
+    "pm.me",
+    "proton.me",
+    "protonmail.com",
+    "yahoo.co.jp",
+    "yahoo.com",
+    "yahoo.com.br",
+}
 
 
 @dataclass(slots=True)
@@ -79,6 +97,7 @@ class ItalyDnbEmailService:
                 start_url,
                 _page_map_to_pairs(page_map, [*fetch_plan["all_primary_urls"], *fetch_plan["email_overflow_urls"]]),
             )
+        emails = _prune_non_company_emails(start_url, emails)
         evidence_url = next(iter(page_hits.keys()), start_url)
         return EmailDiscoveryResult(
             emails=emails,
@@ -204,3 +223,32 @@ def extract_same_domain_emails_from_embedded_content(website: str, raw_html: str
         if email not in found:
             found.append(email)
     return found
+
+
+def _prune_non_company_emails(website: str, emails: list[str]) -> list[str]:
+    site_domain = extract_registrable_domain(website)
+    if not site_domain:
+        return list(emails)
+    same_domain: list[str] = []
+    free_mail: list[str] = []
+    others: list[str] = []
+    for email in emails:
+        if "@" not in email:
+            continue
+        email_domain = email.split("@", 1)[1].strip().lower()
+        registrable = extract_registrable_domain(email_domain)
+        if registrable == site_domain or email_domain.endswith(f".{site_domain}"):
+            same_domain.append(email)
+            continue
+        if registrable in _FREE_MAIL_DOMAINS:
+            free_mail.append(email)
+            continue
+        others.append(email)
+    if same_domain:
+        return [*same_domain, *[email for email in free_mail if email not in same_domain]]
+    if free_mail:
+        return free_mail
+    other_domains = {extract_registrable_domain(email.split("@", 1)[1]) for email in others if "@" in email}
+    if len(other_domains) >= 2:
+        return []
+    return others

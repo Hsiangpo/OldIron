@@ -70,71 +70,43 @@ def run_pipeline_list(
 
 
 def run_pipeline_verif(*, store: ItalyDnbStore, config: ItalyDnbConfig, stop_event) -> None:
-    client = VerifClient(
-        output_dir=config.output_dir,
-        proxy_url=config.proxy_url,
-    )
+    threads = [
+        threading.Thread(
+            target=_verif_worker,
+            args=(store, config, stop_event),
+            name=f"it-dnb-verif-{index + 1}",
+            daemon=True,
+        )
+        for index in range(max(int(config.verif_workers or 1), 1))
+    ]
+    for thread in threads:
+        thread.start()
     try:
         while not stop_event.is_set():
-            task = store.claim_verif_task()
-            if task is None:
-                time.sleep(1.0)
-                continue
-            try:
-                match = client.search_company(task.company_name)
-                if match is None:
-                    store.complete_verif_task(
-                        task.duns,
-                        website="",
-                        representative="",
-                        evidence_url="",
-                    )
-                    continue
-                store.complete_verif_task(
-                    task.duns,
-                    company_name=match.company_name,
-                    website=match.website,
-                    representative=match.representative,
-                    evidence_url=match.company_url or match.search_url,
-                )
-            except VerifChallengeError as exc:
-                LOGGER.warning("Verif challenge 未通过：%s | %s", task.company_name, exc)
-                store.fail_verif_task(task.duns)
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("Verif 补充失败：%s | %s", task.company_name, exc)
-                store.fail_verif_task(task.duns)
+            time.sleep(1.0)
     finally:
-        client.close()
+        for thread in threads:
+            thread.join(timeout=2)
 
 
 def run_pipeline_email(*, store: ItalyDnbStore, config: ItalyDnbConfig, stop_event) -> None:
-    service = ItalyDnbEmailService(
-        ItalyDnbEmailSettings(
-            proxy_url=config.proxy_url,
-            email_page_soft_limit=config.email_page_soft_limit,
-            email_page_hard_limit=config.email_page_hard_limit,
-            email_total_hard_limit=config.email_total_hard_limit,
-            email_stop_same_domain_count=config.email_stop_same_domain_count,
+    threads = [
+        threading.Thread(
+            target=_email_worker,
+            args=(store, config, stop_event),
+            name=f"it-dnb-email-{index + 1}",
+            daemon=True,
         )
-    )
+        for index in range(max(int(config.email_workers or 1), 1))
+    ]
+    for thread in threads:
+        thread.start()
     try:
         while not stop_event.is_set():
-            task = store.claim_site_task()
-            if task is None:
-                time.sleep(1.0)
-                continue
-            try:
-                result = service.discover_emails(task.website)
-                store.complete_site_task(
-                    task.duns,
-                    emails=result.emails,
-                    evidence_url=result.evidence_url or task.website,
-                )
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("官网邮箱抓取失败：%s | %s", task.website, exc)
-                store.fail_site_task(task.duns)
+            time.sleep(1.0)
     finally:
-        service.close()
+        for thread in threads:
+            thread.join(timeout=2)
 
 
 def _segment_worker(
@@ -274,3 +246,71 @@ def _monitor_segment_phase(store: ItalyDnbStore, stop_event: threading.Event, co
             progress.companies_total,
         )
         time.sleep(config.queue_poll_interval)
+
+
+def _verif_worker(store: ItalyDnbStore, config: ItalyDnbConfig, stop_event) -> None:
+    client = VerifClient(
+        output_dir=config.output_dir,
+        proxy_url=config.proxy_url,
+    )
+    try:
+        while not stop_event.is_set():
+            task = store.claim_verif_task()
+            if task is None:
+                time.sleep(1.0)
+                continue
+            try:
+                match = client.search_company(task.company_name)
+                if match is None:
+                    store.complete_verif_task(
+                        task.duns,
+                        website="",
+                        representative="",
+                        evidence_url="",
+                    )
+                    continue
+                store.complete_verif_task(
+                    task.duns,
+                    company_name=match.company_name,
+                    website=match.website,
+                    representative=match.representative,
+                    evidence_url=match.company_url or match.search_url,
+                )
+            except VerifChallengeError as exc:
+                LOGGER.warning("Verif challenge 未通过：%s | %s", task.company_name, exc)
+                store.fail_verif_task(task.duns)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Verif 补充失败：%s | %s", task.company_name, exc)
+                store.fail_verif_task(task.duns)
+    finally:
+        client.close()
+
+
+def _email_worker(store: ItalyDnbStore, config: ItalyDnbConfig, stop_event) -> None:
+    service = ItalyDnbEmailService(
+        ItalyDnbEmailSettings(
+            proxy_url=config.proxy_url,
+            email_page_soft_limit=config.email_page_soft_limit,
+            email_page_hard_limit=config.email_page_hard_limit,
+            email_total_hard_limit=config.email_total_hard_limit,
+            email_stop_same_domain_count=config.email_stop_same_domain_count,
+        )
+    )
+    try:
+        while not stop_event.is_set():
+            task = store.claim_site_task()
+            if task is None:
+                time.sleep(1.0)
+                continue
+            try:
+                result = service.discover_emails(task.website)
+                store.complete_site_task(
+                    task.duns,
+                    emails=result.emails,
+                    evidence_url=result.evidence_url or task.website,
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("官网邮箱抓取失败：%s | %s", task.website, exc)
+                store.fail_site_task(task.duns)
+    finally:
+        service.close()

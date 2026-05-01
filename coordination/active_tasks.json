@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-05-01T07:41:11Z",
+  "updated_at": "2026-05-01T08:29:20Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -45,6 +45,32 @@
       "started_at": "2026-04-20T13:39:50Z",
       "last_heartbeat_at": "2026-04-20T22:32:20Z",
       "notes": "Monitor long-running England/Germany Wiza website list jobs, inspect logs/DB, fix site-local issues and restart if needed"
+    },
+    {
+      "task_id": "italy-dnb-hardening-20260501",
+      "status": "in_progress",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Italy/src/italy_crawler/sites/dnb",
+        "Italy/.env.example",
+        "Italy/README.md",
+        "Italy/tests"
+      ],
+      "planned_files": [
+        "Italy/src/italy_crawler/sites/dnb",
+        "Italy/.env.example",
+        "Italy/README.md",
+        "Italy/tests"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-05-01T08:29:20Z",
+      "last_heartbeat_at": "2026-05-01T08:29:20Z",
+      "notes": "Harden Italy dnb by reusing mature DNB patterns, add 9222-based Verif cookie acquisition, and validate with a 10-minute runtime window."
     }
   ]
 }
