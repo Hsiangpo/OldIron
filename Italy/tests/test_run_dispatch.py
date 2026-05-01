@@ -27,6 +27,16 @@ def _load_run_module():
 
 
 class RunDispatchTests(unittest.TestCase):
+    def test_dispatches_to_dnb_cli(self) -> None:
+        import italy_crawler.sites.dnb.cli as dnb_cli
+
+        run_module = _load_run_module()
+        with patch.object(run_module.importlib.util, "find_spec", return_value=object()):
+            with patch.object(dnb_cli, "run_site", return_value=0) as run_site:
+                result = run_module._dispatch(["dnb", "list"])
+        self.assertEqual(0, result)
+        run_site.assert_called_once_with(["list"])
+
     def test_dispatches_to_wiza_cli(self) -> None:
         run_module = _load_run_module()
         with patch.object(run_module.importlib.util, "find_spec", return_value=object()):

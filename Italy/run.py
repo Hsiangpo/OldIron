@@ -22,12 +22,14 @@ USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
 
 站点：
+  dnb   — DNB 意大利公司名 -> Verif -> 官网邮箱
   wiza  — Wiza 意大利官网列表
 """
 
 REQUIRED_MODULES = (
     ("dotenv", "python-dotenv"),
     ("curl_cffi", "curl_cffi"),
+    ("playwright", "playwright"),
 )
 
 
@@ -63,6 +65,10 @@ def _dispatch(argv: list[str]) -> int:
         return 1
     _load_project_env()
     site = argv[0].strip().lower()
+    if site == "dnb":
+        from italy_crawler.sites.dnb.cli import run_site
+
+        return run_site(argv[1:])
     if site == "wiza":
         from italy_crawler.sites.wiza.cli import run_site
 
