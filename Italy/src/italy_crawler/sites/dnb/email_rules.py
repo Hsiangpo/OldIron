@@ -52,6 +52,7 @@ _COMPOSITE_TOKEN_MAP = {
 }
 _EMAIL_STRONG_SCORE = 12
 _EMAIL_STOP_SCORE = 8
+_EMAIL_HARD_LIMIT = 32
 _EMAIL_FAMILY_TARGET = 6
 _RELATED_SUBDOMAIN_HOST_TOKENS = {
     "about", "career", "careers", "company", "contact", "help", "jobs",
@@ -128,6 +129,8 @@ def build_email_candidates(start_url: str, discovered_urls: list[str]) -> list[E
         score = _score_tokens(tokens)
         if url == start_url:
             score += 20
+        score += _path_phrase_bonus(url)
+        score -= _locale_mismatch_penalty(start_url, url)
         candidates.append(
             EmailUrlCandidate(
                 url=url,
@@ -161,6 +164,8 @@ def select_email_urls(candidates: list[EmailUrlCandidate]) -> list[str]:
         family_counts[candidate.family_key] = family_counts.get(candidate.family_key, 0) + 1
         if _is_strong_email_candidate(candidate):
             strong_families.add(candidate.family_key)
+        if len(urls) >= _EMAIL_HARD_LIMIT:
+            break
     return urls
 
 
@@ -313,9 +318,10 @@ def extract_url_hint_tokens(url: str) -> list[str]:
 
 
 def _family_key(tokens: list[str]) -> str:
-    if not tokens:
+    trimmed = _trim_family_tokens(tokens)
+    if not trimmed:
         return "root"
-    return "/".join(tokens[:2])
+    return "/".join(trimmed[:2])
 
 
 def _score_tokens(tokens: list[str]) -> int:
@@ -325,6 +331,55 @@ def _score_tokens(tokens: list[str]) -> int:
             score -= 6
         score += int(_EMAIL_WEIGHTS.get(token, 0))
     return score
+
+
+def _path_phrase_bonus(url: str) -> int:
+    lowered = str(url or "").lower()
+    score = 0
+    for phrase, value in (
+        ("discount-partners", -22),
+        ("forums/", -28),
+        ("/our-services/", -14),
+        ("/services/", -8),
+        ("sponsored_discussions", -28),
+        ("member/email-options", -24),
+        ("contact-us", 14),
+        ("contact/", 6),
+        ("datenschutz", 10),
+        ("impressum", 12),
+        ("kontakt", 18),
+        ("privacy-policy", 6),
+    ):
+        if phrase in lowered:
+            score += value
+    return score
+
+
+def _locale_mismatch_penalty(start_url: str, candidate_url: str) -> int:
+    start_locale = _extract_locale_token_from_url(start_url)
+    candidate_locale = _extract_locale_token_from_url(candidate_url)
+    if not start_locale or not candidate_locale:
+        return 0
+    if start_locale == candidate_locale:
+        return 0
+    return 12
+
+
+def _extract_locale_token_from_url(url: str) -> str:
+    path = str(urlparse(str(url or "")).path or "").strip("/")
+    if not path:
+        return ""
+    first = path.split("/", 1)[0].strip().lower()
+    if re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", first):
+        return first
+    return ""
+
+
+def _trim_family_tokens(tokens: list[str]) -> list[str]:
+    trimmed = list(tokens)
+    while trimmed and trimmed[0] in {"financial", "advisers", "individual", "individuals", "professional", "professionals"}:
+        trimmed = trimmed[1:]
+    return trimmed
 
 
 def _is_strong_email_candidate(candidate: EmailUrlCandidate) -> bool:

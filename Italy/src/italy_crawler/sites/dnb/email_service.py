@@ -60,6 +60,9 @@ class ItalyDnbEmailSettings:
     common_probe_concurrency: int = 8
     common_probe_patience_batches: int = 2
     common_probe_min_hits_after_patience: int = 2
+    related_seed_limit: int = 2
+    related_per_seed_limit: int = 20
+    related_total_limit: int = 60
     email_page_soft_limit: int = 8
     email_page_hard_limit: int = 16
     email_total_hard_limit: int = 20
@@ -231,13 +234,13 @@ class ItalyDnbEmailService:
         if not seeds:
             return []
         discovered: list[str] = []
-        for seed in seeds[:4]:
+        for seed in seeds[: self._settings.related_seed_limit]:
             try:
-                urls = self._crawler.map_site(seed, limit=40)
+                urls = self._crawler.map_site(seed, limit=self._settings.related_per_seed_limit)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("关联子域探测失败：seed=%s error=%s", seed, exc)
                 continue
-            discovered = _merge_unique_urls(discovered, [seed, *urls], limit=120)
+            discovered = _merge_unique_urls(discovered, [seed, *urls], limit=self._settings.related_total_limit)
         return discovered
 
     def _probe_common_value_batch(self, probe_urls: list[str]) -> list[str]:
