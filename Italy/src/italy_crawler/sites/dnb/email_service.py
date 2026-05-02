@@ -6,6 +6,8 @@ import html
 import logging
 import re
 from dataclasses import dataclass
+from urllib.parse import urljoin
+from urllib.parse import urlparse
 
 from oldiron_core.fc_email.normalization import extract_registrable_domain
 from oldiron_core.fc_email.normalization import filter_emails_for_website
@@ -13,8 +15,12 @@ from oldiron_core.fc_email.normalization import normalize_email_candidate
 from oldiron_core.protocol_crawler import SiteCrawlClient
 from oldiron_core.protocol_crawler import SiteCrawlConfig
 
+from .email_rules import build_common_probe_urls
 from .email_rules import build_email_candidates
 from .email_rules import build_email_fetch_plan
+from .email_rules import looks_related_subdomain_seed
+from .email_rules import normalize_discovery_url
+from .email_rules import pick_subdomain_probe_urls
 from .email_rules import select_email_urls
 
 
@@ -78,8 +84,16 @@ class ItalyDnbEmailService:
         start_url = self._normalize_start_url(website)
         if not start_url:
             return EmailDiscoveryResult(emails=[], evidence_url="", selected_urls=[])
+        homepage_html = self._fetch_homepage_html(start_url)
         mapped_urls = self._crawler.map_site(start_url, limit=max(self._settings.map_limit, 1))
-        candidates = build_email_candidates(start_url, mapped_urls)
+        probe_urls = self._probe_common_value_urls(start_url)
+        related_urls = self._discover_related_subdomain_urls(
+            start_url,
+            homepage_html=homepage_html,
+            direct_urls=mapped_urls,
+        )
+        discovered_urls = _merge_unique_urls(mapped_urls, probe_urls, related_urls, limit=max(self._settings.map_limit * 2, 200))
+        candidates = build_email_candidates(start_url, discovered_urls)
         selected_email_urls = select_email_urls(candidates)
         fetch_plan = build_email_fetch_plan(
             start_url,
@@ -88,7 +102,7 @@ class ItalyDnbEmailService:
             email_hard_limit=self._settings.email_page_hard_limit,
             total_hard_limit=self._settings.email_total_hard_limit,
         )
-        page_map = self._fetch_primary_pages(fetch_plan)
+        page_map = self._fetch_primary_pages(fetch_plan, homepage_html=homepage_html)
         emails, page_hits = collect_emails_for_pages(start_url, _page_map_to_pairs(page_map, fetch_plan["all_primary_urls"]))
         if not self._enough_same_domain_emails(start_url, emails) and fetch_plan["email_overflow_urls"]:
             overflow_map = self._fetch_urls(fetch_plan["email_overflow_urls"])
@@ -105,10 +119,12 @@ class ItalyDnbEmailService:
             selected_urls=[*fetch_plan["all_primary_urls"], *fetch_plan["email_overflow_urls"]],
         )
 
-    def _fetch_primary_pages(self, fetch_plan: dict[str, list[str]]) -> dict[str, str]:
+    def _fetch_primary_pages(self, fetch_plan: dict[str, list[str]], *, homepage_html: str) -> dict[str, str]:
         page_map: dict[str, str] = {}
         homepage_url = fetch_plan["homepage_primary_urls"][0] if fetch_plan["homepage_primary_urls"] else ""
-        if homepage_url:
+        if homepage_url and homepage_html.strip():
+            page_map[homepage_url] = homepage_html
+        elif homepage_url:
             try:
                 page_map[homepage_url] = self._crawler.scrape_html(homepage_url, truncate_html=False).html
             except Exception as exc:  # noqa: BLE001
@@ -139,6 +155,13 @@ class ItalyDnbEmailService:
             raw = f"https://{raw}"
         return raw if extract_registrable_domain(raw) else ""
 
+    def _fetch_homepage_html(self, start_url: str) -> str:
+        try:
+            return str(self._crawler.scrape_html(start_url, truncate_html=False).html or "")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("官网首页预抓失败：website=%s error=%s", start_url, exc)
+            return ""
+
     def _enough_same_domain_emails(self, website: str, emails: list[str]) -> bool:
         site_domain = extract_registrable_domain(website)
         if not site_domain:
@@ -153,6 +176,26 @@ class ItalyDnbEmailService:
         ]
         return len(same_domain) >= self._settings.email_stop_same_domain_count
 
+    def _probe_common_value_urls(self, start_url: str) -> list[str]:
+        probe_urls = build_common_probe_urls(start_url)
+        if not probe_urls:
+            return []
+        return list(self._fetch_urls(probe_urls).keys())
+
+    def _discover_related_subdomain_urls(self, start_url: str, *, homepage_html: str, direct_urls: list[str]) -> list[str]:
+        seeds = _collect_related_subdomain_seed_urls(start_url, homepage_html, direct_urls)
+        if not seeds:
+            return []
+        discovered: list[str] = []
+        for seed in seeds[:4]:
+            try:
+                urls = self._crawler.map_site(seed, limit=40)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("关联子域探测失败：seed=%s error=%s", seed, exc)
+                continue
+            discovered = _merge_unique_urls(discovered, [seed, *urls], limit=120)
+        return discovered
+
 
 def _page_map_to_pairs(page_map: dict[str, str], urls: list[str]) -> list[tuple[str, str]]:
     seen: set[str] = set()
@@ -166,6 +209,33 @@ def _page_map_to_pairs(page_map: dict[str, str], urls: list[str]) -> list[tuple[
             pages.append((value, html))
             seen.add(value)
     return pages
+
+
+def _merge_unique_urls(*groups: list[str], limit: int) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for group in groups:
+        for url in group:
+            normalized = normalize_discovery_url(str(url or "").strip())
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            result.append(normalized)
+            if len(result) >= limit:
+                return result
+    return result
+
+
+def _collect_related_subdomain_seed_urls(start_url: str, homepage_html: str, direct_urls: list[str]) -> list[str]:
+    seeds = list(pick_subdomain_probe_urls(start_url, direct_urls))
+    for raw_href in re.findall(r'''(?:href|src)=["']([^"'#]+)["']''', homepage_html or "", flags=re.I):
+        absolute = urljoin(start_url, raw_href.strip())
+        normalized = normalize_discovery_url(absolute)
+        if normalized and looks_related_subdomain_seed(normalized, start_url) and normalized not in seeds:
+            seeds.append(normalized)
+        if len(seeds) >= 8:
+            break
+    return seeds
 
 
 def collect_emails_for_pages(website: str, pages: list[tuple[str, str]]) -> tuple[list[str], dict[str, list[str]]]:

@@ -5,8 +5,13 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from urllib.parse import parse_qsl
+from urllib.parse import urlencode
+from urllib.parse import urljoin
 from urllib.parse import unquote
 from urllib.parse import urlparse
+
+from oldiron_core.fc_email.normalization import extract_registrable_domain
 
 
 _EMAIL_WEIGHTS = {
@@ -48,6 +53,56 @@ _COMPOSITE_TOKEN_MAP = {
 _EMAIL_STRONG_SCORE = 12
 _EMAIL_STOP_SCORE = 8
 _EMAIL_FAMILY_TARGET = 6
+_RELATED_SUBDOMAIN_HOST_TOKENS = {
+    "about", "career", "careers", "company", "contact", "help", "jobs",
+    "leadership", "people", "support", "team",
+}
+_RELATED_SUBDOMAIN_PATH_TOKENS = {
+    "about", "board", "career", "careers", "company", "contact", "director",
+    "executive", "founder", "governance", "jobs", "leadership", "management",
+    "officers", "people", "president", "privacy", "support", "team", "terms",
+}
+_SUBDOMAIN_SCAN_PAGE_TOKENS = {
+    "about", "contact", "company", "help", "people", "privacy", "support", "team",
+}
+_TRACKING_QUERY_KEYS = {
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+    "msclkid",
+    "ref_src",
+    "srsltid",
+}
+_COMMON_VALUE_PATHS = (
+    "/impressum",
+    "/imprint",
+    "/kontakt",
+    "/kontakt.html",
+    "/ueber-uns",
+    "/uber-uns",
+    "/about-us/our-people",
+    "/our-people",
+    "/company-leadership",
+    "/executive-team",
+    "/leadership",
+    "/management",
+    "/our-team",
+    "/team-members",
+    "/team",
+    "/people",
+    "/about-us",
+    "/about",
+    "/about.html",
+    "/company",
+    "/contact-us",
+    "/contact",
+    "/contact.html",
+    "/legal-notice",
+    "/privacy-policy",
+    "/privacy",
+    "/terms",
+)
 
 
 @dataclass(slots=True)
@@ -134,6 +189,91 @@ def build_email_fetch_plan(
     }
 
 
+def normalize_discovery_url(url: str) -> str:
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if not parsed.scheme or not parsed.netloc:
+        return text
+    kept_pairs = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        clean_key = str(key or "").strip().lower()
+        if not clean_key or clean_key.startswith("utm_") or clean_key in _TRACKING_QUERY_KEYS:
+            continue
+        kept_pairs.append((key, value))
+    return parsed._replace(query=urlencode(kept_pairs, doseq=True), fragment="").geturl()
+
+
+def build_common_probe_urls(start_url: str) -> list[str]:
+    parsed = urlparse(start_url)
+    if not parsed.scheme or not parsed.netloc:
+        return []
+    locale_prefix = extract_path_locale_prefix(parsed.path)
+    result: list[str] = []
+    seen: set[str] = set()
+    hosts = [parsed.netloc]
+    if parsed.netloc and not parsed.netloc.lower().startswith("www."):
+        hosts.append(f"www.{parsed.netloc}")
+    for host in hosts:
+        for base_prefix in ([locale_prefix] if locale_prefix else []) + [""]:
+            for path in _COMMON_VALUE_PATHS:
+                joined_path = f"{base_prefix}{path}" if base_prefix else path
+                probe_url = parsed._replace(netloc=host, path=joined_path, query="", fragment="").geturl()
+                normalized = normalize_discovery_url(probe_url)
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    result.append(normalized)
+    return result
+
+
+def extract_path_locale_prefix(path: str) -> str:
+    cleaned = str(path or "").strip("/")
+    if not cleaned:
+        return ""
+    first = cleaned.split("/", 1)[0].strip().lower()
+    if re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", first):
+        return f"/{first}"
+    return ""
+
+
+def pick_subdomain_probe_urls(start_url: str, direct_urls: list[str]) -> list[str]:
+    start_domain = extract_registrable_domain(start_url)
+    picked: list[str] = []
+    for url in direct_urls:
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").strip().lower()
+        if not host or extract_registrable_domain(host) != start_domain:
+            continue
+        tokens = extract_url_hint_tokens(url)
+        if not any(token in _SUBDOMAIN_SCAN_PAGE_TOKENS for token in tokens):
+            continue
+        if url not in picked:
+            picked.append(url)
+        if len(picked) >= 4:
+            break
+    return picked
+
+
+def looks_related_subdomain_seed(url: str, start_url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").strip().lower()
+    start_host = (urlparse(start_url).netloc or "").strip().lower()
+    if not host or not start_host:
+        return False
+    if host == start_host:
+        return False
+    if extract_registrable_domain(host) != extract_registrable_domain(start_host):
+        return False
+    host_tokens = [token for token in re.split(r"[\W_]+", host) if len(token) >= 3]
+    path_tokens = extract_url_hint_tokens(url)
+    if any(token in _RELATED_SUBDOMAIN_HOST_TOKENS for token in host_tokens):
+        return True
+    if any(token in _RELATED_SUBDOMAIN_PATH_TOKENS for token in path_tokens):
+        return True
+    return False
+
+
 def extract_path_tokens(url: str) -> list[str]:
     parsed = urlparse(str(url or ""))
     parts = [segment for segment in parsed.path.split("/") if segment]
@@ -159,6 +299,17 @@ def _expand_composite_token(token: str) -> list[str]:
     if ascii_variant and ascii_variant != clean:
         return [clean, ascii_variant]
     return [clean]
+
+
+def extract_url_hint_tokens(url: str) -> list[str]:
+    parsed = urlparse(str(url or ""))
+    host_tokens = [
+        clean
+        for clean in re.split(r"[\W_]+", parsed.netloc.strip().lower())
+        if len(clean) >= 3 and clean not in {"www", "com", "org", "net", "co", "it", "uk", "eu"}
+    ]
+    path_tokens = extract_path_tokens(url)
+    return [*host_tokens, *[token for token in path_tokens if token not in host_tokens]]
 
 
 def _family_key(tokens: list[str]) -> str:

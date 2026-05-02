@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,8 +19,12 @@ if str(SHARED_DIR) not in sys.path:
 
 from italy_crawler.sites.dnb.client import parse_companyinformation_payload
 from italy_crawler.sites.dnb.email_rules import build_email_candidates
+from italy_crawler.sites.dnb.email_rules import build_common_probe_urls
 from italy_crawler.sites.dnb.email_rules import build_email_fetch_plan
+from italy_crawler.sites.dnb.email_rules import looks_related_subdomain_seed
 from italy_crawler.sites.dnb.email_rules import select_email_urls
+from italy_crawler.sites.dnb.email_service import ItalyDnbEmailService
+from italy_crawler.sites.dnb.email_service import ItalyDnbEmailSettings
 from italy_crawler.sites.dnb.pipeline import _build_child_segments
 from italy_crawler.sites.dnb.pipeline import _needs_geo_split
 from italy_crawler.sites.dnb.verif_client import extract_company_fields_from_text
@@ -137,3 +142,59 @@ class ItalyDnbBasicTests(unittest.TestCase):
         self.assertEqual(plan["email_primary_urls"][0], "https://example.it/contact")
         self.assertIn("https://example.it/careers", plan["email_primary_urls"])
         self.assertIn("https://example.it/privacy-policy", plan["email_overflow_urls"])
+
+    def test_common_probe_urls_include_contact_and_privacy(self) -> None:
+        urls = build_common_probe_urls("https://example.it")
+        self.assertIn("https://example.it/contact", urls)
+        self.assertIn("https://example.it/privacy-policy", urls)
+
+    def test_related_subdomain_seed_detects_contact_subdomain(self) -> None:
+        self.assertTrue(looks_related_subdomain_seed("https://careers.example.it/contact", "https://www.example.it"))
+        self.assertFalse(looks_related_subdomain_seed("https://www.example.it/blog/post-1", "https://www.example.it"))
+
+    def test_email_service_can_use_common_probe_and_related_subdomain_urls(self) -> None:
+        homepage = "https://acmeholdings.it"
+
+        class FakeCrawler:
+            def __init__(self) -> None:
+                self.scrape_calls: list[str] = []
+                self.map_calls: list[str] = []
+
+            def close(self) -> None:
+                return None
+
+            def scrape_html(self, url: str, *, truncate_html: bool = False):
+                del truncate_html
+                self.scrape_calls.append(url)
+                if url == homepage:
+                    return SimpleNamespace(
+                        url=url,
+                        html='<html><a href="https://careers.acmeholdings.it/contact">Jobs</a></html>',
+                    )
+                return SimpleNamespace(url=url, html="")
+
+            def map_site(self, url: str, *, limit: int = 200):
+                del limit
+                self.map_calls.append(url)
+                if url == homepage:
+                    return []
+                if url == "https://careers.acmeholdings.it/contact":
+                    return ["https://careers.acmeholdings.it/contact"]
+                return []
+
+            def scrape_html_pages(self, urls: list[str], *, truncate_html: bool = False):
+                del truncate_html
+                pages = []
+                for url in urls:
+                    if "careers.acmeholdings.it/contact" in url:
+                        pages.append(SimpleNamespace(url=url, html="<html>jobs@acmeholdings.it</html>"))
+                return pages
+
+        service = ItalyDnbEmailService(ItalyDnbEmailSettings(proxy_url="http://127.0.0.1:7897"))
+        service._crawler = FakeCrawler()
+        try:
+            result = service.discover_emails(homepage)
+        finally:
+            service.close()
+
+        self.assertIn("jobs@acmeholdings.it", result.emails)
