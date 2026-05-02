@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-23T15:30:16Z",
+  "updated_at": "2026-05-02T05:25:36Z",
   "locks": [
     {
       "lock_id": "lock-fix-fc-email-init-20260409-1",
@@ -14,6 +14,32 @@
       "heartbeat_at": "2026-04-09T13:02:29Z",
       "expires_at": "2026-04-09T13:22:29Z",
       "notes": "Avoid eager fc_email imports so delivery can run when asyncio/_overlapped is broken on Windows"
+    },
+    {
+      "lock_id": "lock-shared-protocol-align-20260501-1",
+      "status": "locked",
+      "path": "shared/oldiron_core/protocol_crawler/client.py",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "shared-protocol-align-20260501",
+      "github_ref": "not-created",
+      "locked_at": "2026-05-02T05:25:36Z",
+      "heartbeat_at": "2026-05-02T05:25:36Z",
+      "expires_at": "2026-05-02T05:55:36Z",
+      "notes": "Align shared protocol crawler discovery/runtime behavior closer to System OldIronCrawler for Italy email coverage."
+    },
+    {
+      "lock_id": "lock-shared-protocol-align-20260501-2",
+      "status": "locked",
+      "path": "shared/oldiron_core/protocol_crawler/link_extractor.py",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "shared-protocol-align-20260501",
+      "github_ref": "not-created",
+      "locked_at": "2026-05-02T05:25:36Z",
+      "heartbeat_at": "2026-05-02T05:25:36Z",
+      "expires_at": "2026-05-02T05:55:36Z",
+      "notes": "Align shared protocol crawler discovery/runtime behavior closer to System OldIronCrawler for Italy email coverage."
     }
   ]
 }
