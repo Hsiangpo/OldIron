@@ -5,6 +5,9 @@ from __future__ import annotations
 import html
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait
+from concurrent.futures import FIRST_COMPLETED
 from dataclasses import dataclass
 from urllib.parse import urljoin
 from urllib.parse import urlparse
@@ -14,6 +17,7 @@ from oldiron_core.fc_email.normalization import filter_emails_for_website
 from oldiron_core.fc_email.normalization import normalize_email_candidate
 from oldiron_core.protocol_crawler import SiteCrawlClient
 from oldiron_core.protocol_crawler import SiteCrawlConfig
+from oldiron_core.protocol_crawler.link_extractor import extract_same_site_links
 
 from .email_rules import build_common_probe_urls
 from .email_rules import build_email_candidates
@@ -52,6 +56,10 @@ class ItalyDnbEmailSettings:
     proxy_url: str
     timeout_seconds: float = 20.0
     map_limit: int = 200
+    common_probe_target: int = 8
+    common_probe_concurrency: int = 8
+    common_probe_patience_batches: int = 2
+    common_probe_min_hits_after_patience: int = 2
     email_page_soft_limit: int = 8
     email_page_hard_limit: int = 16
     email_total_hard_limit: int = 20
@@ -76,9 +84,17 @@ class ItalyDnbEmailService:
                 timeout_seconds=settings.timeout_seconds,
             )
         )
+        self._probe_crawler = SiteCrawlClient(
+            SiteCrawlConfig(
+                proxy_url=settings.proxy_url,
+                timeout_seconds=min(settings.timeout_seconds, 4.0),
+                max_retries=0,
+            )
+        )
 
     def close(self) -> None:
         self._crawler.close()
+        self._probe_crawler.close()
 
     def discover_emails(self, website: str) -> EmailDiscoveryResult:
         start_url = self._normalize_start_url(website)
@@ -86,13 +102,20 @@ class ItalyDnbEmailService:
             return EmailDiscoveryResult(emails=[], evidence_url="", selected_urls=[])
         homepage_html = self._fetch_homepage_html(start_url)
         mapped_urls = self._crawler.map_site(start_url, limit=max(self._settings.map_limit, 1))
+        homepage_links = extract_same_site_links(homepage_html, start_url, limit=max(self._settings.map_limit, 1)) if homepage_html else []
         probe_urls = self._probe_common_value_urls(start_url)
         related_urls = self._discover_related_subdomain_urls(
             start_url,
             homepage_html=homepage_html,
-            direct_urls=mapped_urls,
+            direct_urls=[*homepage_links, *mapped_urls],
         )
-        discovered_urls = _merge_unique_urls(mapped_urls, probe_urls, related_urls, limit=max(self._settings.map_limit * 2, 200))
+        discovered_urls = _merge_unique_urls(
+            homepage_links,
+            mapped_urls,
+            probe_urls,
+            related_urls,
+            limit=max(self._settings.map_limit * 2, 240),
+        )
         candidates = build_email_candidates(start_url, discovered_urls)
         selected_email_urls = select_email_urls(candidates)
         fetch_plan = build_email_fetch_plan(
@@ -180,10 +203,31 @@ class ItalyDnbEmailService:
         probe_urls = build_common_probe_urls(start_url)
         if not probe_urls:
             return []
-        return list(self._fetch_urls(probe_urls).keys())
+        result: list[str] = []
+        batch_size = min(max(self._settings.common_probe_concurrency, 1), len(probe_urls))
+        probe_target = min(max(self._settings.common_probe_target, 1), len(probe_urls))
+        start_index = 0
+        empty_batches = 0
+        while start_index < len(probe_urls) and len(result) < probe_target:
+            batch = probe_urls[start_index : start_index + batch_size]
+            start_index += batch_size
+            batch_hits = self._probe_common_value_batch(batch)
+            result = _merge_unique_urls(result, batch_hits, limit=probe_target)
+            if batch_hits:
+                empty_batches = 0
+            else:
+                empty_batches += 1
+            if len(result) >= probe_target:
+                break
+            if empty_batches >= max(self._settings.common_probe_patience_batches, 1):
+                break
+            if start_index >= batch_size * max(self._settings.common_probe_patience_batches, 1):
+                if len(result) < max(self._settings.common_probe_min_hits_after_patience, 1):
+                    break
+        return result
 
     def _discover_related_subdomain_urls(self, start_url: str, *, homepage_html: str, direct_urls: list[str]) -> list[str]:
-        seeds = _collect_related_subdomain_seed_urls(start_url, homepage_html, direct_urls)
+        seeds = _collect_related_subdomain_seed_urls(self._probe_crawler, start_url, homepage_html, direct_urls)
         if not seeds:
             return []
         discovered: list[str] = []
@@ -195,6 +239,31 @@ class ItalyDnbEmailService:
                 continue
             discovered = _merge_unique_urls(discovered, [seed, *urls], limit=120)
         return discovered
+
+    def _probe_common_value_batch(self, probe_urls: list[str]) -> list[str]:
+        if not probe_urls:
+            return []
+        results: list[str] = []
+        futures = {}
+        with ThreadPoolExecutor(max_workers=min(len(probe_urls), max(self._settings.common_probe_concurrency, 1))) as executor:
+            for probe_url in probe_urls:
+                futures[executor.submit(_probe_single_url, probe_url, self._settings)] = probe_url
+            done, pending = wait(futures.keys(), timeout=min(self._settings.timeout_seconds, 6.0), return_when=FIRST_COMPLETED)
+            while done:
+                for future in list(done):
+                    futures.pop(future, None)
+                    try:
+                        hit = future.result()
+                    except Exception:
+                        hit = None
+                    if hit:
+                        results.append(hit)
+                if not futures:
+                    break
+                done, pending = wait(futures.keys(), timeout=min(self._settings.timeout_seconds, 6.0), return_when=FIRST_COMPLETED)
+            for future in futures:
+                future.cancel()
+        return results
 
 
 def _page_map_to_pairs(page_map: dict[str, str], urls: list[str]) -> list[tuple[str, str]]:
@@ -226,16 +295,70 @@ def _merge_unique_urls(*groups: list[str], limit: int) -> list[str]:
     return result
 
 
-def _collect_related_subdomain_seed_urls(start_url: str, homepage_html: str, direct_urls: list[str]) -> list[str]:
+def _collect_related_subdomain_seed_urls(
+    crawler: SiteCrawlClient,
+    start_url: str,
+    homepage_html: str,
+    direct_urls: list[str],
+) -> list[str]:
     seeds = list(pick_subdomain_probe_urls(start_url, direct_urls))
-    for raw_href in re.findall(r'''(?:href|src)=["']([^"'#]+)["']''', homepage_html or "", flags=re.I):
-        absolute = urljoin(start_url, raw_href.strip())
-        normalized = normalize_discovery_url(absolute)
-        if normalized and looks_related_subdomain_seed(normalized, start_url) and normalized not in seeds:
+    for normalized in _extract_same_org_seed_urls(homepage_html or "", start_url, start_url):
+        if normalized not in seeds:
             seeds.append(normalized)
         if len(seeds) >= 8:
-            break
+            return seeds
+    for probe_url in [url for url in pick_subdomain_probe_urls(start_url, direct_urls) if url != start_url]:
+        try:
+            html_text = crawler.scrape_html(probe_url, truncate_html=False).html
+        except Exception:
+            continue
+        for normalized in _extract_same_org_seed_urls(html_text or "", probe_url, start_url):
+            if normalized not in seeds:
+                seeds.append(normalized)
+            if len(seeds) >= 8:
+                return seeds
     return seeds
+
+
+def _extract_same_org_seed_urls(html_text: str, page_url: str, start_url: str) -> list[str]:
+    site_domain = extract_registrable_domain(start_url)
+    page_host = (urlparse(page_url).netloc or "").strip().lower()
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_href in re.findall(r'''(?:href|src)=["']([^"'#]+)["']''', html_text or "", flags=re.I):
+        absolute = urljoin(page_url, raw_href.strip())
+        normalized = normalize_discovery_url(absolute)
+        if not normalized or normalized in seen:
+            continue
+        host = (urlparse(normalized).netloc or "").strip().lower()
+        if not host or host == page_host:
+            continue
+        if extract_registrable_domain(host) != site_domain:
+            continue
+        if not looks_related_subdomain_seed(normalized, start_url):
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+        if len(result) >= 8:
+            break
+    return result
+
+
+def _probe_single_url(probe_url: str, settings: ItalyDnbEmailSettings) -> str | None:
+    crawler = SiteCrawlClient(
+        SiteCrawlConfig(
+            proxy_url=settings.proxy_url,
+            timeout_seconds=min(settings.timeout_seconds, 3.0),
+            max_retries=0,
+        )
+    )
+    try:
+        html_text = crawler.scrape_html(probe_url, truncate_html=False).html
+        return probe_url if str(html_text or "").strip() else None
+    except Exception:
+        return None
+    finally:
+        crawler.close()
 
 
 def collect_emails_for_pages(website: str, pages: list[tuple[str, str]]) -> tuple[list[str], dict[str, list[str]]]:
