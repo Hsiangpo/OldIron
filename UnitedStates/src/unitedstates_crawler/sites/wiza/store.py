@@ -35,6 +35,7 @@ class UnitedStatesWizaStore:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout=60000")
             conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA temp_store=FILE")
             self._local.conn = conn
         return conn
 
@@ -50,6 +51,7 @@ class UnitedStatesWizaStore:
             try:
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA temp_store=FILE")
                 conn.executescript(
                     """
                     CREATE TABLE IF NOT EXISTS companies (
@@ -58,6 +60,8 @@ class UnitedStatesWizaStore:
                         website TEXT DEFAULT '',
                         updated_at TEXT NOT NULL
                     );
+                    CREATE INDEX IF NOT EXISTS idx_companies_website
+                    ON companies (website);
                     CREATE TABLE IF NOT EXISTS checkpoints (
                         scope TEXT PRIMARY KEY,
                         last_page INTEGER DEFAULT 0,
