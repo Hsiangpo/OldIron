@@ -140,8 +140,8 @@ class ItalyDnbBasicTests(unittest.TestCase):
 
         self.assertEqual(plan["homepage_primary_urls"], [start_url])
         self.assertEqual(plan["email_primary_urls"][0], "https://example.it/contact")
-        self.assertIn("https://example.it/careers", plan["email_primary_urls"])
-        self.assertIn("https://example.it/privacy-policy", plan["email_overflow_urls"])
+        self.assertIn("https://example.it/privacy-policy", plan["email_primary_urls"])
+        self.assertIn("https://example.it/careers", plan["email_overflow_urls"])
 
     def test_common_probe_urls_include_contact_and_privacy(self) -> None:
         urls = build_common_probe_urls("https://example.it")

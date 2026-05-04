@@ -8,7 +8,14 @@ from __future__ import annotations
 
 import logging
 import socket
+import re
+from concurrent.futures import FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait
 from dataclasses import dataclass, field
+from urllib.parse import parse_qsl
+from urllib.parse import urlencode
+from urllib.parse import urljoin
 from urllib.parse import urlparse
 
 from curl_cffi import requests as cffi_requests
@@ -54,6 +61,56 @@ _INSECURE_HTTPS_ERROR_HINTS = (
     "certificate subject name",
     "certificate verify failed",
 )
+_RELATED_SUBDOMAIN_HOST_TOKENS = {
+    "about", "career", "careers", "company", "contact", "help", "jobs",
+    "leadership", "people", "support", "team",
+}
+_RELATED_SUBDOMAIN_PATH_TOKENS = {
+    "about", "board", "career", "careers", "company", "contact", "director",
+    "executive", "founder", "governance", "jobs", "leadership", "management",
+    "officers", "people", "president", "privacy", "support", "team", "terms",
+}
+_SUBDOMAIN_SCAN_PAGE_TOKENS = {
+    "about", "contact", "company", "help", "people", "privacy", "support", "team",
+}
+_TRACKING_QUERY_KEYS = {
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+    "msclkid",
+    "ref_src",
+    "srsltid",
+}
+_COMMON_VALUE_PATHS = (
+    "/impressum",
+    "/imprint",
+    "/kontakt",
+    "/kontakt.html",
+    "/ueber-uns",
+    "/uber-uns",
+    "/about-us/our-people",
+    "/our-people",
+    "/company-leadership",
+    "/executive-team",
+    "/leadership",
+    "/management",
+    "/our-team",
+    "/team-members",
+    "/team",
+    "/people",
+    "/about-us",
+    "/about",
+    "/about.html",
+    "/company",
+    "/contact-us",
+    "/contact",
+    "/contact.html",
+    "/legal-notice",
+    "/privacy-policy",
+    "/privacy",
+    "/terms",
+)
 
 
 @dataclass()
@@ -71,6 +128,13 @@ class SiteCrawlConfig:
     proxy_url: str = ""
     impersonate: str = "chrome110"
     max_html_chars: int = 250_000
+    common_probe_target: int = 8
+    common_probe_concurrency: int = 8
+    common_probe_patience_batches: int = 2
+    common_probe_min_hits_after_patience: int = 2
+    related_seed_limit: int = 2
+    related_per_seed_limit: int = 20
+    related_total_limit: int = 60
     default_headers: dict[str, str] = field(default_factory=lambda: {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
@@ -136,31 +200,38 @@ class SiteCrawlClient:
         Returns:
             站点链接列表
         """
-        # 第一步：尝试 sitemap
+        homepage_html = self._fetch_html(url, truncate_html=False)
         sitemap_urls = discover_sitemap_urls(
             self._session, url,
             limit=limit,
             timeout=self._config.timeout_seconds,
             include_subdomains=include_subdomains,
         )
-        if sitemap_urls:
-            LOGGER.info("协议爬虫 sitemap 发现链接：url=%s count=%s", url, len(sitemap_urls))
-            return sitemap_urls
-
-        # 第二步：fallback 到首页链接提取
-        LOGGER.info("协议爬虫无 sitemap，回退首页链接提取：url=%s", url)
-        homepage_html = self._fetch_html(url)
-        if not homepage_html:
-            return []
-
         links = extract_same_site_links(
             homepage_html,
             url,
             limit=limit,
             include_subdomains=include_subdomains,
+        ) if homepage_html else []
+        probe_urls = self._probe_common_value_urls(url, limit=limit)
+        merged = _merge_unique_urls(
+            probe_urls,
+            links,
+            sitemap_urls,
+            limit=limit,
         )
-        LOGGER.info("协议爬虫首页链接提取：url=%s count=%s", url, len(links))
-        return links
+        related_urls = self._discover_related_subdomain_urls(
+            url,
+            homepage_html=homepage_html,
+            direct_urls=merged,
+            limit=min(limit, self._config.related_total_limit),
+        )
+        merged = _merge_unique_urls(merged, related_urls, limit=limit)
+        if sitemap_urls:
+            LOGGER.info("协议爬虫 sitemap 发现链接：url=%s count=%s", url, len(sitemap_urls))
+        elif homepage_html:
+            LOGGER.info("协议爬虫无 sitemap，回退首页链接提取：url=%s count=%s", url, len(links))
+        return merged
 
     def scrape_html(self, url: str, *, truncate_html: bool = True) -> HtmlPageResult:
         """抓取单个页面的完整 HTML。
@@ -309,6 +380,58 @@ class SiteCrawlClient:
         self._reset_session(use_proxy=False)
         return True
 
+    def _probe_common_value_urls(self, start_url: str, *, limit: int) -> list[str]:
+        probe_urls = _build_common_probe_urls(start_url)
+        if not probe_urls:
+            return []
+        result: list[str] = []
+        probe_target = min(max(self._config.common_probe_target, 1), max(limit, 1), len(probe_urls))
+        batch_size = min(max(self._config.common_probe_concurrency, 1), len(probe_urls))
+        start_index = 0
+        empty_batches = 0
+        while start_index < len(probe_urls) and len(result) < probe_target:
+            batch = probe_urls[start_index : start_index + batch_size]
+            start_index += batch_size
+            batch_hits = _probe_common_value_batch(batch, self._config)
+            result = _merge_unique_urls(result, batch_hits, limit=probe_target)
+            if batch_hits:
+                empty_batches = 0
+            else:
+                empty_batches += 1
+            if len(result) >= probe_target:
+                break
+            if empty_batches >= max(self._config.common_probe_patience_batches, 1):
+                break
+            if start_index >= batch_size * max(self._config.common_probe_patience_batches, 1):
+                if len(result) < max(self._config.common_probe_min_hits_after_patience, 1):
+                    break
+        return result
+
+    def _discover_related_subdomain_urls(
+        self,
+        start_url: str,
+        *,
+        homepage_html: str,
+        direct_urls: list[str],
+        limit: int,
+    ) -> list[str]:
+        seeds = _collect_related_subdomain_seed_urls(
+            self,
+            start_url,
+            homepage_html=homepage_html,
+            direct_urls=direct_urls,
+        )
+        if not seeds:
+            return []
+        result: list[str] = []
+        for seed_url in seeds[: self._config.related_seed_limit]:
+            result = _merge_unique_urls(result, [seed_url], limit=limit)
+            extra_urls = self.map_site(seed_url, limit=self._config.related_per_seed_limit)
+            result = _merge_unique_urls(result, extra_urls, limit=limit)
+            if len(result) >= limit:
+                break
+        return result
+
 
 def _is_supported_page_response(url: str, content_type: str) -> bool:
     lowered_url = str(url or "").lower()
@@ -372,3 +495,229 @@ def _is_dead_local_proxy_error(proxy_url: str, error: Exception) -> bool:
         return False
     lowered = str(error or "").lower()
     return any(hint in lowered for hint in _LOCAL_PROXY_ERROR_HINTS)
+
+
+def _build_common_probe_urls(start_url: str) -> list[str]:
+    parsed = urlparse(start_url)
+    if not parsed.scheme or not parsed.netloc:
+        return []
+    locale_prefix = _extract_path_locale_prefix(parsed.path)
+    result: list[str] = []
+    seen: set[str] = set()
+    hosts = [parsed.netloc]
+    if parsed.netloc and not parsed.netloc.lower().startswith("www."):
+        hosts.append(f"www.{parsed.netloc}")
+    for host in hosts:
+        for base_prefix in ([locale_prefix] if locale_prefix else []) + [""]:
+            for path in _COMMON_VALUE_PATHS:
+                joined_path = f"{base_prefix}{path}" if base_prefix else path
+                probe_url = parsed._replace(netloc=host, path=joined_path, query="", fragment="").geturl()
+                normalized = _normalize_discovery_url(probe_url)
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    result.append(normalized)
+    return result
+
+
+def _extract_path_locale_prefix(path: str) -> str:
+    cleaned = str(path or "").strip("/")
+    if not cleaned:
+        return ""
+    first = cleaned.split("/", 1)[0].strip().lower()
+    if re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", first):
+        return f"/{first}"
+    return ""
+
+
+def _normalize_discovery_url(url: str) -> str:
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if not parsed.scheme or not parsed.netloc:
+        return text
+    kept_pairs = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        clean_key = str(key or "").strip().lower()
+        if not clean_key or clean_key.startswith("utm_") or clean_key in _TRACKING_QUERY_KEYS:
+            continue
+        kept_pairs.append((key, value))
+    return parsed._replace(query=urlencode(kept_pairs, doseq=True), fragment="").geturl()
+
+
+def _merge_unique_urls(*groups: list[str], limit: int) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for url in group:
+            normalized = _normalize_discovery_url(str(url or "").strip())
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            result.append(normalized)
+            if len(result) >= limit:
+                return result
+    return result
+
+
+def _probe_common_value_batch(probe_urls: list[str], config: SiteCrawlConfig) -> list[str]:
+    if not probe_urls:
+        return []
+    results: list[str] = []
+    futures = {}
+    with ThreadPoolExecutor(max_workers=min(len(probe_urls), max(config.common_probe_concurrency, 1))) as executor:
+        for probe_url in probe_urls:
+            futures[executor.submit(_probe_single_url, probe_url, config)] = probe_url
+        done, _pending = wait(futures.keys(), timeout=min(config.timeout_seconds, 6.0), return_when=FIRST_COMPLETED)
+        while done:
+            for future in list(done):
+                futures.pop(future, None)
+                try:
+                    hit = future.result()
+                except Exception:
+                    hit = None
+                if hit:
+                    results.append(hit)
+            if not futures:
+                break
+            done, _pending = wait(futures.keys(), timeout=min(config.timeout_seconds, 6.0), return_when=FIRST_COMPLETED)
+        for future in futures:
+            future.cancel()
+    return results
+
+
+def _probe_single_url(probe_url: str, config: SiteCrawlConfig) -> str | None:
+    crawler = SiteCrawlClient(
+        SiteCrawlConfig(
+            timeout_seconds=min(config.timeout_seconds, 3.0),
+            max_retries=0,
+            proxy_url=config.proxy_url,
+            impersonate=config.impersonate,
+            max_html_chars=config.max_html_chars,
+            default_headers=dict(config.default_headers),
+        )
+    )
+    try:
+        html_text = crawler.scrape_html(probe_url, truncate_html=False).html
+        return probe_url if str(html_text or "").strip() else None
+    except Exception:
+        return None
+    finally:
+        crawler.close()
+
+
+def _collect_related_subdomain_seed_urls(
+    crawler: SiteCrawlClient,
+    start_url: str,
+    *,
+    homepage_html: str,
+    direct_urls: list[str],
+) -> list[str]:
+    seeds = list(_pick_subdomain_probe_urls(start_url, direct_urls))
+    for normalized in _extract_same_org_seed_urls(homepage_html or "", start_url, start_url):
+        if normalized not in seeds:
+            seeds.append(normalized)
+        if len(seeds) >= 8:
+            return seeds
+    for probe_url in [url for url in _pick_subdomain_probe_urls(start_url, direct_urls) if url != start_url]:
+        try:
+            html_text = crawler.scrape_html(probe_url, truncate_html=False).html
+        except Exception:
+            continue
+        for normalized in _extract_same_org_seed_urls(html_text or "", probe_url, start_url):
+            if normalized not in seeds:
+                seeds.append(normalized)
+            if len(seeds) >= 8:
+                return seeds
+    return seeds
+
+
+def _extract_same_org_seed_urls(html_text: str, page_url: str, start_url: str) -> list[str]:
+    site_domain = _extract_registrable_domain(start_url)
+    page_host = (urlparse(page_url).netloc or "").strip().lower()
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_href in re.findall(r'''(?:href|src)=["']([^"'#]+)["']''', html_text or "", flags=re.I):
+        absolute = urljoin(page_url, raw_href.strip())
+        normalized = _normalize_discovery_url(absolute)
+        if not normalized or normalized in seen:
+            continue
+        host = (urlparse(normalized).netloc or "").strip().lower()
+        if not host or host == page_host:
+            continue
+        if _extract_registrable_domain(host) != site_domain:
+            continue
+        if not _looks_related_subdomain_seed(normalized, start_url):
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+        if len(result) >= 8:
+            break
+    return result
+
+
+def _pick_subdomain_probe_urls(start_url: str, direct_urls: list[str]) -> list[str]:
+    start_domain = _extract_registrable_domain(start_url)
+    picked: list[str] = []
+    for url in direct_urls:
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").strip().lower()
+        if not host or _extract_registrable_domain(host) != start_domain:
+            continue
+        tokens = _extract_url_hint_tokens(url)
+        if not any(token in _SUBDOMAIN_SCAN_PAGE_TOKENS for token in tokens):
+            continue
+        if url not in picked:
+            picked.append(url)
+        if len(picked) >= 4:
+            break
+    return picked
+
+
+def _looks_related_subdomain_seed(url: str, start_url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").strip().lower()
+    start_host = (urlparse(start_url).netloc or "").strip().lower()
+    if not host or not start_host or host == start_host:
+        return False
+    if _extract_registrable_domain(host) != _extract_registrable_domain(start_host):
+        return False
+    host_tokens = [token for token in re.split(r"[\W_]+", host) if len(token) >= 3]
+    path_tokens = _extract_url_hint_tokens(url)
+    if any(token in _RELATED_SUBDOMAIN_HOST_TOKENS for token in host_tokens):
+        return True
+    return any(token in _RELATED_SUBDOMAIN_PATH_TOKENS for token in path_tokens)
+
+
+def _extract_url_hint_tokens(url: str) -> list[str]:
+    parsed = urlparse(str(url or ""))
+    host_tokens = [
+        clean
+        for clean in re.split(r"[\W_]+", parsed.netloc.strip().lower())
+        if len(clean) >= 3 and clean not in {"www", "com", "org", "net", "co", "it", "uk", "eu"}
+    ]
+    path_tokens: list[str] = []
+    for part in parsed.path.split("/"):
+        for token in re.split(r"[\W_]+", part.strip().lower()):
+            clean = token.strip().lower()
+            if len(clean) < 3 or clean in path_tokens or clean in host_tokens:
+                continue
+            path_tokens.append(clean)
+    return [*host_tokens, *path_tokens]
+
+
+def _extract_registrable_domain(value: str) -> str:
+    host = str(value or "").strip().lower()
+    if not host:
+        return ""
+    if "://" in host or "/" in host:
+        host = (urlparse(host).netloc or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    labels = [label for label in host.split(".") if label]
+    if len(labels) < 2:
+        return host
+    suffix2 = ".".join(labels[-2:])
+    if suffix2 in {"co.jp", "or.jp", "ne.jp", "go.jp", "ac.jp", "co.uk", "org.uk", "gov.uk", "ac.uk"} and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return suffix2
