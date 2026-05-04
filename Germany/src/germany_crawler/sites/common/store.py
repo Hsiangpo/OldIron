@@ -392,3 +392,18 @@ class GermanyCompanyStore:
             """
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def iter_websites(self):
+        conn = self._conn()
+        rows = conn.execute(
+            """
+            SELECT DISTINCT website
+            FROM companies
+            WHERE website != '' AND website IS NOT NULL
+            ORDER BY website
+            """
+        )
+        for row in rows:
+            website = str(row["website"] or "").strip()
+            if website:
+                yield website

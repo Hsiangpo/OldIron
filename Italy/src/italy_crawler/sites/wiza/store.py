@@ -116,13 +116,19 @@ class ItalyWizaStore:
         return int(row["cnt"] if row else 0)
 
     def export_websites(self) -> list[str]:
+        return list(self.iter_websites())
+
+    def iter_websites(self):
         conn = self._conn()
         rows = conn.execute(
             """
-            SELECT website
+            SELECT DISTINCT website
             FROM companies
             WHERE website != '' AND website IS NOT NULL
             ORDER BY website
             """
-        ).fetchall()
-        return sorted({str(row["website"] or "").strip() for row in rows if str(row["website"] or "").strip()})
+        )
+        for row in rows:
+            website = str(row["website"] or "").strip()
+            if website:
+                yield website

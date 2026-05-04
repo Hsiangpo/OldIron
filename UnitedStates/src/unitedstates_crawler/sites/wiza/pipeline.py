@@ -176,7 +176,17 @@ def _save_checkpoint(output_dir: Path, page: int, search_after: list[Any], statu
 
 
 def _export_websites(output_dir: Path, store: UnitedStatesWizaStore) -> None:
-    (output_dir / "websites.txt").write_text("\n".join(store.export_websites()), encoding="utf-8")
+    _write_websites_file(output_dir / "websites.txt", store.iter_websites())
+
+
+def _write_websites_file(path: Path, websites) -> None:
+    with path.open("w", encoding="utf-8") as fp:
+        first = True
+        for website in websites:
+            if not first:
+                fp.write("\n")
+            fp.write(str(website))
+            first = False
 
 
 def _should_export_websites(processed_pages: int) -> bool:
