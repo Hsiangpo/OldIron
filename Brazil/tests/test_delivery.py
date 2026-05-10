@@ -21,6 +21,36 @@ from brazil_crawler.delivery import build_delivery_bundle
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_day1_supports_cnpjbiz_site(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            data_root = root / "output" / "cnpjbiz"
+            data_root.mkdir(parents=True)
+            conn = sqlite3.connect(str(data_root / "cnpjbiz_store.db"))
+            conn.executescript(
+                """
+                CREATE TABLE final_companies (
+                    cnpj TEXT PRIMARY KEY,
+                    company_name TEXT,
+                    representative TEXT,
+                    emails TEXT,
+                    website TEXT,
+                    phone TEXT,
+                    address TEXT,
+                    evidence_url TEXT
+                );
+                INSERT INTO final_companies VALUES
+                    ('1', 'Acme Brasil', 'Jane Doe', 'sales@acme.com', '', '1', 'x', 'https://cnpj.biz/1');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            summary = build_delivery_bundle(root / "output", root / "delivery", "day1")
+            self.assertEqual(1, summary["delta_companies"])
+            self.assertTrue((root / "delivery" / "Brazil_day001" / "cnpjbiz.csv").exists())
+            self.assertTrue((root / "delivery" / "Brazil_day001" / "cnpjbiz.keys.txt").exists())
+
     def test_day1_outputs_only_qualified_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

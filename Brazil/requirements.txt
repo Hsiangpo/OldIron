@@ -1,7 +1,9 @@
 python-dotenv
+cryptography
 curl_cffi
 playwright
 openai
 beautifulsoup4
 markdownify
 urllib3
+websocket-client

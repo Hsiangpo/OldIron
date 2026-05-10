@@ -22,14 +22,17 @@ USAGE_TEXT = """用法：
   python run.py <site> [额外参数]
 
 站点：
+  cnpjbiz  — CNPJ Biz 巴西企业目录
   dnb  — DNB 巴西企业目录
 """
 
 BASE_REQUIRED_MODULES = (
     ("dotenv", "python-dotenv"),
+    ("cryptography", "cryptography"),
     ("curl_cffi", "curl_cffi"),
     ("playwright", "playwright"),
     ("openai", "openai"),
+    ("websocket", "websocket-client"),
 )
 
 
@@ -85,6 +88,10 @@ def _dispatch(argv: list[str]) -> int:
         return 1
     _load_project_env()
     site = argv[0].strip().lower()
+    if site == "cnpjbiz":
+        from brazil_crawler.sites.cnpjbiz.cli import run_cnpjbiz
+
+        return run_cnpjbiz(argv[1:])
     if site == "dnb":
         from brazil_crawler.sites.dnb.cli import run_dnb
 

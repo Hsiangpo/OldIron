@@ -29,6 +29,14 @@ def _load_run_module():
 
 
 class RunDispatchTests(unittest.TestCase):
+    def test_dispatches_to_cnpjbiz_cli(self) -> None:
+        run_module = _load_run_module()
+        with patch.object(run_module.importlib.util, "find_spec", return_value=object()):
+            with patch("brazil_crawler.sites.cnpjbiz.cli.run_cnpjbiz", return_value=0) as run_cnpjbiz:
+                result = run_module._dispatch(["cnpjbiz"])
+        self.assertEqual(0, result)
+        run_cnpjbiz.assert_called_once_with([])
+
     def test_dispatches_to_dnb_cli(self) -> None:
         run_module = _load_run_module()
         with patch.object(run_module.importlib.util, "find_spec", return_value=object()):

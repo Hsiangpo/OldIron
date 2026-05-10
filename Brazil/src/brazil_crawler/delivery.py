@@ -91,6 +91,8 @@ def build_delivery_bundle(data_root: Path, delivery_root: Path, day_label: str) 
 
 
 def _load_site_records(site_name: str, site_dir: Path) -> list[dict[str, str]]:
+    if site_name == "cnpjbiz":
+        return _load_cnpjbiz_data(site_dir)
     if site_name == "dnb":
         return _load_dnb_data(site_dir)
     return []
@@ -141,6 +143,35 @@ def _load_dnb_data(site_dir: Path) -> list[dict[str, str]]:
             }
         )
     return records
+
+
+def _load_cnpjbiz_data(site_dir: Path) -> list[dict[str, str]]:
+    db_path = site_dir / "cnpjbiz_store.db"
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT company_name, representative, emails, website, phone, address, evidence_url
+        FROM final_companies
+        ORDER BY company_name
+        """
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "company_name": str(row["company_name"] or "").strip(),
+            "representative": str(row["representative"] or "").strip(),
+            "emails": str(row["emails"] or "").strip(),
+            "website": str(row["website"] or "").strip(),
+            "phone": str(row["phone"] or "").strip(),
+            "address": str(row["address"] or "").strip(),
+            "evidence_url": str(row["evidence_url"] or "").strip(),
+        }
+        for row in rows
+        if str(row["company_name"] or "").strip()
+    ]
 
 
 def _row_score(row: sqlite3.Row) -> int:
