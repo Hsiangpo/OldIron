@@ -18,6 +18,8 @@ class CnpjBizConfig:
     output_dir: Path
     cdp_url: str = "http://127.0.0.1:9222"
     proxy_url: str = ""
+    proxy_feed_url: str = ""
+    proxy_feed_scheme: str = "http"
     list_workers: int = 1
     detail_workers: int = 8
     max_pages: int = 0
@@ -48,6 +50,8 @@ class CnpjBizConfig:
             output_dir=output_dir,
             cdp_url=str(os.getenv("CNPJBIZ_CDP_URL", "http://127.0.0.1:9222") or "").strip() or "http://127.0.0.1:9222",
             proxy_url=str(os.getenv("CNPJBIZ_PROXY_URL", "") or "").strip(),
+            proxy_feed_url=str(os.getenv("CNPJBIZ_PROXY_FEED_URL", "") or "").strip(),
+            proxy_feed_scheme=str(os.getenv("CNPJBIZ_PROXY_FEED_SCHEME", "http") or "http").strip().lower() or "http",
             list_workers=max(int(list_workers or 1), 1),
             detail_workers=max(int(detail_workers or 1), 1),
             max_pages=max(int(max_pages or 0), 0),

@@ -23,6 +23,8 @@ from curl_cffi import requests as cffi_requests
 from websocket import create_connection
 
 from .config import CnpjBizConfig
+from .proxy_pool import CnpjBizProxyPool
+from .proxy_pool import ProxyPoolConfig
 from .selector import RepresentativeCandidate
 
 
@@ -218,6 +220,7 @@ class CnpjBizClient:
     def __init__(self, config: CnpjBizConfig) -> None:
         self._config = config
         self._state_provider = CnpjBizCookieProvider(config)
+        self._proxy_pool = self._build_proxy_pool(config)
         self._session = self._build_session()
 
     def close(self) -> None:
@@ -348,9 +351,20 @@ class CnpjBizClient:
         json_body: dict[str, Any] | None = None,
     ):
         last_error: Exception | None = None
-        for force in (False, True):
+        attempts = [(False, self._active_proxy_url())]
+        if self._proxy_pool is not None:
+            attempts.extend(
+                [
+                    (False, self._proxy_pool.rotate_proxy()),
+                    (True, self._proxy_pool.rotate_proxy()),
+                ]
+            )
+        else:
+            attempts.append((True, self._active_proxy_url()))
+        for force, proxy_url in attempts:
             state = self._state_provider.fetch_state(force=force)
             headers = self._build_headers(state, referer=referer, is_xhr=json_body is not None)
+            self._apply_proxy(proxy_url)
             try:
                 response = self._session.request(
                     method,
@@ -372,6 +386,28 @@ class CnpjBizClient:
         if last_error is not None:
             raise last_error
         raise RuntimeError(f"CNPJ Biz 请求失败：{method} {url}")
+
+    def _active_proxy_url(self) -> str:
+        if self._proxy_pool is not None:
+            return self._proxy_pool.current_proxy()
+        return str(self._config.proxy_url or "").strip()
+
+    def _build_proxy_pool(self, config: CnpjBizConfig) -> CnpjBizProxyPool | None:
+        if not config.proxy_feed_url:
+            return None
+        return CnpjBizProxyPool(
+            ProxyPoolConfig(
+                feed_url=config.proxy_feed_url,
+                scheme=config.proxy_feed_scheme,
+            )
+        )
+
+    def _apply_proxy(self, proxy_url: str) -> None:
+        text = str(proxy_url or "").strip()
+        proxies = {}
+        if text:
+            proxies = {"http": text, "https": text}
+        self._session.proxies = proxies
 
     def _build_headers(self, state: CnpjBizBrowserState, *, referer: str, is_xhr: bool) -> dict[str, str]:
         headers = {
@@ -402,10 +438,7 @@ class CnpjBizClient:
         return headers
 
     def _build_session(self) -> cffi_requests.Session:
-        proxies = {}
-        if self._config.proxy_url:
-            proxies = {"http": self._config.proxy_url, "https": self._config.proxy_url}
-        session = cffi_requests.Session(proxies=proxies)
+        session = cffi_requests.Session(proxies={})
         session.trust_env = False
         return session
 

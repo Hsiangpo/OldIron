@@ -77,6 +77,20 @@ DETAIL_HTML = """
 
 
 class CnpjBizClientTests(unittest.TestCase):
+    def test_active_proxy_uses_feed_pool_when_present(self) -> None:
+        config = CnpjBizConfig(
+            project_root=Path("."),
+            output_dir=Path("."),
+            proxy_feed_url="https://example.com/feed",
+            proxy_feed_scheme="http",
+        )
+        client = CnpjBizClient(config)
+        try:
+            client._proxy_pool = type("Pool", (), {"current_proxy": lambda self: "http://1.1.1.1:80"})()  # noqa: SLF001
+            self.assertEqual("http://1.1.1.1:80", client._active_proxy_url())  # noqa: SLF001
+        finally:
+            client.close()
+
     def test_parse_list_page_reads_records_and_next_url(self) -> None:
         parsed = parse_list_page(LIST_HTML, "https://cnpj.biz/empresas")
 
