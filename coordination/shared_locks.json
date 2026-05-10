@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-05-02T05:25:36Z",
+  "updated_at": "2026-05-10T12:09:53Z",
   "locks": [
     {
       "lock_id": "lock-fix-fc-email-init-20260409-1",
@@ -40,6 +40,19 @@
       "heartbeat_at": "2026-05-02T05:25:36Z",
       "expires_at": "2026-05-02T05:55:36Z",
       "notes": "Align shared protocol crawler discovery/runtime behavior closer to System OldIronCrawler for Italy email coverage."
+    },
+    {
+      "lock_id": "lock-brazil-cnpjbiz-onboard-20260510-1",
+      "status": "locked",
+      "path": "Brazil/src/brazil_crawler/delivery.py",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "task_id": "brazil-cnpjbiz-onboard-20260510",
+      "github_ref": "not-created",
+      "locked_at": "2026-05-10T12:09:53Z",
+      "heartbeat_at": "2026-05-10T12:09:53Z",
+      "expires_at": "2026-05-10T12:39:53Z",
+      "notes": "Onboard Brazil CNPJ Biz protocol crawler with 9222 cookie reuse, reveal API decrypt, LLM rep selection, and per-site delivery."
     }
   ]
 }

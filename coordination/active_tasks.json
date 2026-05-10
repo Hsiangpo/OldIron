@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-05-02T05:25:36Z",
+  "updated_at": "2026-05-10T12:09:53Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -95,6 +95,38 @@
       "started_at": "2026-05-02T05:25:36Z",
       "last_heartbeat_at": "2026-05-02T05:25:36Z",
       "notes": "Align shared protocol crawler discovery/runtime behavior closer to System OldIronCrawler for Italy email coverage."
+    },
+    {
+      "task_id": "brazil-cnpjbiz-onboard-20260510",
+      "status": "in_progress",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "change_class": "shared_zone",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Brazil/src/brazil_crawler/sites/cnpjbiz",
+        "Brazil/src/brazil_crawler/delivery.py",
+        "Brazil/run.py",
+        "Brazil/tests/cnpjbiz"
+      ],
+      "planned_files": [
+        "Brazil/src/brazil_crawler/sites/cnpjbiz",
+        "Brazil/src/brazil_crawler/delivery.py",
+        "Brazil/run.py",
+        "Brazil/README.md",
+        "Brazil/.env.example",
+        "Brazil/tests/test_run_dispatch.py",
+        "Brazil/tests/test_delivery.py",
+        "Brazil/tests/cnpjbiz"
+      ],
+      "shared_lock_ids": [
+        "lock-brazil-cnpjbiz-onboard-20260510-1"
+      ],
+      "github_ref": "not-created",
+      "started_at": "2026-05-10T12:09:53Z",
+      "last_heartbeat_at": "2026-05-10T12:09:53Z",
+      "notes": "Onboard Brazil CNPJ Biz protocol crawler with 9222 cookie reuse, reveal API decrypt, LLM rep selection, and per-site delivery."
     }
   ]
 }
