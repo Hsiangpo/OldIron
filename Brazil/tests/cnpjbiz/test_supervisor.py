@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +23,8 @@ if str(SHARED_DIR) not in sys.path:
 from brazil_crawler.sites.cnpjbiz.store import CnpjBizStore
 from brazil_crawler.sites.cnpjbiz.supervisor import _choose_run_mode
 from brazil_crawler.sites.cnpjbiz.supervisor import _is_fully_drained
+from brazil_crawler.sites.cnpjbiz.supervisor import CnpjBizSupervisor
+from brazil_crawler.sites.cnpjbiz.supervisor import SupervisorSettings
 
 
 class SupervisorTests(unittest.TestCase):
@@ -63,3 +66,28 @@ class SupervisorTests(unittest.TestCase):
             self.assertTrue(_is_fully_drained(progress))
             self.assertEqual("all", _choose_run_mode(progress))
             store.close()
+
+    def test_rotate_clash_if_enabled_updates_last_choice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = SupervisorSettings(
+                project_root=Path(tmpdir),
+                output_dir=Path(tmpdir),
+            )
+            supervisor = CnpjBizSupervisor(settings)
+            with patch(
+                "brazil_crawler.sites.cnpjbiz.supervisor.CnpjBizConfig.from_env",
+                return_value=type(
+                    "Cfg",
+                    (),
+                    {
+                        "clash_rotate_enabled": True,
+                        "clash_unix_socket_path": "/tmp/verge.sock",
+                        "clash_selector_name": "PROXY",
+                    },
+                )(),
+            ), patch(
+                "brazil_crawler.sites.cnpjbiz.supervisor.ClashUnixController.cycle_selector",
+                return_value="🇭🇰 香港商宽",
+            ):
+                supervisor._rotate_clash_if_enabled()  # noqa: SLF001
+            self.assertEqual("🇭🇰 香港商宽", supervisor._last_clash_choice)  # noqa: SLF001

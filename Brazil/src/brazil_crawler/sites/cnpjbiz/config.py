@@ -22,6 +22,9 @@ class CnpjBizConfig:
     proxy_feed_scheme: str = "http"
     blurpath_cdp_url: str = "http://127.0.0.1:9222"
     blurpath_enabled: bool = False
+    clash_unix_socket_path: str = "/tmp/verge/verge-mihomo.sock"
+    clash_selector_name: str = "PROXY"
+    clash_rotate_enabled: bool = False
     list_workers: int = 1
     detail_workers: int = 8
     max_pages: int = 0
@@ -56,6 +59,9 @@ class CnpjBizConfig:
             proxy_feed_scheme=str(os.getenv("CNPJBIZ_PROXY_FEED_SCHEME", "http") or "http").strip().lower() or "http",
             blurpath_cdp_url=str(os.getenv("CNPJBIZ_BLURPATH_CDP_URL", "http://127.0.0.1:9222") or "").strip() or "http://127.0.0.1:9222",
             blurpath_enabled=str(os.getenv("CNPJBIZ_BLURPATH_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"},
+            clash_unix_socket_path=str(os.getenv("CNPJBIZ_CLASH_UNIX_SOCKET_PATH", "/tmp/verge/verge-mihomo.sock") or "").strip() or "/tmp/verge/verge-mihomo.sock",
+            clash_selector_name=str(os.getenv("CNPJBIZ_CLASH_SELECTOR_NAME", "PROXY") or "PROXY").strip() or "PROXY",
+            clash_rotate_enabled=str(os.getenv("CNPJBIZ_CLASH_ROTATE_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"},
             list_workers=max(int(list_workers or 1), 1),
             detail_workers=max(int(detail_workers or 1), 1),
             max_pages=max(int(max_pages or 0), 0),

@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .clash_controller import ClashUnixController
 from .config import CnpjBizConfig
 from .pipeline import _START_URL
 from .store import CnpjBizProgress
@@ -67,6 +68,7 @@ class CnpjBizSupervisor:
         self._store = CnpjBizStore(settings.output_dir / "cnpjbiz_store.db")
         self._pid_path = settings.output_dir / "run.pid"
         self._stop_requested = False
+        self._last_clash_choice = ""
         signal.signal(signal.SIGTERM, self._handle_stop)
         signal.signal(signal.SIGINT, self._handle_stop)
 
@@ -81,6 +83,7 @@ class CnpjBizSupervisor:
                 progress = self._store.progress()
                 mode = _choose_run_mode(progress)
                 if mode == "all" and not self._homepage_accessible():
+                    self._rotate_clash_if_enabled()
                     mode = "wait"
                 if mode == "all" and _is_fully_drained(progress):
                     self._seed_new_home_cycle()
@@ -120,6 +123,29 @@ class CnpjBizSupervisor:
             return False
         finally:
             client.close()
+
+    def _rotate_clash_if_enabled(self) -> None:
+        config = CnpjBizConfig.from_env(
+            project_root=self._settings.project_root,
+            output_dir=self._settings.output_dir,
+            list_workers=1,
+            detail_workers=1,
+            max_pages=0,
+        )
+        if not config.clash_rotate_enabled:
+            return
+        try:
+            controller = ClashUnixController(config.clash_unix_socket_path)
+            picked = controller.cycle_selector(
+                config.clash_selector_name,
+                ignore={"DIRECT"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("CNPJ Biz supervisor Clash 轮换失败：%s", exc)
+            return
+        if picked != self._last_clash_choice:
+            LOGGER.info("CNPJ Biz supervisor 已切换 Clash 节点：selector=%s choice=%s", config.clash_selector_name, picked)
+            self._last_clash_choice = picked
 
     def _start_worker(self, mode: str) -> int:
         log_path = self._settings.output_dir / "runtime.log"
