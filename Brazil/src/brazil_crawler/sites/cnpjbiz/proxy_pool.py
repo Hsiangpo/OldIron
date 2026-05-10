@@ -8,6 +8,8 @@ import time
 import urllib.request
 from dataclasses import dataclass
 
+from .blurpath_provider import BlurpathBrowserProvider
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -17,6 +19,8 @@ class ProxyPoolConfig:
     feed_url: str = ""
     scheme: str = "http"
     cache_ttl_seconds: float = 60.0
+    blurpath_cdp_url: str = ""
+    blurpath_enabled: bool = False
 
 
 class CnpjBizProxyPool:
@@ -60,6 +64,20 @@ def _fetch_proxy_candidates(feed_url: str, scheme: str) -> list[str]:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     raw = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
     return _normalize_proxy_lines(raw, scheme)
+
+
+def fetch_blurpath_candidates(config: ProxyPoolConfig) -> list[str]:
+    if not config.blurpath_enabled or not config.blurpath_cdp_url:
+        return []
+    bundle = BlurpathBrowserProvider(config.blurpath_cdp_url).fetch_bundle()
+    if not bundle.username or not bundle.password:
+        return []
+    values: list[str] = []
+    for item in bundle.white_proxies:
+        candidate = f"{config.scheme}://{bundle.username}:{bundle.password}@{item}"
+        if candidate not in values:
+            values.append(candidate)
+    return values
 
 
 def _normalize_proxy_lines(raw: str, scheme: str) -> list[str]:

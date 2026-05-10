@@ -20,6 +20,8 @@ class CnpjBizConfig:
     proxy_url: str = ""
     proxy_feed_url: str = ""
     proxy_feed_scheme: str = "http"
+    blurpath_cdp_url: str = "http://127.0.0.1:9222"
+    blurpath_enabled: bool = False
     list_workers: int = 1
     detail_workers: int = 8
     max_pages: int = 0
@@ -52,6 +54,8 @@ class CnpjBizConfig:
             proxy_url=str(os.getenv("CNPJBIZ_PROXY_URL", "") or "").strip(),
             proxy_feed_url=str(os.getenv("CNPJBIZ_PROXY_FEED_URL", "") or "").strip(),
             proxy_feed_scheme=str(os.getenv("CNPJBIZ_PROXY_FEED_SCHEME", "http") or "http").strip().lower() or "http",
+            blurpath_cdp_url=str(os.getenv("CNPJBIZ_BLURPATH_CDP_URL", "http://127.0.0.1:9222") or "").strip() or "http://127.0.0.1:9222",
+            blurpath_enabled=str(os.getenv("CNPJBIZ_BLURPATH_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"},
             list_workers=max(int(list_workers or 1), 1),
             detail_workers=max(int(detail_workers or 1), 1),
             max_pages=max(int(max_pages or 0), 0),

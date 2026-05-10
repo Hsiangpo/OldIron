@@ -23,6 +23,7 @@ from curl_cffi import requests as cffi_requests
 from websocket import create_connection
 
 from .config import CnpjBizConfig
+from .proxy_pool import fetch_blurpath_candidates
 from .proxy_pool import CnpjBizProxyPool
 from .proxy_pool import ProxyPoolConfig
 from .selector import RepresentativeCandidate
@@ -393,14 +394,26 @@ class CnpjBizClient:
         return str(self._config.proxy_url or "").strip()
 
     def _build_proxy_pool(self, config: CnpjBizConfig) -> CnpjBizProxyPool | None:
-        if not config.proxy_feed_url:
+        if not config.proxy_feed_url and not config.blurpath_enabled:
             return None
-        return CnpjBizProxyPool(
+        pool = CnpjBizProxyPool(
             ProxyPoolConfig(
                 feed_url=config.proxy_feed_url,
                 scheme=config.proxy_feed_scheme,
+                blurpath_cdp_url=config.blurpath_cdp_url,
+                blurpath_enabled=config.blurpath_enabled,
             )
         )
+        if config.blurpath_enabled:
+            try:
+                values = fetch_blurpath_candidates(pool._config)  # noqa: SLF001
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Blurpath 代理候选抓取失败：%s", exc)
+            else:
+                if values:
+                    pool._candidates = values  # noqa: SLF001
+                    pool._expire_at = time.time() + 60.0  # noqa: SLF001
+        return pool
 
     def _apply_proxy(self, proxy_url: str) -> None:
         text = str(proxy_url or "").strip()
