@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import threading
 import time
 import urllib.request
@@ -63,6 +64,9 @@ def _fetch_proxy_candidates(feed_url: str, scheme: str) -> list[str]:
         return []
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     raw = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
+    parsed = _parse_proxy_feed_payload(raw)
+    if parsed is not None:
+        return _normalize_proxy_lines("\n".join(parsed), scheme)
     return _normalize_proxy_lines(raw, scheme)
 
 
@@ -94,3 +98,19 @@ def _normalize_proxy_lines(raw: str, scheme: str) -> list[str]:
         seen.add(candidate)
         values.append(candidate)
     return values
+
+
+def _parse_proxy_feed_payload(raw: str) -> list[str] | None:
+    text = str(raw or "").strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if isinstance(data, list):
+        return [str(item or "").strip() for item in data if str(item or "").strip()]
+    return []

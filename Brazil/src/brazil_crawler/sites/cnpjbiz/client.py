@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from curl_cffi import requests as cffi_requests
 from websocket import create_connection
 
+from .browser_fetch import CnpjBizBrowserFetchClient
 from .config import CnpjBizConfig
 from .proxy_pool import fetch_blurpath_candidates
 from .proxy_pool import CnpjBizProxyPool
@@ -111,7 +112,7 @@ class CnpjBizCookieProvider:
             cookies = self._fetch_page_cookies(page_ws_url)
             cookie_header = _build_cookie_header(cookies)
             if "cf_clearance=" not in cookie_header:
-                raise RuntimeError("9222 浏览器里没有可用的 CNPJ Biz cf cookie，请先在该浏览器里通过 cnpj.biz challenge。")
+                raise RuntimeError(f"{self._cdp_url} 浏览器里没有可用的 CNPJ Biz cf cookie，请先在该浏览器里通过 cnpj.biz challenge。")
             state = CnpjBizBrowserState(
                 cookie_header=cookie_header,
                 user_agent=str(version.get("User-Agent") or _DEFAULT_USER_AGENT).strip() or _DEFAULT_USER_AGENT,
@@ -145,7 +146,7 @@ class CnpjBizCookieProvider:
         if exact_pages:
             return str(exact_pages[0]["webSocketDebuggerUrl"])
         if not preferred:
-            raise RuntimeError("9222 浏览器里没有打开 cnpj.biz 页面，无法提取运行态 cookie。")
+            raise RuntimeError(f"{self._cdp_url} 浏览器里没有打开 cnpj.biz 页面，无法提取运行态 cookie。")
         return str(preferred[0]["webSocketDebuggerUrl"])
 
     def _fetch_page_cookies(self, page_ws_url: str) -> list[dict[str, str]]:
@@ -222,6 +223,7 @@ class CnpjBizClient:
         self._config = config
         self._state_provider = CnpjBizCookieProvider(config)
         self._proxy_pool = self._build_proxy_pool(config)
+        self._browser_fetch = self._build_browser_fetch(config)
         self._session = self._build_session()
 
     def close(self) -> None:
@@ -333,10 +335,20 @@ class CnpjBizClient:
         return key
 
     def _request_html(self, url: str, *, referer: str) -> str:
+        if self._browser_fetch is not None:
+            try:
+                return self._browser_fetch.fetch_text(url, referer=referer)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("CNPJ Biz browser fetch HTML 回退协议请求：url=%s error=%s", url, exc)
         response = self._request("GET", url, referer=referer)
         return str(response.text or "")
 
     def _request_json(self, url: str, *, json_body: dict[str, Any], referer: str) -> dict[str, Any]:
+        if self._browser_fetch is not None:
+            try:
+                return self._browser_fetch.fetch_json(url, referer=referer, body=json_body)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("CNPJ Biz browser fetch JSON 回退协议请求：url=%s error=%s", url, exc)
         response = self._request("POST", url, referer=referer, json_body=json_body)
         try:
             return response.json()
@@ -352,16 +364,7 @@ class CnpjBizClient:
         json_body: dict[str, Any] | None = None,
     ):
         last_error: Exception | None = None
-        attempts = [(False, self._active_proxy_url())]
-        if self._proxy_pool is not None:
-            attempts.extend(
-                [
-                    (False, self._proxy_pool.rotate_proxy()),
-                    (True, self._proxy_pool.rotate_proxy()),
-                ]
-            )
-        else:
-            attempts.append((True, self._active_proxy_url()))
+        attempts = self._build_request_attempts()
         for force, proxy_url in attempts:
             state = self._state_provider.fetch_state(force=force)
             headers = self._build_headers(state, referer=referer, is_xhr=json_body is not None)
@@ -382,16 +385,36 @@ class CnpjBizClient:
                 return response
             last_error = RuntimeError(
                 "CNPJ Biz 返回 Cloudflare challenge，"
-                "请先在 9222 浏览器里打开 cnpj.biz 并通过验证后再续跑。"
+                f"请先在 {self._config.cdp_url} 浏览器里打开 cnpj.biz 并通过验证后再续跑。"
             )
         if last_error is not None:
             raise last_error
         raise RuntimeError(f"CNPJ Biz 请求失败：{method} {url}")
 
+    def _build_request_attempts(self) -> list[tuple[bool, str]]:
+        fixed_proxy = str(self._config.proxy_url or "").strip()
+        attempts: list[tuple[bool, str]] = []
+        if fixed_proxy:
+            attempts.extend([(False, fixed_proxy), (True, fixed_proxy)])
+        if self._proxy_pool is not None:
+            attempts.extend(
+                [
+                    (False, self._proxy_pool.current_proxy()),
+                    (False, self._proxy_pool.rotate_proxy()),
+                    (True, self._proxy_pool.rotate_proxy()),
+                ]
+            )
+        if not attempts:
+            attempts = [(False, ""), (True, "")]
+        return _dedupe_proxy_attempts(attempts)
+
     def _active_proxy_url(self) -> str:
+        fixed_proxy = str(self._config.proxy_url or "").strip()
+        if fixed_proxy:
+            return fixed_proxy
         if self._proxy_pool is not None:
             return self._proxy_pool.current_proxy()
-        return str(self._config.proxy_url or "").strip()
+        return ""
 
     def _build_proxy_pool(self, config: CnpjBizConfig) -> CnpjBizProxyPool | None:
         if not config.proxy_feed_url and not config.blurpath_enabled:
@@ -414,6 +437,11 @@ class CnpjBizClient:
                     pool._candidates = values  # noqa: SLF001
                     pool._expire_at = time.time() + 60.0  # noqa: SLF001
         return pool
+
+    def _build_browser_fetch(self, config: CnpjBizConfig) -> CnpjBizBrowserFetchClient | None:
+        if not config.browser_fetch_enabled:
+            return None
+        return CnpjBizBrowserFetchClient(config.cdp_url)
 
     def _apply_proxy(self, proxy_url: str) -> None:
         text = str(proxy_url or "").strip()
@@ -502,6 +530,18 @@ def _first_nonempty_text(nodes) -> str:
         if text:
             return text
     return ""
+
+
+def _dedupe_proxy_attempts(values: list[tuple[bool, str]]) -> list[tuple[bool, str]]:
+    result: list[tuple[bool, str]] = []
+    seen: set[tuple[bool, str]] = set()
+    for force, proxy_url in values:
+        key = (bool(force), str(proxy_url or "").strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+    return result
 
 
 def _first_class_text(anchor: BeautifulSoup, class_fragment: str) -> str:

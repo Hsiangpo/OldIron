@@ -14,12 +14,17 @@ from .store import CnpjBizStore
 
 LOGGER = logging.getLogger(__name__)
 _START_URL = "https://cnpj.biz/empresas"
+_BRAZIL_STATES = (
+    "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA",
+    "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN",
+    "RS", "RO", "RR", "SC", "SP", "SE", "TO",
+)
 
 
-def prepare_pipeline(store: CnpjBizStore) -> None:
+def prepare_pipeline(store: CnpjBizStore, seed_mode: str = "homepage") -> None:
     store.requeue_running_tasks()
     store.requeue_failed_tasks()
-    store.seed_start_page(_START_URL)
+    store.seed_start_pages(build_initial_seed_urls(seed_mode))
 
 
 def run_pipeline_all(
@@ -32,7 +37,7 @@ def run_pipeline_all(
     own_store = store is None
     active_store = store or CnpjBizStore(config.output_dir / "cnpjbiz_store.db")
     if auto_prepare:
-        prepare_pipeline(active_store)
+        prepare_pipeline(active_store, config.seed_mode)
     client = CnpjBizClient(config)
     selector = CnpjBizRepresentativeSelector(config)
     stop_event = threading.Event()
@@ -56,7 +61,7 @@ def run_pipeline_all(
 
 def run_pipeline_list_only(*, config: CnpjBizConfig) -> dict[str, int]:
     store = CnpjBizStore(config.output_dir / "cnpjbiz_store.db")
-    prepare_pipeline(store)
+    prepare_pipeline(store, config.seed_mode)
     client = CnpjBizClient(config)
     stop_event = threading.Event()
     threads = [
@@ -246,3 +251,10 @@ def _record_to_dict(record) -> dict[str, str]:
         "status_text": record.status_text,
         "opened_at": record.opened_at,
     }
+
+
+def build_initial_seed_urls(seed_mode: str = "homepage") -> list[str]:
+    mode = str(seed_mode or "homepage").strip().lower()
+    if mode == "states":
+        return [f"https://cnpj.biz/empresas/estado/{state}" for state in _BRAZIL_STATES]
+    return [_START_URL]

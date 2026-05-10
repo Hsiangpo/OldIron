@@ -153,6 +153,21 @@ class CnpjBizStore:
 
         self._run_write(_action)
 
+    def seed_start_pages(self, page_urls: list[str]) -> None:
+        def _action(conn: sqlite3.Connection) -> None:
+            now_text = _now_text()
+            for page_url in page_urls:
+                conn.execute(
+                    """
+                    INSERT INTO list_queue (page_url, depth, status, retries, updated_at)
+                    VALUES (?, 0, 'pending', 0, ?)
+                    ON CONFLICT(page_url) DO NOTHING
+                    """,
+                    (page_url, now_text),
+                )
+
+        self._run_write(_action)
+
     def requeue_running_tasks(self) -> int:
         def _action(conn: sqlite3.Connection) -> int:
             now_text = _now_text()

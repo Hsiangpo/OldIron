@@ -17,7 +17,14 @@ class CnpjBizConfig:
     project_root: Path
     output_dir: Path
     cdp_url: str = "http://127.0.0.1:9222"
+    browser_debug_port: int = 9226
+    browser_profile_dir: str = "/Users/Zhuanz1/tmp/cnpjbiz-moe-chrome"
+    browser_proxy_url: str = "http://127.0.0.1:7893"
+    browser_seed_url: str = "https://cnpj.biz/empresas/estado/SP"
+    browser_launch_enabled: bool = False
+    browser_fetch_enabled: bool = False
     proxy_url: str = ""
+    seed_mode: str = "homepage"
     proxy_feed_url: str = ""
     proxy_feed_scheme: str = "http"
     blurpath_cdp_url: str = "http://127.0.0.1:9222"
@@ -54,7 +61,14 @@ class CnpjBizConfig:
             project_root=project_root,
             output_dir=output_dir,
             cdp_url=str(os.getenv("CNPJBIZ_CDP_URL", "http://127.0.0.1:9222") or "").strip() or "http://127.0.0.1:9222",
+            browser_debug_port=max(int(os.getenv("CNPJBIZ_BROWSER_DEBUG_PORT", "9226") or "9226"), 1),
+            browser_profile_dir=str(os.getenv("CNPJBIZ_BROWSER_PROFILE_DIR", "/Users/Zhuanz1/tmp/cnpjbiz-moe-chrome") or "").strip() or "/Users/Zhuanz1/tmp/cnpjbiz-moe-chrome",
+            browser_proxy_url=str(os.getenv("CNPJBIZ_BROWSER_PROXY_URL", "http://127.0.0.1:7893") or "").strip() or "http://127.0.0.1:7893",
+            browser_seed_url=str(os.getenv("CNPJBIZ_BROWSER_SEED_URL", "https://cnpj.biz/empresas/estado/SP") or "").strip() or "https://cnpj.biz/empresas/estado/SP",
+            browser_launch_enabled=str(os.getenv("CNPJBIZ_BROWSER_LAUNCH_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"},
+            browser_fetch_enabled=str(os.getenv("CNPJBIZ_BROWSER_FETCH_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"},
             proxy_url=str(os.getenv("CNPJBIZ_PROXY_URL", "") or "").strip(),
+            seed_mode=str(os.getenv("CNPJBIZ_SEED_MODE", "homepage") or "homepage").strip().lower() or "homepage",
             proxy_feed_url=str(os.getenv("CNPJBIZ_PROXY_FEED_URL", "") or "").strip(),
             proxy_feed_scheme=str(os.getenv("CNPJBIZ_PROXY_FEED_SCHEME", "http") or "http").strip().lower() or "http",
             blurpath_cdp_url=str(os.getenv("CNPJBIZ_BLURPATH_CDP_URL", "http://127.0.0.1:9222") or "").strip() or "http://127.0.0.1:9222",

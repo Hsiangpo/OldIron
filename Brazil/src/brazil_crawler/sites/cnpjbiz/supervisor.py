@@ -12,9 +12,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .browser_launcher import CnpjBizChromeLauncher
 from .clash_controller import ClashUnixController
 from .config import CnpjBizConfig
-from .pipeline import _START_URL
+from .pipeline import build_initial_seed_urls
 from .store import CnpjBizProgress
 from .store import CnpjBizStore
 
@@ -29,6 +30,7 @@ class SupervisorSettings:
     output_dir: Path
     poll_seconds: float = 30.0
     log_interval_seconds: float = 120.0
+    list_workers: int = 1
     detail_workers: int = 8
     log_level: str = "INFO"
 
@@ -37,6 +39,7 @@ def run_supervisor(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="CNPJ Biz 后台监控")
     parser.add_argument("--poll-seconds", type=float, default=30.0)
     parser.add_argument("--log-interval-seconds", type=float, default=120.0)
+    parser.add_argument("--list-workers", type=int, default=1)
     parser.add_argument("--detail-workers", type=int, default=8)
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args(argv)
@@ -51,6 +54,7 @@ def run_supervisor(argv: list[str]) -> int:
         output_dir=ROOT / "output" / "cnpjbiz",
         poll_seconds=max(float(args.poll_seconds or 1.0), 5.0),
         log_interval_seconds=max(float(args.log_interval_seconds or 1.0), 10.0),
+        list_workers=max(int(args.list_workers or 1), 1),
         detail_workers=max(int(args.detail_workers or 1), 1),
         log_level=args.log_level,
     )
@@ -82,6 +86,7 @@ class CnpjBizSupervisor:
                 self._store.requeue_running_tasks()
                 progress = self._store.progress()
                 mode = _choose_run_mode(progress)
+                self._ensure_browser_if_enabled()
                 if mode == "all" and not self._homepage_accessible():
                     self._rotate_clash_if_enabled()
                     mode = "wait"
@@ -100,9 +105,37 @@ class CnpjBizSupervisor:
             time.sleep(self._settings.poll_seconds)
         self._store.close()
 
+    def _ensure_browser_if_enabled(self) -> None:
+        config = CnpjBizConfig.from_env(
+            project_root=self._settings.project_root,
+            output_dir=self._settings.output_dir,
+            list_workers=1,
+            detail_workers=1,
+            max_pages=0,
+        )
+        if not config.browser_launch_enabled:
+            return
+        try:
+            launcher = CnpjBizChromeLauncher(
+                debug_port=config.browser_debug_port,
+                profile_dir=config.browser_profile_dir,
+                proxy_url=config.browser_proxy_url,
+                seed_url=config.browser_seed_url,
+            )
+            launcher.launch()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("CNPJ Biz supervisor 启动浏览器失败：%s", exc)
+
     def _seed_new_home_cycle(self) -> None:
+        config = CnpjBizConfig.from_env(
+            project_root=self._settings.project_root,
+            output_dir=self._settings.output_dir,
+            list_workers=1,
+            detail_workers=1,
+            max_pages=0,
+        )
         self._store.reset_list_queue_for_new_cycle()
-        self._store.seed_start_page(_START_URL)
+        self._store.seed_start_pages(build_initial_seed_urls(config.seed_mode))
 
     def _homepage_accessible(self) -> bool:
         config = CnpjBizConfig.from_env(
@@ -116,10 +149,11 @@ class CnpjBizSupervisor:
 
         client = CnpjBizClient(config)
         try:
-            page = client.fetch_list_page(_START_URL)
+            target_url = build_initial_seed_urls(config.seed_mode)[0]
+            page = client.fetch_list_page(target_url)
             return bool(page.records)
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("CNPJ Biz supervisor 首页探活失败：%s", exc)
+            LOGGER.warning("CNPJ Biz supervisor seed 探活失败：%s", exc)
             return False
         finally:
             client.close()
@@ -156,6 +190,8 @@ class CnpjBizSupervisor:
                 "run.py",
                 "cnpjbiz",
                 mode,
+                "--list-workers",
+                str(self._settings.list_workers),
                 "--detail-workers",
                 str(self._settings.detail_workers),
                 "--log-level",

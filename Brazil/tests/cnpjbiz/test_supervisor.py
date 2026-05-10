@@ -91,3 +91,29 @@ class SupervisorTests(unittest.TestCase):
             ):
                 supervisor._rotate_clash_if_enabled()  # noqa: SLF001
             self.assertEqual("🇭🇰 香港商宽", supervisor._last_clash_choice)  # noqa: SLF001
+
+    def test_ensure_browser_if_enabled_calls_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = SupervisorSettings(
+                project_root=Path(tmpdir),
+                output_dir=Path(tmpdir),
+            )
+            supervisor = CnpjBizSupervisor(settings)
+            with patch(
+                "brazil_crawler.sites.cnpjbiz.supervisor.CnpjBizConfig.from_env",
+                return_value=type(
+                    "Cfg",
+                    (),
+                    {
+                        "browser_launch_enabled": True,
+                        "browser_debug_port": 9226,
+                        "browser_profile_dir": "/tmp/demo",
+                        "browser_proxy_url": "http://127.0.0.1:7893",
+                        "browser_seed_url": "https://cnpj.biz/empresas/estado/SP",
+                    },
+                )(),
+            ), patch(
+                "brazil_crawler.sites.cnpjbiz.supervisor.CnpjBizChromeLauncher.launch"
+            ) as launch:
+                supervisor._ensure_browser_if_enabled()  # noqa: SLF001
+            launch.assert_called_once()
