@@ -23,6 +23,7 @@ USAGE_TEXT = """用法：
 
 站点：
   cnpjbiz  — CNPJ Biz 巴西企业目录
+  cnpjbiz-supervisor  — CNPJ Biz 后台监控与自恢复
   dnb  — DNB 巴西企业目录
 """
 
@@ -88,6 +89,10 @@ def _dispatch(argv: list[str]) -> int:
         return 1
     _load_project_env()
     site = argv[0].strip().lower()
+    if site == "cnpjbiz-supervisor":
+        from brazil_crawler.sites.cnpjbiz.supervisor import run_supervisor
+
+        return run_supervisor(argv[1:])
     if site == "cnpjbiz":
         from brazil_crawler.sites.cnpjbiz.cli import run_cnpjbiz
 

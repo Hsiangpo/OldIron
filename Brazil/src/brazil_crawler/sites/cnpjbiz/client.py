@@ -129,14 +129,21 @@ class CnpjBizCookieProvider:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         raw = opener.open(f"{self._cdp_url}/json/list", timeout=5).read().decode()
         pages = json.loads(raw)
+        exact_pages = []
         preferred = []
         for item in pages:
             url = str(item.get("url") or "")
+            title = str(item.get("title") or "")
+            if url == "https://cnpj.biz/empresas" and "Consulta de CNPJ" in title:
+                exact_pages.append(item)
+                continue
             if url.startswith("https://cnpj.biz/") and "blob:" not in url:
                 preferred.append(item)
+        if exact_pages:
+            return str(exact_pages[0]["webSocketDebuggerUrl"])
         if not preferred:
             raise RuntimeError("9222 浏览器里没有打开 cnpj.biz 页面，无法提取运行态 cookie。")
-        return str(preferred[-1]["webSocketDebuggerUrl"])
+        return str(preferred[0]["webSocketDebuggerUrl"])
 
     def _fetch_page_cookies(self, page_ws_url: str) -> list[dict[str, str]]:
         try:

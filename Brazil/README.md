@@ -9,6 +9,11 @@ cd Brazil
 
 ```bash
 cd Brazil
+.venv/bin/python run.py cnpjbiz-supervisor
+```
+
+```bash
+cd Brazil
 .venv/bin/python run.py dnb
 ```
 

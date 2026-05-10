@@ -427,6 +427,12 @@ class CnpjBizStore:
                 list_done=self._count_where(conn, "list_queue", "status = 'done'"),
             )
 
+    def reset_list_queue_for_new_cycle(self) -> None:
+        def _action(conn: sqlite3.Connection) -> None:
+            conn.execute("DELETE FROM list_queue")
+
+        self._run_write(_action)
+
     def _retry_task(self, table_name: str, key_column: str, key_value: str) -> None:
         def _action(conn: sqlite3.Connection) -> None:
             row = conn.execute(

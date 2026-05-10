@@ -17,7 +17,7 @@ class CnpjBizConfig:
     project_root: Path
     output_dir: Path
     cdp_url: str = "http://127.0.0.1:9222"
-    proxy_url: str = "http://127.0.0.1:7897"
+    proxy_url: str = ""
     list_workers: int = 1
     detail_workers: int = 8
     max_pages: int = 0
@@ -47,7 +47,7 @@ class CnpjBizConfig:
             project_root=project_root,
             output_dir=output_dir,
             cdp_url=str(os.getenv("CNPJBIZ_CDP_URL", "http://127.0.0.1:9222") or "").strip() or "http://127.0.0.1:9222",
-            proxy_url=str(os.getenv("HTTP_PROXY", "http://127.0.0.1:7897") or "").strip() or "http://127.0.0.1:7897",
+            proxy_url=str(os.getenv("CNPJBIZ_PROXY_URL", "") or "").strip(),
             list_workers=max(int(list_workers or 1), 1),
             detail_workers=max(int(detail_workers or 1), 1),
             max_pages=max(int(max_pages or 0), 0),
@@ -60,4 +60,3 @@ class CnpjBizConfig:
             llm_api_style=str(os.getenv("LLM_API_STYLE", DEFAULT_LLM_API_STYLE) or DEFAULT_LLM_API_STYLE).strip() or DEFAULT_LLM_API_STYLE,
             llm_timeout_seconds=max(float(os.getenv("LLM_TIMEOUT_SECONDS", "120") or "120"), 20.0),
         )
-
