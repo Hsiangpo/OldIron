@@ -20,6 +20,7 @@ if str(SHARED_DIR) not in sys.path:
 
 from brazil_crawler.sites.cnpjbiz.client import CnpjBizClient
 from brazil_crawler.sites.cnpjbiz.client import _decrypt_gcm_b64
+from brazil_crawler.sites.cnpjbiz.client import _is_usable_cnpjbiz_page
 from brazil_crawler.sites.cnpjbiz.client import parse_list_page
 from brazil_crawler.sites.cnpjbiz.config import CnpjBizConfig
 
@@ -163,6 +164,10 @@ class CnpjBizClientTests(unittest.TestCase):
 
         self.assertEqual("atendimento@3acontabilidadedigital.com.br", email)
         self.assertEqual("(98) 98439-8131", phone)
+
+    def test_usable_cnpjbiz_page_rejects_error_url(self) -> None:
+        self.assertTrue(_is_usable_cnpjbiz_page("https://cnpj.biz/123"))
+        self.assertFalse(_is_usable_cnpjbiz_page("chrome-error://chromewebdata/"))
 
 
 if __name__ == "__main__":

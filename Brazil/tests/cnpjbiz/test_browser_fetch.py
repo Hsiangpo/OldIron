@@ -19,6 +19,7 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
 from brazil_crawler.sites.cnpjbiz.browser_fetch import _build_fetch_expression
+from brazil_crawler.sites.cnpjbiz.browser_fetch import _is_usable_cnpjbiz_page
 
 
 class BrowserFetchTests(unittest.TestCase):
@@ -43,3 +44,8 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertIn("JSON.stringify", expr)
         self.assertIn("X-Requested-With", expr)
         self.assertIn("strict-origin-when-cross-origin", expr)
+        self.assertIn("catch (error)", expr)
+
+    def test_usable_cnpjbiz_page_accepts_generic_title_url(self) -> None:
+        self.assertTrue(_is_usable_cnpjbiz_page("https://cnpj.biz/empresas/estado/SP"))
+        self.assertFalse(_is_usable_cnpjbiz_page("chrome-error://chromewebdata/"))

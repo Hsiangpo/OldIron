@@ -137,11 +137,10 @@ class CnpjBizCookieProvider:
         preferred = []
         for item in pages:
             url = str(item.get("url") or "")
-            title = str(item.get("title") or "")
-            if url == "https://cnpj.biz/empresas" and "Consulta de CNPJ" in title:
+            if url == "https://cnpj.biz/empresas":
                 exact_pages.append(item)
                 continue
-            if url.startswith("https://cnpj.biz/") and "blob:" not in url:
+            if _is_usable_cnpjbiz_page(url):
                 preferred.append(item)
         if exact_pages:
             return str(exact_pages[0]["webSocketDebuggerUrl"])
@@ -542,6 +541,11 @@ def _dedupe_proxy_attempts(values: list[tuple[bool, str]]) -> list[tuple[bool, s
         seen.add(key)
         result.append(key)
     return result
+
+
+def _is_usable_cnpjbiz_page(url: str) -> bool:
+    text = str(url or "").strip()
+    return text.startswith("https://cnpj.biz/") and "chrome-error://" not in text and "blob:" not in text
 
 
 def _first_class_text(anchor: BeautifulSoup, class_fragment: str) -> str:

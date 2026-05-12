@@ -56,7 +56,14 @@ ws.addEventListener('error', (event) => {
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "browser fetch failed")
-        payload = json.loads(result.stdout or "{}")
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            preview = (result.stdout or "").strip().replace("\n", " ")[:200]
+            raise RuntimeError(f"browser fetch 返回非法 JSON：{preview}") from exc
+        error_text = str(payload.get("error") or "").strip()
+        if error_text:
+            raise RuntimeError(f"browser fetch error={error_text} url={url}")
         status = int(payload.get("status") or 0)
         if status >= 400:
             raise RuntimeError(f"browser fetch status={status} url={url}")
@@ -68,10 +75,14 @@ ws.addEventListener('error', (event) => {
         pages = json.loads(raw)
         for item in pages:
             url = str(item.get("url") or "")
-            title = str(item.get("title") or "")
-            if url.startswith("https://cnpj.biz/") and ("Lista de empresas" in title or "Consulta de CNPJ" in title or "CNPJ.Biz" in title):
+            if _is_usable_cnpjbiz_page(url):
                 return str(item["webSocketDebuggerUrl"])
         raise RuntimeError("CDP 浏览器里没有可用的 cnpj.biz 页面。")
+
+
+def _is_usable_cnpjbiz_page(url: str) -> bool:
+    text = str(url or "").strip()
+    return text.startswith("https://cnpj.biz/") and "chrome-error://" not in text and "blob:" not in text
 
 
 def _build_fetch_expression(*, url: str, referer: str, method: str, body: dict | None) -> str:
@@ -82,6 +93,7 @@ def _build_fetch_expression(*, url: str, referer: str, method: str, body: dict |
         headers["X-Requested-With"] = "XMLHttpRequest"
     return (
         "(async () => {"
+        "try {"
         f"const response = await fetch({json.dumps(url)}, {{"
         f"method: {json.dumps(method)},"
         "credentials: 'include',"
@@ -92,5 +104,8 @@ def _build_fetch_expression(*, url: str, referer: str, method: str, body: dict |
         "});"
         "const text = await response.text();"
         "return JSON.stringify({status: response.status, text});"
+        "} catch (error) {"
+        "return JSON.stringify({status: 0, error: String(error)});"
+        "}"
         "})()"
     )
