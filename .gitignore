@@ -1,5 +1,6 @@
 # 根目录运行态目录
 .codex/
+.codegraph/
 .omx/
 .pytest_cache/
 output/

@@ -1,0 +1,14 @@
+.env
+.venv/
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+.omx/
+.tmp_trace/
+build/
+dist/
+output/
+tmp/
+%SystemDrive%/
+.codex/skills/protocol-crawler/.env_checked

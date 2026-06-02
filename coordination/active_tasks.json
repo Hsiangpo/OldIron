@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-05-10T17:31:03Z",
+  "updated_at": "2026-05-10T17:52:36Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -95,6 +95,31 @@
       "started_at": "2026-05-02T05:25:36Z",
       "last_heartbeat_at": "2026-05-02T05:25:36Z",
       "notes": "Align shared protocol crawler discovery/runtime behavior closer to System OldIronCrawler for Italy email coverage."
+    },
+    {
+      "task_id": "brazil-cnpjbiz-state-seed-20260510",
+      "status": "in_progress",
+      "machine": "machine2-macos",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "Brazil/src/brazil_crawler/sites/cnpjbiz",
+        "Brazil/tests/cnpjbiz"
+      ],
+      "planned_files": [
+        "Brazil/src/brazil_crawler/sites/cnpjbiz/pipeline.py",
+        "Brazil/src/brazil_crawler/sites/cnpjbiz/store.py",
+        "Brazil/src/brazil_crawler/sites/cnpjbiz/config.py",
+        "Brazil/tests/cnpjbiz/test_pipeline_state_seed.py",
+        "Brazil/.env.example"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-05-10T17:52:36Z",
+      "last_heartbeat_at": "2026-05-10T17:52:36Z",
+      "notes": "Switch CNPJ Biz initial list seeding from homepage to all Brazil states for full crawl mode."
     }
   ]
 }
