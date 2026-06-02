@@ -257,6 +257,60 @@ class WebsiteLlmClient:
             evidence_quote=evidence_quote,
         )
 
+    def build_active_representative_queries(
+        self,
+        *,
+        company_name: str,
+        website: str,
+        deadline_monotonic: float | None = None,
+    ) -> list[str]:
+        prompt = (
+            "你是企业负责人搜索查询生成器。\n"
+            "目标：根据公司名和官网，为搜索引擎生成最多2条短查询，用来查找该公司的现役最高负责人。\n"
+            "规则：\n"
+            "1. 查询必须包含公司名。\n"
+            "2. 可以包含官网域名，帮助排除同名公司。\n"
+            "3. 优先查询 current CEO, president, managing director, representative director, owner。\n"
+            "4. 不要生成解释文字。\n"
+            '返回 JSON：{"queries":[""]}\n\n'
+            f"公司名: {company_name}\n"
+            f"官网: {website}"
+        )
+        data = self._call_json(prompt, deadline_monotonic=deadline_monotonic)
+        queries = data.get("queries", [])
+        if not isinstance(queries, list):
+            return []
+        return [str(item or "").strip() for item in queries if str(item or "").strip()][:2]
+
+    def extract_active_representative_from_search_results(
+        self,
+        *,
+        company_name: str,
+        website: str,
+        results: list[dict[str, str]],
+        deadline_monotonic: float | None = None,
+    ) -> dict[str, str]:
+        prompt = (
+            "你是企业现役最高负责人判断器。\n"
+            "目标：只根据搜索结果，找出目标公司的现役最高负责人单人。\n"
+            "强规则：\n"
+            "1. 只返回真人姓名，不能返回职位、部门、公司名或团队名。\n"
+            "2. 必须是现役或当前负责人；历史负责人、创始但已卸任、新闻采访对象不能用。\n"
+            "3. 优先级：CEO > President > Managing Director > Representative Director > Chief Executive > Owner > Founder-CEO。\n"
+            "4. 必须确认搜索结果指向同一家公司；官网域名或公司名明显不匹配时返回空。\n"
+            "5. 没有明确证据时 representative 返回空字符串，不要猜。\n"
+            '返回 JSON：{"representative":"","confidence":"high|medium|low|","evidence_url":""}\n\n'
+            f"目标公司名: {company_name}\n"
+            f"目标官网: {website}\n"
+            f"搜索结果(JSON): {json.dumps(results[:10], ensure_ascii=False)}"
+        )
+        data = self._call_json(prompt, deadline_monotonic=deadline_monotonic)
+        return {
+            "representative": _normalize_representative_name(str(data.get("representative", "") or "").strip()),
+            "confidence": str(data.get("confidence", "") or "").strip(),
+            "evidence_url": str(data.get("evidence_url", "") or "").strip(),
+        }
+
     def _convert_pages_to_markdown(self, pages: list[dict[str, str]]) -> list[dict[str, str]]:
         remove_tags = ["script", "style", "img", "svg", "video", "audio", "canvas", "iframe", "noscript"]
         result: list[dict[str, str]] = []

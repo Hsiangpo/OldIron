@@ -13,6 +13,10 @@ if str(SRC_DIR) not in sys.path:
 from oldironcrawler.importer import load_websites
 from oldironcrawler.config import AppConfig
 from oldironcrawler.importer import ImportedWebsite
+from oldironcrawler.extractor.representative_search import (
+    ActiveRepresentativeSearchResult,
+    ActiveRepresentativeSearcher,
+)
 from oldironcrawler.runtime.store import RuntimeStore, SiteResult
 
 
@@ -108,3 +112,77 @@ def test_store_round_trips_searched_representative(tmp_path: Path) -> None:
             "website": "https://acme.example",
         }
     ]
+
+
+class _FakeSearchLlm:
+    def build_active_representative_queries(self, *, company_name, website, deadline_monotonic=None):
+        assert company_name == "Acme Holdings Ltd"
+        assert website == "https://acme.example"
+        return ["Acme Holdings Ltd current CEO official"]
+
+    def extract_active_representative_from_search_results(
+        self,
+        *,
+        company_name,
+        website,
+        results,
+        deadline_monotonic=None,
+    ):
+        assert company_name == "Acme Holdings Ltd"
+        assert website == "https://acme.example"
+        assert results[0]["url"] == "https://acme.example/about"
+        return {
+            "representative": "Alice Search",
+            "confidence": "high",
+            "evidence_url": "https://acme.example/about",
+        }
+
+
+class _FakeTavilyClient:
+    def __init__(self):
+        self.queries = []
+
+    def search(self, query: str) -> list[dict[str, str]]:
+        self.queries.append(query)
+        return [
+            {
+                "title": "Leadership",
+                "url": "https://acme.example/about",
+                "content": "Alice Search is the current Chief Executive Officer of Acme Holdings Ltd.",
+            }
+        ]
+
+
+def test_active_representative_searcher_returns_name() -> None:
+    tavily = _FakeTavilyClient()
+    searcher = ActiveRepresentativeSearcher(
+        llm_client=_FakeSearchLlm(),
+        tavily_client=tavily,
+        enabled=True,
+        max_queries=2,
+    )
+
+    result = searcher.search(
+        company_name="Acme Holdings Ltd",
+        website="https://acme.example",
+    )
+
+    assert result == ActiveRepresentativeSearchResult(
+        representative="Alice Search",
+        confidence="high",
+        evidence_url="https://acme.example/about",
+    )
+    assert tavily.queries == ["Acme Holdings Ltd current CEO official"]
+
+
+def test_active_representative_searcher_skips_missing_company_name() -> None:
+    searcher = ActiveRepresentativeSearcher(
+        llm_client=_FakeSearchLlm(),
+        tavily_client=_FakeTavilyClient(),
+        enabled=True,
+        max_queries=2,
+    )
+
+    result = searcher.search(company_name="", website="https://acme.example")
+
+    assert result.representative == ""
