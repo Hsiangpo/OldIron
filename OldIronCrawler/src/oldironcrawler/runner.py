@@ -40,21 +40,7 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
             per_host_limit=config.page_host_limit,
         )
     )
-    search_executor = ThreadPoolExecutor(max_workers=config.search_representative_concurrency)
-    tavily_client = TavilySearchClient(
-        api_key=config.tavily_api_key,
-        max_results=config.tavily_max_results,
-        search_depth=config.tavily_search_depth,
-        timeout_seconds=config.tavily_timeout_seconds,
-        proxy_url=config.proxy_url,
-    )
-    representative_searcher = ActiveRepresentativeSearcher(
-        llm_client=llm_client,
-        tavily_client=tavily_client,
-        enabled=config.search_representative_enabled and tavily_client.is_configured,
-        max_queries=2,
-        executor=search_executor,
-    )
+    representative_searcher, search_executor = _build_representative_searcher(config, llm_client)
     learning_store = GlobalLearningStore(config.runtime_dir / "global_learning.sqlite3")
     executor = ThreadPoolExecutor(max_workers=config.site_concurrency)
     wait_for_executor = True
@@ -66,15 +52,15 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                 if task is None:
                     break
                 futures[
-                    executor.submit(
-                        _run_single_site,
+                    _submit_single_site(
+                        executor,
                         config,
                         store,
                         learning_store,
                         llm_client,
                         page_pool,
-                        representative_searcher,
                         task,
+                        representative_searcher,
                     )
                 ] = task
             if not futures:
@@ -122,11 +108,62 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
         if callable(shutdown):
             shutdown(wait=wait_for_executor, cancel_futures=True)
         page_pool.close()
-        search_executor.shutdown(wait=wait_for_executor, cancel_futures=True)
-        representative_searcher.close()
+        if search_executor is not None:
+            search_executor.shutdown(wait=wait_for_executor, cancel_futures=True)
+        if representative_searcher is not None:
+            representative_searcher.close()
         llm_client.close()
         learning_store.close()
         delivery_writer.force_flush()
+
+
+def _build_representative_searcher(config: AppConfig, llm_client: WebsiteLlmClient):
+    tavily_api_key = str(getattr(config, "tavily_api_key", "") or "").strip()
+    search_enabled = bool(getattr(config, "search_representative_enabled", True))
+    if not tavily_api_key or not search_enabled:
+        return None, None
+    search_executor = ThreadPoolExecutor(
+        max_workers=max(int(getattr(config, "search_representative_concurrency", 1) or 1), 1)
+    )
+    tavily_client = TavilySearchClient(
+        api_key=tavily_api_key,
+        max_results=int(getattr(config, "tavily_max_results", 5) or 5),
+        search_depth=str(getattr(config, "tavily_search_depth", "basic") or "basic"),
+        timeout_seconds=float(getattr(config, "tavily_timeout_seconds", 20.0) or 20.0),
+        proxy_url=str(getattr(config, "proxy_url", "") or ""),
+    )
+    representative_searcher = ActiveRepresentativeSearcher(
+        llm_client=llm_client,
+        tavily_client=tavily_client,
+        enabled=tavily_client.is_configured,
+        max_queries=2,
+        executor=search_executor,
+    )
+    return representative_searcher, search_executor
+
+
+def _submit_single_site(
+    executor,
+    config: AppConfig,
+    store: RuntimeStore,
+    learning_store: GlobalLearningStore,
+    llm_client: WebsiteLlmClient,
+    page_pool: PageFetchPool,
+    task: SiteTask,
+    representative_searcher,
+):
+    if representative_searcher is None:
+        return executor.submit(_run_single_site, config, store, learning_store, llm_client, page_pool, task)
+    return executor.submit(
+        _run_single_site,
+        config,
+        store,
+        learning_store,
+        llm_client,
+        page_pool,
+        task,
+        representative_searcher,
+    )
 
 
 def _collect_ready_futures(futures: dict[Future, SiteTask]) -> set[Future]:
@@ -178,10 +215,10 @@ def _run_single_site(
     learning_store: GlobalLearningStore,
     llm_client: WebsiteLlmClient,
     page_pool: PageFetchPool,
-    representative_searcher,
     task: SiteTask,
+    representative_searcher=None,
 ):
-    deadline = time.monotonic() + config.total_wait_seconds
+    deadline = time.monotonic() + float(getattr(config, "total_wait_seconds", 180.0) or 180.0)
     try:
         service = SiteProfileService(
             config,
@@ -194,7 +231,7 @@ def _run_single_site(
         return service.process(
             task.id,
             task.website,
-            input_company_name=task.company_name,
+            input_company_name=getattr(task, "company_name", ""),
             deadline_monotonic=deadline,
         )
     except LlmConfigurationError:
