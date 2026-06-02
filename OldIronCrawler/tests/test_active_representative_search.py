@@ -42,6 +42,23 @@ def test_xlsx_loader_keeps_company_name_with_website(tmp_path: Path) -> None:
     ]
 
 
+def test_xlsx_loader_keeps_chinese_company_name_with_website(tmp_path: Path) -> None:
+    path = tmp_path / "companies_cn.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["邮箱地址", "全名", "公司名称", "公司网址", "法人"])
+    ws.append(["owner@example.com", "Owner", "Hidrodomi", "http://hidrodomi.com", "Guilherme"])
+    ws.append(["lead@example.com", "Lead", "TAMEK", "http://tamek.com.tr", "Fevzi"])
+    wb.save(path)
+
+    rows = load_websites(path)
+
+    assert [(row.company_name, row.website) for row in rows] == [
+        ("Hidrodomi", "http://hidrodomi.com"),
+        ("TAMEK", "http://tamek.com.tr"),
+    ]
+
+
 def test_txt_loader_has_empty_company_name(tmp_path: Path) -> None:
     path = tmp_path / "sites.txt"
     path.write_text("example.com\n", encoding="utf-8")
