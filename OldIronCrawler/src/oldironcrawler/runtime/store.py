@@ -15,6 +15,7 @@ class SiteTask:
     website: str
     dedupe_key: str
     retry_count: int
+    company_name: str = ""
 
 
 @dataclass
@@ -24,6 +25,9 @@ class SiteResult:
     emails: str
     website: str
     phones: str = ""
+    searched_representative: str = ""
+    searched_representative_evidence_url: str = ""
+    searched_representative_confidence: str = ""
     evidence_url: str = ""
     evidence_quote: str = ""
 
@@ -34,6 +38,7 @@ class SiteStageMetrics:
     llm_pick_ms: int = 0
     fetch_pages_ms: int = 0
     llm_extract_ms: int = 0
+    search_rep_ms: int = 0
     email_rule_ms: int = 0
     company_rule_ms: int = 0
     discovered_url_count: int = 0
@@ -95,6 +100,7 @@ class RuntimeStore:
                 CREATE TABLE IF NOT EXISTS sites (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     input_index INTEGER NOT NULL,
+                    input_company_name TEXT NOT NULL DEFAULT '',
                     raw_website TEXT NOT NULL,
                     website TEXT NOT NULL,
                     dedupe_key TEXT NOT NULL UNIQUE,
@@ -105,12 +111,16 @@ class RuntimeStore:
                     representative TEXT NOT NULL DEFAULT '',
                     emails TEXT NOT NULL DEFAULT '',
                     phones TEXT NOT NULL DEFAULT '',
+                    searched_representative TEXT NOT NULL DEFAULT '',
+                    searched_representative_evidence_url TEXT NOT NULL DEFAULT '',
+                    searched_representative_confidence TEXT NOT NULL DEFAULT '',
                     evidence_url TEXT NOT NULL DEFAULT '',
                     evidence_quote TEXT NOT NULL DEFAULT '',
                     discover_ms INTEGER NOT NULL DEFAULT 0,
                     llm_pick_ms INTEGER NOT NULL DEFAULT 0,
                     fetch_pages_ms INTEGER NOT NULL DEFAULT 0,
                     llm_extract_ms INTEGER NOT NULL DEFAULT 0,
+                    search_rep_ms INTEGER NOT NULL DEFAULT 0,
                     email_rule_ms INTEGER NOT NULL DEFAULT 0,
                     company_rule_ms INTEGER NOT NULL DEFAULT 0,
                     discovered_url_count INTEGER NOT NULL DEFAULT 0,
@@ -135,6 +145,7 @@ class RuntimeStore:
                 """
             )
             self._ensure_site_text_columns(conn)
+            self._ensure_site_search_columns(conn)
             self._ensure_site_metrics_columns(conn)
 
     def _ensure_site_text_columns(self, conn: sqlite3.Connection) -> None:
@@ -144,6 +155,25 @@ class RuntimeStore:
         }
         if "phones" not in existing:
             conn.execute("ALTER TABLE sites ADD COLUMN phones TEXT NOT NULL DEFAULT ''")
+
+    def _ensure_site_search_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(sites)").fetchall()
+        }
+        additions = {
+            "input_company_name": "ALTER TABLE sites ADD COLUMN input_company_name TEXT NOT NULL DEFAULT ''",
+            "searched_representative": "ALTER TABLE sites ADD COLUMN searched_representative TEXT NOT NULL DEFAULT ''",
+            "searched_representative_evidence_url": (
+                "ALTER TABLE sites ADD COLUMN searched_representative_evidence_url TEXT NOT NULL DEFAULT ''"
+            ),
+            "searched_representative_confidence": (
+                "ALTER TABLE sites ADD COLUMN searched_representative_confidence TEXT NOT NULL DEFAULT ''"
+            ),
+        }
+        for name, sql in additions.items():
+            if name not in existing:
+                conn.execute(sql)
 
     def _ensure_site_metrics_columns(self, conn: sqlite3.Connection) -> None:
         existing = {
@@ -175,10 +205,13 @@ class RuntimeStore:
             )
             conn.executemany(
                 """
-                INSERT INTO sites(input_index, raw_website, website, dedupe_key)
-                VALUES(?, ?, ?, ?)
+                INSERT INTO sites(input_index, input_company_name, raw_website, website, dedupe_key)
+                VALUES(?, ?, ?, ?, ?)
                 """,
-                [(row.input_index, row.raw_website, row.website, row.dedupe_key) for row in rows],
+                [
+                    (row.input_index, row.company_name, row.raw_website, row.website, row.dedupe_key)
+                    for row in rows
+                ],
             )
 
     def reset_running_tasks(self) -> None:
@@ -192,6 +225,7 @@ class RuntimeStore:
                     llm_pick_ms = 0,
                     fetch_pages_ms = 0,
                     llm_extract_ms = 0,
+                    search_rep_ms = 0,
                     email_rule_ms = 0,
                     company_rule_ms = 0,
                     discovered_url_count = 0,
@@ -226,12 +260,16 @@ class RuntimeStore:
                     representative = '',
                     emails = '',
                     phones = '',
+                    searched_representative = '',
+                    searched_representative_evidence_url = '',
+                    searched_representative_confidence = '',
                     evidence_url = '',
                     evidence_quote = '',
                     discover_ms = 0,
                     llm_pick_ms = 0,
                     fetch_pages_ms = 0,
                     llm_extract_ms = 0,
+                    search_rep_ms = 0,
                     email_rule_ms = 0,
                     company_rule_ms = 0,
                     discovered_url_count = 0,
@@ -249,7 +287,7 @@ class RuntimeStore:
         with self._write_lock, self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, input_index, website, dedupe_key, retry_count
+                SELECT id, input_index, input_company_name, website, dedupe_key, retry_count
                 FROM sites
                 WHERE status IN ('pending', 'failed_temp')
                 ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, input_index ASC
@@ -269,6 +307,7 @@ class RuntimeStore:
                     llm_pick_ms = 0,
                     fetch_pages_ms = 0,
                     llm_extract_ms = 0,
+                    search_rep_ms = 0,
                     email_rule_ms = 0,
                     company_rule_ms = 0,
                     discovered_url_count = 0,
@@ -286,6 +325,7 @@ class RuntimeStore:
                 website=str(row["website"]),
                 dedupe_key=str(row["dedupe_key"]),
                 retry_count=int(row["retry_count"] or 0),
+                company_name=str(row["input_company_name"] or ""),
             )
 
     def mark_done(self, site_id: int, result: SiteResult) -> None:
@@ -299,6 +339,9 @@ class RuntimeStore:
                     emails = ?,
                     website = ?,
                     phones = ?,
+                    searched_representative = ?,
+                    searched_representative_evidence_url = ?,
+                    searched_representative_confidence = ?,
                     evidence_url = ?,
                     evidence_quote = ?,
                     finished_at = CURRENT_TIMESTAMP,
@@ -311,6 +354,9 @@ class RuntimeStore:
                     result.emails,
                     result.website,
                     result.phones,
+                    result.searched_representative,
+                    result.searched_representative_evidence_url,
+                    result.searched_representative_confidence,
                     result.evidence_url,
                     result.evidence_quote,
                     site_id,
@@ -327,6 +373,7 @@ class RuntimeStore:
                     llm_pick_ms = ?,
                     fetch_pages_ms = ?,
                     llm_extract_ms = ?,
+                    search_rep_ms = ?,
                     email_rule_ms = ?,
                     company_rule_ms = ?,
                     discovered_url_count = ?,
@@ -408,7 +455,7 @@ class RuntimeStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT company_name, representative, emails, phones, website
+                SELECT company_name, representative, emails, searched_representative, phones, website
                 FROM sites
                 WHERE status IN ('done', 'dropped')
                 ORDER BY input_index ASC
@@ -419,6 +466,7 @@ class RuntimeStore:
                 "company_name": str(row["company_name"] or ""),
                 "representative": str(row["representative"] or ""),
                 "emails": str(row["emails"] or ""),
+                "searched_representative": str(row["searched_representative"] or ""),
                 "phones": str(row["phones"] or ""),
                 "website": str(row["website"] or ""),
             }

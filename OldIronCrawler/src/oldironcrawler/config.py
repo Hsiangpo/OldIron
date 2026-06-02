@@ -19,6 +19,7 @@ _PACKAGED_IGNORED_ENV_KEYS = {
     "CAPSOLVER_API_KEY",
     "CAPSOLVER_PROXY",
     "CLOUDFLARE_PROXY_URL",
+    "TAVILY_API_KEY",
     "PROXY_URL",
 }
 
@@ -46,6 +47,13 @@ def _config_float(values: Mapping[str, str], name: str, default: float) -> float
         return float(raw)
     except ValueError:
         return default
+
+
+def _config_bool(values: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = _config_str(values, name).lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "y", "on"}
 
 
 def _config_list(values: Mapping[str, str], name: str) -> list[str]:
@@ -185,6 +193,12 @@ class AppConfig:
     email_page_hard_limit: int
     page_total_hard_limit: int
     email_stop_same_domain_count: int
+    tavily_api_key: str
+    search_representative_enabled: bool
+    search_representative_concurrency: int
+    tavily_max_results: int
+    tavily_search_depth: str
+    tavily_timeout_seconds: float
     request_timeout_seconds: float
     total_wait_seconds: float
 
@@ -225,6 +239,12 @@ class AppConfig:
             email_page_hard_limit=max(_config_int(values, "EMAIL_PAGE_HARD_LIMIT", 16), 0),
             page_total_hard_limit=max(_config_int(values, "PAGE_TOTAL_HARD_LIMIT", 20), 1),
             email_stop_same_domain_count=max(_config_int(values, "EMAIL_STOP_SAME_DOMAIN_COUNT", 2), 1),
+            tavily_api_key=_config_str(values, "TAVILY_API_KEY"),
+            search_representative_enabled=_config_bool(values, "SEARCH_REPRESENTATIVE_ENABLED", True),
+            search_representative_concurrency=max(_config_int(values, "SEARCH_REPRESENTATIVE_CONCURRENCY", 8), 1),
+            tavily_max_results=min(max(_config_int(values, "TAVILY_MAX_RESULTS", 5), 1), 10),
+            tavily_search_depth=_config_str(values, "TAVILY_SEARCH_DEPTH", "basic"),
+            tavily_timeout_seconds=max(_config_float(values, "TAVILY_TIMEOUT_SECONDS", 20.0), 3.0),
             request_timeout_seconds=max(_config_float(values, "REQUEST_TIMEOUT_SECONDS", 10.0), 1.0),
             total_wait_seconds=max(_config_float(values, "TOTAL_WAIT_SECONDS", 180.0), 30.0),
         )
