@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 import time
 
@@ -10,6 +11,7 @@ from oldironcrawler.extractor.llm_client import LlmExtractionResult, WebsiteLlmC
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_phones
 from oldironcrawler.extractor.protocol_client import HtmlPage, ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient, SiteProtocolConfig
+from oldironcrawler.extractor.representative_search import ActiveRepresentativeSearchResult
 from oldironcrawler.extractor.shell_page import build_shell_fingerprint, enrich_shell_page_html, looks_like_shell_page
 from oldironcrawler.extractor.value_rules import (
     build_fetch_plan,
@@ -89,15 +91,31 @@ class SiteProfileService:
         learning_store: GlobalLearningStore,
         llm_client: WebsiteLlmClient,
         page_pool: PageFetchPool,
+        representative_searcher=None,
     ) -> None:
         self._config = config
         self._store = store
         self._learning_store = learning_store
         self._llm = llm_client
         self._page_pool = page_pool
+        self._representative_searcher = representative_searcher
 
-    def process(self, site_id: int, website: str, *, deadline_monotonic: float | None = None) -> SiteProcessingResult:
+    def process(
+        self,
+        site_id: int,
+        website: str,
+        *,
+        input_company_name: str = "",
+        deadline_monotonic: float | None = None,
+    ) -> SiteProcessingResult:
         metrics = SiteStageMetrics()
+        search_started = time.monotonic()
+        search_future = _start_active_representative_search(
+            self._representative_searcher,
+            company_name=input_company_name,
+            website=website,
+            deadline_monotonic=deadline_monotonic,
+        )
         rep_learned = self._learning_store.load_scores("representative")
         email_learned = self._learning_store.load_scores("email")
         protocol = SiteProtocolClient(_build_site_protocol_config(self._config, deadline_monotonic))
@@ -148,6 +166,12 @@ class SiteProfileService:
                 "email_rule_ms",
                 lambda: _collect_contact_details(website, email_rule_pages),
             )
+            searched_representative = _finish_active_representative_search(
+                search_future,
+                metrics,
+                search_started,
+                deadline_monotonic,
+            )
             self._store.update_stage_metrics(site_id, metrics)
             learning_feedback = build_learning_feedback(
                 representative=llm_result.representative,
@@ -166,6 +190,9 @@ class SiteProfileService:
                     emails=join_emails(emails),
                     website=website,
                     phones=join_phones(phones),
+                    searched_representative=searched_representative.representative,
+                    searched_representative_evidence_url=searched_representative.evidence_url,
+                    searched_representative_confidence=searched_representative.confidence,
                     evidence_url=llm_result.evidence_url,
                     evidence_quote=llm_result.evidence_quote,
                 ),
@@ -324,6 +351,61 @@ def _merge_page_targets(rep_urls: list[str], email_urls: list[str]) -> list[str]
             seen.add(url)
             result.append(url)
     return result
+
+
+def _start_active_representative_search(
+    searcher,
+    *,
+    company_name: str,
+    website: str,
+    deadline_monotonic: float | None,
+) -> Future | None:
+    if searcher is None or not str(company_name or "").strip():
+        return None
+    submit = getattr(searcher, "submit", None)
+    if not callable(submit):
+        return None
+    try:
+        return submit(
+            company_name=company_name,
+            website=website,
+            deadline_monotonic=deadline_monotonic,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _finish_active_representative_search(
+    future: Future | None,
+    metrics: SiteStageMetrics,
+    started_monotonic: float,
+    deadline_monotonic: float | None,
+):
+    try:
+        if future is None:
+            metrics.search_rep_ms = 0
+            return ActiveRepresentativeSearchResult()
+        timeout = _remaining_deadline_seconds(deadline_monotonic)
+        if timeout is not None and timeout <= 0:
+            future.cancel()
+            return ActiveRepresentativeSearchResult()
+        try:
+            result = future.result(timeout=timeout)
+        except FutureTimeoutError:
+            future.cancel()
+            return ActiveRepresentativeSearchResult()
+        except Exception:  # noqa: BLE001
+            return ActiveRepresentativeSearchResult()
+        return result or ActiveRepresentativeSearchResult()
+    finally:
+        if future is not None:
+            metrics.search_rep_ms = int(round((time.monotonic() - started_monotonic) * 1000))
+
+
+def _remaining_deadline_seconds(deadline_monotonic: float | None) -> float | None:
+    if deadline_monotonic is None:
+        return None
+    return max(deadline_monotonic - time.monotonic(), 0.0)
 
 
 def _collect_contact_details(

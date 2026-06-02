@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from concurrent.futures import Future
 
 from openpyxl import Workbook
 
@@ -17,6 +18,10 @@ from oldironcrawler.extractor.representative_search import (
     ActiveRepresentativeSearchResult,
     ActiveRepresentativeSearcher,
 )
+from oldironcrawler.extractor.llm_client import LlmExtractionResult
+from oldironcrawler.extractor.service import DiscoverySnapshot, SiteProfileService
+from oldironcrawler.reporter import print_site_result, write_delivery_csv
+from oldironcrawler.runtime.global_learning import GlobalLearningStore
 from oldironcrawler.runtime.store import RuntimeStore, SiteResult
 
 
@@ -186,3 +191,169 @@ def test_active_representative_searcher_skips_missing_company_name() -> None:
     result = searcher.search(company_name="", website="https://acme.example")
 
     assert result.representative == ""
+
+
+class _FakeActiveSearcher:
+    def __init__(self):
+        self.calls = []
+
+    def submit(self, *, company_name: str, website: str, deadline_monotonic=None):
+        self.calls.append((company_name, website))
+        future = Future()
+        future.set_result(
+            ActiveRepresentativeSearchResult(
+                representative="Alice Search",
+                confidence="high",
+                evidence_url="https://acme.example/about",
+            )
+        )
+        return future
+
+
+class _FailingActiveSearcher:
+    def __init__(self):
+        self.calls = []
+
+    def submit(self, *, company_name: str, website: str, deadline_monotonic=None):
+        self.calls.append((company_name, website))
+        future = Future()
+        future.set_exception(RuntimeError("tavily_unavailable"))
+        return future
+
+
+def _patch_service_for_fast_profile(monkeypatch, service: SiteProfileService) -> None:
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._discover_value_snapshot",
+        lambda *args, **kwargs: DiscoverySnapshot(
+            urls=[],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=[],
+        ),
+    )
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._plan_fetch_targets",
+        lambda *args, **kwargs: {
+            "rep_urls": [],
+            "email_primary_urls": [],
+            "email_overflow_urls": [],
+            "all_primary_urls": [],
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_collect_budgeted_pages",
+        lambda *args, **kwargs: (
+            {},
+            [],
+            LlmExtractionResult(
+                company_name="Acme Holdings Ltd",
+                representative="Alice Website",
+                evidence_url="https://acme.example/team",
+                evidence_quote="Alice Website CEO",
+            ),
+        ),
+    )
+    monkeypatch.setattr("oldironcrawler.extractor.service._collect_email_rule_pages", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._collect_contact_details",
+        lambda *args, **kwargs: ([], {}, [], {}),
+    )
+
+
+def _build_profile_service(tmp_path: Path, searcher) -> SiteProfileService:
+    return SiteProfileService(
+        AppConfig.load(tmp_path, llm_key_override="key"),
+        RuntimeStore(tmp_path / "runtime.sqlite3"),
+        GlobalLearningStore(tmp_path / "learning.sqlite3"),
+        llm_client=object(),
+        page_pool=object(),
+        representative_searcher=searcher,
+    )
+
+
+def test_site_profile_service_adds_searched_representative(monkeypatch, tmp_path: Path) -> None:
+    searcher = _FakeActiveSearcher()
+    service = _build_profile_service(tmp_path, searcher)
+    _patch_service_for_fast_profile(monkeypatch, service)
+
+    result = service.process(
+        1,
+        "https://acme.example",
+        input_company_name="Acme Holdings Ltd",
+    )
+
+    assert result.result.representative == "Alice Website"
+    assert result.result.searched_representative == "Alice Search"
+    assert result.result.searched_representative_evidence_url == "https://acme.example/about"
+    assert searcher.calls == [("Acme Holdings Ltd", "https://acme.example")]
+
+
+def test_site_profile_service_ignores_search_failure(monkeypatch, tmp_path: Path) -> None:
+    searcher = _FailingActiveSearcher()
+    service = _build_profile_service(tmp_path, searcher)
+    _patch_service_for_fast_profile(monkeypatch, service)
+
+    result = service.process(
+        1,
+        "https://acme.example",
+        input_company_name="Acme Holdings Ltd",
+    )
+
+    assert result.result.company_name == "Acme Holdings Ltd"
+    assert result.result.representative == "Alice Website"
+    assert result.result.searched_representative == ""
+    assert searcher.calls == [("Acme Holdings Ltd", "https://acme.example")]
+
+
+def test_site_profile_service_skips_search_without_input_company(monkeypatch, tmp_path: Path) -> None:
+    searcher = _FakeActiveSearcher()
+    service = _build_profile_service(tmp_path, searcher)
+    _patch_service_for_fast_profile(monkeypatch, service)
+
+    result = service.process(1, "https://acme.example", input_company_name="")
+
+    assert result.result.searched_representative == ""
+    assert searcher.calls == []
+
+
+def test_reporter_prints_searched_representative(capsys) -> None:
+    print_site_result(
+        completed_index=1,
+        total=1,
+        website="https://acme.example",
+        company_name="Acme Holdings Ltd",
+        representative="Alice Website",
+        emails="info@acme.example",
+        searched_representative="Alice Search",
+        phones="",
+    )
+
+    out = capsys.readouterr().out
+    assert "公司名: Acme Holdings Ltd" in out
+    assert "姓名: Alice Website" in out
+    assert "邮箱: info@acme.example" in out
+    assert "搜索现役最大代表人: Alice Search" in out
+
+
+def test_delivery_csv_writes_searched_representative(tmp_path: Path) -> None:
+    path = tmp_path / "delivery.csv"
+
+    write_delivery_csv(
+        path,
+        [
+            {
+                "company_name": "Acme Holdings Ltd",
+                "representative": "Alice Website",
+                "emails": "info@acme.example",
+                "searched_representative": "Alice Search",
+                "phones": "",
+                "website": "https://acme.example",
+            }
+        ],
+    )
+
+    text = path.read_text(encoding="utf-8-sig")
+    assert text.splitlines()[0] == "company_name,representative,emails,searched_representative,phones,website"
+    assert "Alice Search" in text

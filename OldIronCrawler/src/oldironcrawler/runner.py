@@ -8,6 +8,7 @@ from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmTemporaryError, WebsiteLlmClient
 from oldironcrawler.extractor.page_pool import PageFetchPool, PageFetchPoolConfig
 from oldironcrawler.extractor.protocol_client import ProtocolPermanentError, ProtocolTemporaryError
+from oldironcrawler.extractor.representative_search import ActiveRepresentativeSearcher, TavilySearchClient
 from oldironcrawler.extractor.service import SiteProfileService
 from oldironcrawler.reporter import print_progress_heartbeat, print_site_result, write_delivery_csv
 from oldironcrawler.runtime.global_learning import GlobalLearningStore
@@ -39,6 +40,21 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
             per_host_limit=config.page_host_limit,
         )
     )
+    search_executor = ThreadPoolExecutor(max_workers=config.search_representative_concurrency)
+    tavily_client = TavilySearchClient(
+        api_key=config.tavily_api_key,
+        max_results=config.tavily_max_results,
+        search_depth=config.tavily_search_depth,
+        timeout_seconds=config.tavily_timeout_seconds,
+        proxy_url=config.proxy_url,
+    )
+    representative_searcher = ActiveRepresentativeSearcher(
+        llm_client=llm_client,
+        tavily_client=tavily_client,
+        enabled=config.search_representative_enabled and tavily_client.is_configured,
+        max_queries=2,
+        executor=search_executor,
+    )
     learning_store = GlobalLearningStore(config.runtime_dir / "global_learning.sqlite3")
     executor = ThreadPoolExecutor(max_workers=config.site_concurrency)
     wait_for_executor = True
@@ -49,7 +65,18 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                 task = store.claim_next_site()
                 if task is None:
                     break
-                futures[executor.submit(_run_single_site, config, store, learning_store, llm_client, page_pool, task)] = task
+                futures[
+                    executor.submit(
+                        _run_single_site,
+                        config,
+                        store,
+                        learning_store,
+                        llm_client,
+                        page_pool,
+                        representative_searcher,
+                        task,
+                    )
+                ] = task
             if not futures:
                 break
             done, _ = wait(futures.keys(), timeout=heartbeat_seconds, return_when=FIRST_COMPLETED)
@@ -95,6 +122,8 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
         if callable(shutdown):
             shutdown(wait=wait_for_executor, cancel_futures=True)
         page_pool.close()
+        search_executor.shutdown(wait=wait_for_executor, cancel_futures=True)
+        representative_searcher.close()
         llm_client.close()
         learning_store.close()
         delivery_writer.force_flush()
@@ -149,12 +178,25 @@ def _run_single_site(
     learning_store: GlobalLearningStore,
     llm_client: WebsiteLlmClient,
     page_pool: PageFetchPool,
+    representative_searcher,
     task: SiteTask,
 ):
     deadline = time.monotonic() + config.total_wait_seconds
     try:
-        service = SiteProfileService(config, store, learning_store, llm_client, page_pool)
-        return service.process(task.id, task.website, deadline_monotonic=deadline)
+        service = SiteProfileService(
+            config,
+            store,
+            learning_store,
+            llm_client,
+            page_pool,
+            representative_searcher=representative_searcher,
+        )
+        return service.process(
+            task.id,
+            task.website,
+            input_company_name=task.company_name,
+            deadline_monotonic=deadline,
+        )
     except LlmConfigurationError:
         raise
     except LlmTemporaryError:
@@ -195,6 +237,7 @@ def _handle_future(
                 company_name="",
                 representative="",
                 emails="",
+                searched_representative="",
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
@@ -217,6 +260,7 @@ def _handle_future(
             company_name="",
             representative="",
             emails="",
+            searched_representative="",
             phones="",
             reason=_describe_error_reason(str(exc)),
             stage_metrics=stage_metrics,
@@ -235,6 +279,7 @@ def _handle_future(
                 company_name="",
                 representative="",
                 emails="",
+                searched_representative="",
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
@@ -253,6 +298,7 @@ def _handle_future(
                 company_name="",
                 representative="",
                 emails="",
+                searched_representative="",
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
@@ -269,6 +315,7 @@ def _handle_future(
         company_name=processed.result.company_name,
         representative=processed.result.representative,
         emails=processed.result.emails,
+        searched_representative=processed.result.searched_representative,
         phones=processed.result.phones,
         reason=_describe_missing_reason(processed.result),
         stage_metrics=processed.stage_metrics,
