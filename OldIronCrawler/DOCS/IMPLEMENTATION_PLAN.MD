@@ -7,8 +7,9 @@ Build a lightweight global official-website crawler that:
 - loads one website list from `/websites`
 - resumes from a per-file SQLite database under `/output/runtime`
 - extracts company name and representative with shared-style `LLM` rules
+- searches the active highest representative with Tavily + `LLM` when input company name exists
 - extracts emails with shared-style rule logic
-- writes a 4-column CSV under `/output/delivery`
+- writes a CSV under `/output/delivery`
 
 ## Task Breakdown
 
@@ -22,6 +23,7 @@ Build a lightweight global official-website crawler that:
 
 - support `txt/csv/xlsx`
 - auto-detect website column
+- preserve optional company-name column from structured files
 - compute file fingerprint
 - create one runtime database per input file
 
@@ -43,6 +45,7 @@ Build a lightweight global official-website crawler that:
 
 - email rule extraction
 - representative/company-name `LLM` extraction
+- active representative Tavily search loop
 - representative top-5 page selection
 - email all-matched-page selection
 - weighted learned token storage
@@ -56,10 +59,16 @@ Build a lightweight global official-website crawler that:
 ### Task 7. Delivery
 
 - output CSV in input order
-- keep only `company_name, representative, emails, website`
+- keep `company_name, representative, emails, searched_representative, phones, website`
+
+### Active Representative Search
+
+- Preserve optional `company_name` from CSV/XLSX inputs.
+- When company name is present, run a Tavily-backed AI search loop in parallel with website extraction.
+- Store and deliver `searched_representative`.
+- Tavily failure must not fail the website crawl.
 
 ### Task 8. Validation
 
 - run unit tests for import/store/core rule logic
 - run at least one real crawl validation on live websites
-

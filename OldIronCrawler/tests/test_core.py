@@ -343,6 +343,7 @@ def test_runtime_store_delivery_rows_include_phones(tmp_path: Path) -> None:
             "company_name": "A",
             "representative": "Alice Smith",
             "emails": "a@a.com",
+            "searched_representative": "",
             "phones": "+49301234567",
             "website": "https://a.com",
         }

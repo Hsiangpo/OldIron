@@ -9,6 +9,8 @@ The user provides a file that contains many company websites. The software reads
 - company name
 - representative
 - all public emails
+- searched active representative
+- all public phones
 - website
 
 and finally delivers a CSV.
@@ -25,10 +27,12 @@ The new product must reuse that logic instead of inventing a separate extraction
 ### 2.1 In Scope
 
 - Import website lists from `txt`, `csv`, or `xlsx`
+- Preserve optional company names from structured `csv` or `xlsx` inputs
 - Auto-detect the website column
 - Crawl official websites with `pc`
 - Extract company name from website content
 - Extract one highest-value representative from website content
+- Search one current highest active representative with Tavily + `LLM` when input company name is present
 - Extract all rule-valid public emails from website content
 - Extract all rule-valid public phones from website content
 - Resume from SQLite state
@@ -42,7 +46,7 @@ The new product must reuse that logic instead of inventing a separate extraction
 - Google Maps completion
 - Company directory sources
 - CRM-like UI
-- Extra delivery columns beyond the agreed 5 columns
+- Extra delivery columns beyond the agreed output columns
 
 ## 3. Hard Product Decisions
 
@@ -59,6 +63,7 @@ These decisions are fixed and should be treated as product rules.
 - Input files are placed under `/websites`
 - The software runs against one selected input file at a time
 - The input may contain only websites and no company names
+- Structured `csv` or `xlsx` input may include a company-name column; this company name is used only for active representative web search
 
 ### 3.3 Extraction Strategy
 
@@ -66,10 +71,14 @@ These decisions are fixed and should be treated as product rules.
 - If the website does not show a formal legal entity name, use the brand name
 - Representative is selected by `LLM`
 - Representative must be a single highest-value person only
+- Active representative search is a separate Tavily-backed `LLM` path and must use `company_name + website`
+- Active representative search accepts one person name only; if evidence is unclear, leave it empty
 - Emails are extracted by rules only
 - Phones are extracted by rules only
 - `LLM` must not be used to generate or supplement emails
 - `LLM` must not be used to generate or supplement phones
+- Tavily must not be used to generate or supplement emails or phones
+- Tavily failure must not fail the official-website crawl
 - German `impressum` should be treated as a strong representative and contact signal
 - Representative selection must continue to use `html -> markdown`
 - Representative prompt should keep the current shared strictness:
@@ -82,10 +91,11 @@ These decisions are fixed and should be treated as product rules.
 
 - Deliver all records
 - Do not require all fields to be non-empty before delivery
-- Final CSV contains exactly 5 columns:
+- Final CSV contains exactly 6 columns:
   - `company_name`
   - `representative`
   - `emails`
+  - `searched_representative`
   - `phones`
   - `website`
 
@@ -101,6 +111,7 @@ This applies to:
 - company name
 - representative
 - emails
+- searched representative
 - phones
 
 ### 3.6 Email Output Format
@@ -157,6 +168,8 @@ The terminal output must follow this style:
   公司名: FNTL
   姓名: NADEEM KHAN
   邮箱: office@fntl.co.uk
+  搜索现役最大代表人: 未找到
+  电话: 未找到
   ------------------------------------------------------------
 ```
 
@@ -167,6 +180,8 @@ If a field is missing:
   公司名: 未找到
   姓名: 未找到
   邮箱: enquiries@3-sphere.co.uk
+  搜索现役最大代表人: 未找到
+  电话: 未找到
   ------------------------------------------------------------
 ```
 
