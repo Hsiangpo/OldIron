@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-06-02T13:21:39Z",
+  "updated_at": "2026-06-02T13:58:41Z",
   "tasks": [
     {
       "task_id": "fix-fc-email-init-20260409",
@@ -120,37 +120,6 @@
       "started_at": "2026-05-10T17:52:36Z",
       "last_heartbeat_at": "2026-05-10T17:52:36Z",
       "notes": "Switch CNPJ Biz initial list seeding from homepage to all Brazil states for full crawl mode."
-    },
-    {
-      "task_id": "oldironcrawler-active-rep-search-20260602",
-      "status": "in_progress",
-      "machine": "local-linux",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [
-        "OldIronCrawler/src/oldironcrawler/importer.py",
-        "OldIronCrawler/src/oldironcrawler/config.py",
-        "OldIronCrawler/src/oldironcrawler/runtime/store.py",
-        "OldIronCrawler/src/oldironcrawler/extractor/llm_client.py",
-        "OldIronCrawler/src/oldironcrawler/extractor/representative_search.py",
-        "OldIronCrawler/src/oldironcrawler/extractor/service.py",
-        "OldIronCrawler/src/oldironcrawler/runner.py",
-        "OldIronCrawler/src/oldironcrawler/reporter.py",
-        "OldIronCrawler/tests/test_active_representative_search.py",
-        "OldIronCrawler/.env.example",
-        "OldIronCrawler/DOCS/PRD.MD",
-        "OldIronCrawler/DOCS/IMPLEMENTATION_PLAN.MD"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-02T13:21:39Z",
-      "last_heartbeat_at": "2026-06-02T13:21:39Z",
-      "notes": "Implement Tavily-backed active representative search for OldIronCrawler."
     }
   ]
 }
