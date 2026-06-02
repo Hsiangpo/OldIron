@@ -57,6 +57,18 @@ _SOCIAL_HOST_HINTS = (
     "weibo.com",
 )
 _WEBSITE_COLUMN_BONUS = {"high": 90.0, "medium": 60.0, "low": 30.0}
+_COMPANY_HEADER_HINTS = {
+    "company",
+    "company name",
+    "company_name",
+    "business name",
+    "organization",
+    "organisation",
+    "name",
+    "会社名",
+    "企業名",
+    "公司名",
+}
 
 
 WebsiteColumnPicker = Callable[..., dict[str, object]]
@@ -68,6 +80,13 @@ class ImportedWebsite:
     raw_website: str
     website: str
     dedupe_key: str
+    company_name: str = ""
+
+
+@dataclass
+class _ImportedRawRow:
+    raw_website: str
+    company_name: str = ""
 
 
 @dataclass
@@ -154,6 +173,7 @@ def compute_rows_fingerprint(rows: list[ImportedWebsite]) -> str:
             "input_index": row.input_index,
             "website": row.website,
             "dedupe_key": row.dedupe_key,
+            "company_name": row.company_name,
         }
         for row in rows
     ]
@@ -177,12 +197,12 @@ def load_websites(
     return _dedupe_websites(rows)
 
 
-def _load_from_txt(path: Path) -> list[str]:
-    rows: list[str] = []
+def _load_from_txt(path: Path) -> list[_ImportedRawRow]:
+    rows: list[_ImportedRawRow] = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         text = str(line or "").strip()
         if text:
-            rows.append(text)
+            rows.append(_ImportedRawRow(raw_website=text))
     return rows
 
 
@@ -190,7 +210,7 @@ def _load_from_csv(
     path: Path,
     *,
     website_column_picker: WebsiteColumnPicker | None = None,
-) -> list[str]:
+) -> list[_ImportedRawRow]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle)
         rows = list(reader)
@@ -201,10 +221,10 @@ def _load_from_xlsx(
     path: Path,
     *,
     website_column_picker: WebsiteColumnPicker | None = None,
-) -> list[str]:
+) -> list[_ImportedRawRow]:
     workbook = load_workbook(filename=path, read_only=True, data_only=True)
     try:
-        rows: list[str] = []
+        rows: list[_ImportedRawRow] = []
         for sheet in workbook.worksheets:
             matrix = [list(row) for row in sheet.iter_rows(values_only=True)]
             if not matrix:
@@ -226,17 +246,19 @@ def _load_from_matrix(
     *,
     source_name: str = "",
     website_column_picker: WebsiteColumnPicker | None = None,
-) -> list[str]:
+) -> list[_ImportedRawRow]:
     if not rows:
         return []
     selection = _pick_website_column(rows, source_name=source_name, website_column_picker=website_column_picker)
     if selection is not None:
         _print_selected_website_column(selection)
         data_rows = rows[1:] if selection.skip_header else rows
-        return _load_from_column(data_rows, selection.column_index)
+        company_index = _find_company_header_index(rows[0], website_column=selection.column_index) if selection.skip_header else None
+        return _load_from_column(data_rows, selection.column_index, company_column=company_index)
     header_index = _find_header_index(rows[0])
     if header_index is not None:
-        return _load_from_column(rows[1:], header_index)
+        company_index = _find_company_header_index(rows[0], website_column=header_index)
+        return _load_from_column(rows[1:], header_index, company_column=company_index)
     guess_index = _find_first_website_like_column(rows)
     if guess_index is None:
         return []
@@ -247,6 +269,16 @@ def _find_header_index(first_row: list[object]) -> int | None:
     for index, value in enumerate(first_row):
         lowered = str(value or "").strip().lower()
         if lowered in _HEADER_CANDIDATES:
+            return index
+    return None
+
+
+def _find_company_header_index(first_row: list[object], *, website_column: int) -> int | None:
+    for index, value in enumerate(first_row):
+        if index == website_column:
+            continue
+        lowered = str(value or "").strip().lower()
+        if lowered in _COMPANY_HEADER_HINTS:
             return index
     return None
 
@@ -268,14 +300,22 @@ def _find_first_website_like_column(rows: list[list[object]]) -> int | None:
     return best_index if best_score > 0 else None
 
 
-def _load_from_column(rows: list[list[object]], column: int) -> list[str]:
-    result: list[str] = []
+def _load_from_column(
+    rows: list[list[object]],
+    column: int,
+    *,
+    company_column: int | None = None,
+) -> list[_ImportedRawRow]:
+    result: list[_ImportedRawRow] = []
     for row in rows:
         if column >= len(row):
             continue
         text = str(row[column] or "").strip()
         if text:
-            result.append(text)
+            company_name = ""
+            if company_column is not None and company_column < len(row):
+                company_name = str(row[company_column] or "").strip()
+            result.append(_ImportedRawRow(raw_website=text, company_name=company_name))
     return result
 
 
@@ -534,11 +574,11 @@ def _coerce_int(value: object) -> int | None:
         return None
 
 
-def _dedupe_websites(rows: list[str]) -> list[ImportedWebsite]:
+def _dedupe_websites(rows: list[_ImportedRawRow]) -> list[ImportedWebsite]:
     results: list[ImportedWebsite] = []
     seen: set[str] = set()
-    for index, raw in enumerate(rows, start=1):
-        website = _normalize_website(raw)
+    for index, row in enumerate(rows, start=1):
+        website = _normalize_website(row.raw_website)
         if not website:
             continue
         dedupe_key = _build_dedupe_key(website)
@@ -548,9 +588,10 @@ def _dedupe_websites(rows: list[str]) -> list[ImportedWebsite]:
         results.append(
             ImportedWebsite(
                 input_index=index,
-                raw_website=str(raw).strip(),
+                raw_website=str(row.raw_website).strip(),
                 website=website,
                 dedupe_key=dedupe_key,
+                company_name=str(row.company_name or "").strip(),
             )
         )
     return results
