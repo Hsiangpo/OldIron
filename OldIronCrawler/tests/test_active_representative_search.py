@@ -307,15 +307,15 @@ def test_site_profile_service_ignores_search_failure(monkeypatch, tmp_path: Path
     assert searcher.calls == [("Acme Holdings Ltd", "https://acme.example")]
 
 
-def test_site_profile_service_skips_search_without_input_company(monkeypatch, tmp_path: Path) -> None:
+def test_site_profile_service_searches_with_extracted_company_name(monkeypatch, tmp_path: Path) -> None:
     searcher = _FakeActiveSearcher()
     service = _build_profile_service(tmp_path, searcher)
     _patch_service_for_fast_profile(monkeypatch, service)
 
     result = service.process(1, "https://acme.example", input_company_name="")
 
-    assert result.result.searched_representative == ""
-    assert searcher.calls == []
+    assert result.result.searched_representative == "Alice Search"
+    assert searcher.calls == [("Acme Holdings Ltd", "https://acme.example")]
 
 
 def test_reporter_prints_searched_representative(capsys) -> None:

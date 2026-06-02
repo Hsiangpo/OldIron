@@ -160,6 +160,14 @@ class SiteProfileService:
                         [(page.url, page.html) for page in fetched_pages],
                 ),
             ))
+            if search_future is None and not str(input_company_name or "").strip() and company_name:
+                search_started = time.monotonic()
+                search_future = _start_active_representative_search(
+                    self._representative_searcher,
+                    company_name=company_name,
+                    website=website,
+                    deadline_monotonic=deadline_monotonic,
+                )
             email_rule_pages = _collect_email_rule_pages(page_map, fetch_plan)
             emails, email_sources, phones, _phone_sources = self._time_call(
                 metrics,
