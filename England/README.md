@@ -1,6 +1,6 @@
 # England
 
-英国当前接入 2 个站点：
+英国当前接入 3 个站点：
 
 - `companyname`
 - `kompass`

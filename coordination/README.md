@@ -48,8 +48,8 @@ Country/site-local changes outside the paths above still require an active task 
    - `shared_zone`
 6. Register the task in `active_tasks.json`
 7. If the task is `site_local`:
-   - create a task branch
-   - push the branch early so the remote machine can see the work started
+   - work directly on `main` by default; do not create a task branch unless the user explicitly asks for a branch/PR flow
+   - register the task early so the remote machine can see the work started
 8. If the task is `shared_zone`:
    - claim the exact shared path(s) in `shared_locks.json`
    - set `expires_at` and `heartbeat_at`
@@ -66,11 +66,11 @@ Country/site-local changes outside the paths above still require an active task 
 Prefer the coordination helper instead of hand-editing JSON:
 
 ```bash
-python coordination/coord_cli.py begin --task-id coord-2026-04-03-example --change-class site_local --machine "Machine 1" --agent codex-windows --base-branch main --working-branch machine1/england/example --scope England/sites/companyname --planned-file England/src/england_crawler/sites/companyname/pipeline.py
-python coordination/coord_cli.py begin --task-id coord-2026-04-03-shared --change-class shared_zone --machine "Machine 1" --agent codex-windows --base-branch main --working-branch machine1/shared/example --scope AGENTS.md --planned-file AGENTS.md --lock-path AGENTS.md --lease-minutes 20
+python coordination/coord_cli.py begin --task-id coord-2026-04-03-example --change-class site_local --machine "Machine 1" --agent codex-windows --base-branch main --working-branch main --scope England/sites/companyname --planned-file England/src/england_crawler/sites/companyname/pipeline.py
+python coordination/coord_cli.py begin --task-id coord-2026-04-03-shared --change-class shared_zone --machine "Machine 1" --agent codex-windows --base-branch main --working-branch main --scope AGENTS.md --planned-file AGENTS.md --lock-path AGENTS.md --lease-minutes 20
 python coordination/coord_cli.py heartbeat --task-id coord-2026-04-03-shared --lease-minutes 20
 python coordination/coord_cli.py finish --task-id coord-2026-04-03-shared --notes "done"
-python coordination/coord_cli.py takeover --previous-lock-id lock-some-task-1 --new-task-id coord-2026-04-03-takeover --machine "Machine 2" --agent codex-mac --base-branch main --working-branch machine2/shared/takeover --scope AGENTS.md --planned-file AGENTS.md --lease-minutes 20 --notes "expired lock takeover"
+python coordination/coord_cli.py takeover --previous-lock-id lock-some-task-1 --new-task-id coord-2026-04-03-takeover --machine "Machine 2" --agent codex-mac --base-branch main --working-branch main --scope AGENTS.md --planned-file AGENTS.md --lease-minutes 20 --notes "expired lock takeover"
 python coordination/coord_cli.py render-issue --task-id coord-2026-04-03-shared
 python coordination/coord_cli.py render-pr --task-id coord-2026-04-03-shared
 python coordination/preflight.py --change-class shared_zone --scope AGENTS.md --lock-path AGENTS.md
@@ -103,7 +103,7 @@ If a shared lock is expired:
   "agent": "codex-windows",
   "change_class": "shared_zone",
   "base_branch": "main",
-  "working_branch": "machine1/england/shared-cleanup",
+  "working_branch": "main",
   "scope": [
     "England/sites/companyname",
     "README.md"
@@ -147,4 +147,4 @@ If a shared lock is expired:
 - Use exact file paths for shared locks whenever possible.
 - If you pause for more than a short break, refresh `last_heartbeat_at`.
 - Shared locks are lease locks, not permanent locks. Refresh `heartbeat_at` and extend `expires_at` if the shared task is still active.
-- When a task is done, mark it `completed` and remove or release its shared locks in the same push.
+- When a task is done, run `coord_cli.py finish` (it removes the task entry and releases the task's shared locks) in the same push.

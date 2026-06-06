@@ -152,7 +152,7 @@
 - Daily delivery files use a unified entry at the project root. Do not use `<Country>/product.py` directly for execution.
 - Run command example: `python product.py England dayN` (root script delegates to the respective country module).
 - 默认交付规范：单个国家，所有站点，通过 `product.py` 打包落盘的时候，**默认**将所有站点的输出数据进行归并，按公司名严格**去重后才落盘生成最终交付文档**。
-- 文件存放规范：生成的最终交付文档必须放在各个国家内部的 `output/delivery/<国家英文名>_dayN(从001开始)` 文件夹下。例如：`SouthKorea/output/delivery/SouthKorea_day001/`。
+- 文件存放规范：生成的最终交付文档必须放在各个国家内部的 `output/delivery/<国家英文名>_dayN(从001开始)` 文件夹下。例如：`England/output/delivery/England_day001/`。
 - Global website email rule:
   - for every country, if an email is a real email found from the company's official website, keep it
   - do not filter by mailbox type; personal/free mailbox domains and corporate mailbox domains are both allowed
@@ -265,65 +265,87 @@
 
 This repository is a multi-country company data collection workspace. Each country folder is a mostly independent project with its own runtime, output, and delivery flow. Additionally, there is a global generic backend for high concurrency generic tasks:
 
-- `Denmark/`
 - `Brazil/`
+- `Denmark/`
 - `England/`
+- `Finland/`
 - `Germany/`
-- `India/`
-- `Indonesia/`
-- `Japan/`
 - `Italy/`
-- `UnitedArabEmirates/`
+- `Japan/`
 - `Taiwan/`
+- `UnitedArabEmirates/`
 - `UnitedStates/`
-- `Malaysia/`
-- `SouthKorea/`
-- `Spain/`
-- `Thailand/`
-- `Turkey/`
 - `VersatileBackend/` (Go-based generic backend for high-concurrency tasks like Firecrawl, Gmap, Snov)
+- `OldIronCrawler/` (standalone generic website-list → CSV tool, packaged as a Windows exe)
 
-Legacy implementations that are no longer the active development path must be archived under either:
+Legacy implementations that are no longer the active development path are archived under either:
 
 - `<Country>/bak/` for country-local historical code and output
 - `former/` for countries or modules that have not yet been migrated to the new framework
 
-New development must not continue inside archived implementations. Archived code is reference-only.
+Note: as of this writing neither archive location exists in the tree — all 10 countries are on the active framework. New development must not continue inside archived implementations. Archived code, if any, is reference-only.
 
 In each country project, keep source code under `src/`, tests under `tests/` or `test/`, docs under `docs/`, runtime artifacts under `output/`, and entry scripts such as `run.py` and `product.py` at the project root.
 
 ## Build, Test, And Development Commands
 
-There is no single root build step. Work inside the target country directory for scrapers, but run delivery from the root.
+There is no single root build step. Work inside the target country directory for scrapers, but run delivery from the root. Each country installs with `cd <Country> && python -m pip install -r requirements.txt`.
 
-- `cd England && python -m pip install -r requirements.txt`
+England (companies + per-site websites):
 - `cd England && python run.py companyname`
+- `cd England && python run.py kompass list --max-pages 3`
+- `cd England && python run.py wiza list`
 - `python product.py England day1`
-- `cd Germany && python -m pip install -r requirements.txt`
-- `cd Germany && python run.py wiza`
-- `python product.py Germany day1`
-- `python product.py Germany websites day1`
-- `cd Brazil && python -m pip install -r requirements.txt`
-- `cd Brazil && python run.py dnb`
-- `python product.py Brazil day1`
-- `cd Denmark && python -m pip install -r requirements.txt`
+- `python product.py England websites day1`
+
+Denmark (merge delivery):
 - `cd Denmark && python run.py proff`
 - `cd Denmark && python run.py virk`
 - `python product.py Denmark day1`
-- `cd Finland && python -m pip install -r requirements.txt`
+
+Finland (merge delivery; CLI `tmt` maps to dir `tyomarkkinatori`):
 - `cd Finland && python run.py tmt`
 - `cd Finland && python run.py duunitori`
 - `cd Finland && python run.py jobly`
 - `python product.py Finland day1`
-- `cd Japan && python -m pip install -r requirements.txt`
+
+Germany (per-site; list-only sites, no detail/GMap/P3):
+- `cd Germany && python run.py kompass list --max-pages 3`
+- `cd Germany && python run.py wiza list`
+- `python product.py Germany day1`
+- `python product.py Germany websites day1`
+
+Italy (per-site websites; `dnb` has list/verif/email phases):
+- `cd Italy && python run.py dnb`
+- `cd Italy && python run.py wiza`
+- `python product.py Italy websites day1`
+
+Brazil (per-site):
+- `cd Brazil && python run.py cnpjbiz`
+- `cd Brazil && python run.py dnb`
+- `python product.py Brazil day1`
+
+Japan (per-site; companies delivery only, no `websites` mode):
 - `cd Japan && python run.py bizmaps`
 - `cd Japan && python run.py hellowork`
+- `cd Japan && python run.py mynavi`
+- `cd Japan && python run.py onecareer`
+- `cd Japan && python run.py openwork`
+- `cd Japan && python run.py pasonacareer`
 - `cd Japan && python run.py xlsximport`
 - `python product.py Japan day1`
-- `cd Taiwan && python -m pip install -r requirements.txt`
+
+Taiwan:
 - `cd Taiwan && python run.py ieatpe`
 - `python product.py Taiwan day1`
-- `cd UnitedArabEmirates && python -m pip install -r requirements.txt`
+
+UnitedStates (per-site):
+- `cd UnitedStates && python run.py dnb`
+- `cd UnitedStates && python run.py wiza`
+- `python product.py UnitedStates day1`
+- `python product.py UnitedStates websites day1`
+
+UnitedArabEmirates (per-site):
 - `cd UnitedArabEmirates && python run.py dubaibusinessdirectory`
 - `cd UnitedArabEmirates && python run.py hidubai`
 - `cd UnitedArabEmirates && python run.py dayofdubai`
@@ -331,19 +353,14 @@ There is no single root build step. Work inside the target country directory for
 - `cd UnitedArabEmirates && python run.py wiza`
 - `cd UnitedArabEmirates && python run.py wizasnov`
 - `python product.py UnitedArabEmirates day1`
-- `cd UnitedStates && python -m pip install -r requirements.txt`
-- `cd UnitedStates && python run.py dnb`
-- `cd UnitedStates && python run.py wiza`
-- `python product.py UnitedStates day1`
-- `python product.py UnitedStates websites day1`
-- `cd Italy && python -m pip install -r requirements.txt`
-- `cd Italy && python run.py wiza`
-- `python product.py Italy websites day1`
+
+Tests (run the target country's suite; runner differs per project):
 - `cd Japan && python -m pytest test -v`
+- `cd England && python -m unittest tests -v`
 - `cd Taiwan && python -m unittest tests -v`
 - `cd UnitedStates && python -m unittest tests -v`
 - `cd Italy && python -m unittest tests -v`
-- `cd Thailand && pytest tests -q`
+- `python -m pytest tests`  # root: shared delivery / coordination tests
 
 ## Coding Style And Naming Conventions
 
@@ -376,8 +393,8 @@ There is no single root build step. Work inside the target country directory for
 ## Testing Guidelines
 
 - Match the existing test runner in the target project.
-- England mainly uses `unittest`.
-- Japan, Malaysia, and Thailand mainly use `pytest`.
+- England, Taiwan, UnitedStates, and Italy mainly use `unittest`.
+- Japan mainly uses `pytest`.
 - Name tests `test_*.py`.
 - Add or update tests whenever parsing, deduplication, checkpoint, delivery, or email extraction logic changes.
 - Run the relevant country suite before claiming completion.

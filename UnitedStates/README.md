@@ -11,8 +11,8 @@
 
 ```bash
 cd UnitedStates
-.venv/bin/python run.py dnb
-.venv/bin/python run.py wiza
+python run.py dnb
+python run.py wiza
 ```
 
 ## Delivery

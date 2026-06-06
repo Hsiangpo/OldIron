@@ -9,7 +9,7 @@
 | `proff` | `python run.py proff`  | proff.dk       | 丹麦最大的企业黄页            |
 | `virk`  | `python run.py virk`   | datacvr.virk.dk | 丹麦官方工商注册库（CVR）      |
 
-历史站点（`dnb` 等）已归档到 `bak/`。
+历史站点（`dnb` 等）已下线，当前仅保留 `proff`、`virk` 两条活跃主线。
 
 ## 当前主链路
 
@@ -53,7 +53,7 @@ python run.py proff --email-workers 8 --gmap-workers 64
 
 ```bash
 cd ..
-Denmark/.venv/bin/python product.py Denmark day1
+python product.py Denmark day1
 ```
 
 输出目录：`Denmark/output/delivery/Denmark_dayNNN/`
@@ -87,13 +87,12 @@ Denmark/
 ├── .env                # 本地配置（不进 git）
 ├── src/
 │   └── denmark_crawler/
-│       ├── fc_email/       # 协议爬虫+LLM 邮箱提取（共享模块）
+│       ├── delivery.py      # 国家交付逻辑（邮箱/代表人提取走 shared/oldiron_core）
 │       └── sites/
 │           ├── proff/      # Proff 站点
 │           └── virk/       # Virk 站点
-├── output/
-│   ├── proff/              # Proff 运行产物
-│   ├── virk/               # Virk 运行产物
-│   └── delivery/           # 交付文件
-└── bak/                    # 归档的历史实现
+└── output/
+    ├── proff/              # Proff 运行产物
+    ├── virk/               # Virk 运行产物
+    └── delivery/           # 交付文件
 ```

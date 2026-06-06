@@ -9,14 +9,14 @@
 - 一个站点可以拆多阶段流水线
 - 不同国家可以复用同一类能力（官网补齐、联系方式提取、增量交付等）
 
-当前仓库已经覆盖英国、丹麦、德国、韩国、日本、印尼、马来西亚、泰国、印度，以及新接入的美国、意大利、台湾、阿联酋方向。
+当前仓库覆盖英国、丹麦、芬兰、德国、意大利、日本、台湾、巴西、美国、阿联酋共 10 个国家方向。
 
 ## 当前开发口径
 
 - 多机协作模型：**不同机器跑不同站点**，按国家维度合并交付。不做同一站点多机分片。
 - 双 Codex 并行开发时，统一使用 `coordination/` + GitHub issue / PR 双通道做任务登记、共享区租约锁和交接。
-- 邮箱补充路线：已从 `Firecrawl` 迁移到**协议爬虫（curl_cffi）+ LLM**。协议爬虫抓取网页，HTML 转 Markdown 后由 LLM 提取邮箱和代表人。
-- 老旧实现统一归档到 `<Country>/bak/` 或 `former/`，新开发全部接入新框架。
+- 邮箱补充路线：已从 `Firecrawl` 迁移到**协议爬虫（curl_cffi）+ LLM**。协议爬虫抓取网页转 Markdown 后，邮箱由规则提取、代表人由 LLM 提取。
+- 老旧实现按约定归档到 `<Country>/bak/` 或 `former/`（当前这两类目录均不存在，所有国家都已在新框架上），新开发全部接入新框架。
 
 ## 机器分工
 
@@ -32,59 +32,60 @@
 
 ## 当前国家与站点覆盖
 
-| 国家 | 活跃站点 | 主链路 | 邮箱路线 |
+仓库当前覆盖 **10 个国家**。各站点的详细策略以对应的 `<Country>/README.md` 和根 `AGENTS.md` 的 country-specific override 为准。
+
+| 国家 | 活跃站点 | 主链路 | 邮箱/代表人路线 |
 |------|---------|--------|---------|
-| Denmark | `proff`、`virk` | Proff/Virk → GMap → 协议爬虫+LLM → delivery | 站点直出优先，缺邮箱用协议爬虫+LLM 补强 |
-| Brazil | `dnb` | DNB 列表 API → 隐藏详情 API → GMap → 协议爬虫+LLM → delivery | DNB 官网层 + 协议爬虫+LLM |
-| England | `companyname` | Excel 名单 → GMap → Companies House officers → 规则邮箱提取 → delivery | 代表人来自 Companies House，邮箱走规则提取 |
-| Germany | `wiza` | Wiza 登录态协议列表 → 官网列表落盘 → `websites dayN` per-site delivery | 仅交付官网列表，不进详情，不跑 P2/P3 |
-| UnitedStates | `dnb`、`wiza` | DNB 仍走详情补齐链路；`wiza` 复用登录态抓官网列表并直接走 `websites dayN` | `wiza` 只交付官网列表，不跑详情/P2/P3 |
-| Italy | `wiza` | Wiza 登录态协议列表 → 官网列表落盘 → `websites dayN` per-site delivery | 仅交付官网列表，不进详情，不跑 P2/P3 |
-| UnitedArabEmirates | `dubaibusinessdirectory`、`hidubai`、`dayofdubai`、`dubaibizdirectory`、`wiza` | UAE 目录站点仍走目录页/接口/协议详情 → GMap → 协议爬虫+LLM；`wiza` 复用登录态抓列表后，直接走 Snov 域名邮箱 + Snov 人员列表 + LLM 选关键联系人 → per-site delivery | `wiza` 不走官网规则邮箱/官网代表人链路 |
-| Taiwan | `ieatpe` | 会员协议接口 → 详情接口 → delivery | 站点直出 |
-| SouthKorea | `catch`、`incheon`、`dart` 等 | 列表/详情 → 官网 → 邮箱 → 交付 | Snov 为主 |
-| Japan | `bizmaps`、`hellowork`、`xlsximport` | 站点列表/导入 → 官网/邮箱补齐 → delivery | 协议爬虫+LLM + 站点字段 |
-| Indonesia | `gapensi`、`indonesiayp` | 列表 → 详情 → 法人 → 邮箱 | Snov 为主 |
-| Malaysia | `CTOS`、`BusinessList` | 公司名池 → 官网/管理人 → 邮箱 → 交付 | Snov 为主 |
-| Thailand | `dnb` | DNB → 官网解析 → 站点抽取 → 邮箱 | Snov 为主 |
-| India | `ZaubaCorp` | 列表 → 详情 → 联系方式/董事 | 站点内字段为主 |
+| Denmark | `proff`、`virk` | Proff/Virk → GMap → 协议爬虫+LLM → 合并去重交付 | 站点直出优先，缺邮箱/代表人用协议爬虫+LLM 补强 |
+| England | `companyname`、`kompass`、`wiza` | `companyname`：Excel 名单 → GMap → Companies House officers → 规则邮箱；`kompass`/`wiza`：仅抓官网列表 → `websites` per-site 交付 | `companyname` 代表人来自 Companies House、邮箱走规则；`kompass`/`wiza` 只交付官网列表 |
+| Finland | `tmt`、`duunitori`、`jobly` | 招聘站（`tmt` 官方 API / `duunitori`、`jobly` SSR）→ 条件触发 GMap → 协议爬虫+LLM → 三站合并去重交付 | 站内联系人字段优先，缺时官网规则邮箱 + LLM 代表人兜底 |
+| Germany | `kompass`、`wiza` | 登录态/cookie 抓官网列表 → `websites` per-site 交付，不进详情、不跑 GMap/P2/P3 | 仅交付官网列表 |
+| Italy | `dnb`、`wiza` | `dnb`：列表 → Verif 补官网+代表人 → 官网规则邮箱；`wiza`：仅抓官网列表 → `websites` 交付 | `dnb` 代表人来自 Verif、邮箱走官网规则；`wiza` 只交付官网列表 |
+| Brazil | `cnpjbiz`、`dnb` | `cnpjbiz`：cnpj.biz 浏览器+代理按州全量抓；`dnb`：DNB 列表/详情 → GMap → 协议爬虫+LLM | per-site 交付 |
+| Japan | `bizmaps`、`hellowork`、`mynavi`、`onecareer`、`openwork`、`pasonacareer`、`xlsximport` | 企业库/招聘站/本地 xlsx 导入 → GMap（`hellowork`、`xlsximport` 除外）→ 协议爬虫规则邮箱 + LLM 代表人 | per-site 交付，门禁要求公司名+代表人+邮箱三项齐全 |
+| Taiwan | `ieatpe` | 会员协议接口 → 详情接口 → 交付 | 站点直出 |
+| UnitedStates | `dnb`、`wiza` | `dnb` 走详情补齐链路；`wiza` 复用登录态抓官网列表 → `websites` 交付，不跑详情/GMap/P2/P3 | per-site 交付 |
+| UnitedArabEmirates | `dubaibusinessdirectory`、`hidubai`、`dayofdubai`、`dubaibizdirectory`、`wiza`、`wizasnov` | 目录站走目录页/接口/协议详情 → GMap → 协议爬虫+LLM；`wiza` 走普通三段式；`wizasnov` 走 Snov 域名邮箱 + Snov 人员 + LLM 选关键联系人 | per-site 交付，门禁见 AGENTS override |
 
 ## 统一技术路线
 
 1. **主体获取** — 从工商库、黄页、协会名录等入口拿公司主体
 2. **详情补齐** — 拉详情页补公司号、地址、电话、代表人、官网
 3. **官网发现** — 站内直接给官网最好；缺时走 Google Maps 或目录站补
-4. **联系方式提取** — 协议爬虫抓取官网页面，HTML→Markdown 后由 LLM 提取邮箱和代表人
+4. **联系方式提取** — 协议爬虫抓取官网页面；邮箱由规则从完整页面提取，代表人由 LLM 从 HTML→Markdown 内容提取
 5. **质量过滤** — 过滤共享域名、占位邮箱、无效官网
 6. **增量交付** — 按 `day1/day2/...` 输出每日增量包
 
-## 邮箱提取技术细节
+## 官网联系方式提取技术细节
 
-当前邮箱补充链路（协议爬虫 + LLM）的工作流程：
+当前官网补充链路（协议爬虫规则抽邮箱 + LLM 抽代表人）的工作流程：
 
 1. **站点地图获取** — 用 curl_cffi 抓取目标官网的 sitemap 或首页链接
 2. **LLM 选页** — LLM 从所有链接中选出最可能包含联系信息的 8 个页面
 3. **页面抓取** — 协议爬虫抓取这 8 个页面的完整 HTML
 4. **HTML → Markdown** — BeautifulSoup 清洗无用标签（script/style/img 等），markdownify 转换，压缩率 88-99%
-5. **LLM 提取** — Markdown 内容发给 LLM，提取公司名、代表人、邮箱
+5. **提取** — 邮箱由规则从完整页面内容提取（不走 LLM）；公司名和代表人由 LLM 从 Markdown 内容提取
 6. **429 处理** — LLM API 返回 429 时无限排队等待（30-60 秒随机间隔），不算失败
 
 关键参数：
 - 单页 Markdown 上限：80,000 字符（超过截断）
-- 总 prompt 上限：750,000 字符（≈250k token，低于模型 272k 限制）
+- 总 prompt 上限：250,000 字符（代码 `_MAX_PROMPT_CHARS`，低于模型 272k token 限制）
 - LLM 并发：默认 8 个 worker，间隔 0.3 秒启动
 
 ## England 当前状态
 
-- 站点：`companyname` — 从 Excel 公司名单出发
-- 主链路：`Excel → GMap（补官网）→ Companies House officers（补代表人）→ 协议爬虫规则抽邮箱 → delivery`
+- 站点：`companyname`、`kompass`、`wiza`
+- `companyname` 主链路：`Excel → GMap（补官网）→ Companies House officers（补代表人）→ 协议爬虫规则抽邮箱 → delivery`
+- `companyname` 代表人来源：Companies House `officers` 页面，只取当前在任，多个名字用分号拼接
+- `companyname` 邮箱来源：官网规则提取，不让官网 LLM 抽代表人或邮箱
+- `kompass`、`wiza`：只抓官网列表，不进详情、不跑 GMap/P3，走 `websites` per-site 交付
 - 运行机器：Windows (Machine 1)
-- 代表人来源：Companies House `officers` 页面，只取当前在任，多个名字用分号拼接
-- 邮箱来源：官网规则提取，不再让官网 LLM 抽代表人或邮箱
 
 ```bash
 cd England
 python run.py companyname
+python run.py kompass list --max-pages 3
+python run.py wiza list
 ```
 
 ## Denmark 当前状态
@@ -158,8 +159,8 @@ python product.py Denmark day1
 常用命令：
 
 ```bash
-python coordination/coord_cli.py begin --task-id coord-2026-04-03-example --change-class site_local --machine "Machine 1" --agent codex-windows --base-branch main --working-branch machine1/england/example --scope England/sites/companyname --planned-file England/src/england_crawler/sites/companyname/pipeline.py
-python coordination/coord_cli.py begin --task-id coord-2026-04-03-shared --change-class shared_zone --machine "Machine 1" --agent codex-windows --base-branch main --working-branch machine1/shared/example --scope AGENTS.md --planned-file AGENTS.md --lock-path AGENTS.md --lease-minutes 20
+python coordination/coord_cli.py begin --task-id coord-2026-04-03-example --change-class site_local --machine "Machine 1" --agent codex-windows --base-branch main --working-branch main --scope England/sites/companyname --planned-file England/src/england_crawler/sites/companyname/pipeline.py
+python coordination/coord_cli.py begin --task-id coord-2026-04-03-shared --change-class shared_zone --machine "Machine 1" --agent codex-windows --base-branch main --working-branch main --scope AGENTS.md --planned-file AGENTS.md --lock-path AGENTS.md --lease-minutes 20
 python coordination/coord_cli.py heartbeat --task-id coord-2026-04-03-shared --lease-minutes 20
 python coordination/coord_cli.py finish --task-id coord-2026-04-03-shared --notes "done"
 python coordination/coord_cli.py render-issue --task-id coord-2026-04-03-shared
@@ -174,61 +175,32 @@ python coordination/lease_doctor.py
 OldIron/
 ├── AGENTS.md                    # 全局协作规则
 ├── README.md                    # 本文件
+├── CLAUDE.md                    # 给 Claude Code 的仓库指南
 ├── coordination/                # 双 Codex 协作状态与交接
 ├── product.py                   # 统一交付入口
 ├── shared/oldiron_core/         # 共享 Python 业务核心
 │   ├── delivery/                # 共享交付辅助
 │   ├── fc_email/                # 共享邮箱/代表人提取
 │   ├── google_maps/             # 共享 Google Maps 补齐
+│   ├── snov/                    # 共享 Snov 邮箱/人员
 │   └── protocol_crawler/        # 协议爬虫模块（curl_cffi）
-├── VersatileBackend/            # Go 通用后端（Gmap 等高并发服务）
-├── Denmark/                     # 丹麦项目
+├── VersatileBackend/            # Go 通用后端（Gmap/Snov/MyIP/Firecrawl 等高并发服务）
+├── OldIronCrawler/              # 独立通用官网采集工具（网站名单 → CSV，可打包 exe）
+├── Denmark/                     # 丹麦：proff、virk
 │   ├── run.py
-│   ├── src/denmark_crawler/
-│   │   └── sites/{proff,virk}/
+│   ├── src/denmark_crawler/sites/{proff,virk}/
 │   └── output/
-├── Brazil/                      # 巴西项目
-│   ├── run.py
-│   ├── src/brazil_crawler/
-│   │   └── sites/dnb/
-│   └── output/
-├── England/                     # 英国项目
-│   ├── run.py
-│   ├── src/england_crawler/
-│   │   └── sites/companyname/
-│   └── output/
-├── Germany/                     # 德国项目
-│   ├── run.py
-│   ├── src/germany_crawler/
-│   │   └── sites/wiza/
-│   └── output/
-├── Italy/                       # 意大利项目
-│   ├── run.py
-│   ├── src/italy_crawler/
-│   │   └── sites/wiza/
-│   └── output/
-├── UnitedStates/                # 美国项目
-│   ├── run.py
-│   ├── src/unitedstates_crawler/
-│   │   └── sites/{dnb,wiza}/
-│   └── output/
-├── UnitedArabEmirates/          # 阿联酋项目
-│   ├── run.py
-│   ├── src/unitedarabemirates_crawler/
-│   │   └── sites/{dubaibusinessdirectory,hidubai,dayofdubai,dubaibizdirectory,wiza}/
-│   └── output/
-├── Taiwan/                      # 台湾项目
-│   ├── run.py
-│   ├── src/taiwan_crawler/
-│   │   └── sites/ieatpe/
-│   └── output/
-├── SouthKorea/
-├── Japan/
-├── Indonesia/
-├── Malaysia/
-├── Thailand/
-├── India/
-└── former/                      # 未迁移到新框架的旧模块
+├── England/                     # 英国：companyname、kompass、wiza
+├── Finland/                     # 芬兰：tmt(目录 tyomarkkinatori)、duunitori、jobly
+├── Germany/                     # 德国：kompass、wiza（+ sites/common 国内共享）
+├── Italy/                       # 意大利：dnb、wiza
+├── Brazil/                      # 巴西：cnpjbiz、dnb
+├── Japan/                       # 日本：bizmaps、hellowork、mynavi、onecareer、openwork、pasonacareer、xlsximport
+├── Taiwan/                      # 台湾：ieatpe
+├── UnitedStates/                # 美国：dnb、wiza
+└── UnitedArabEmirates/          # 阿联酋：dubaibusinessdirectory、hidubai、dayofdubai、dubaibizdirectory、wiza、wizasnov（+ sites/common）
+
+每个国家目录结构一致：`run.py` 入口 + `src/<country>_crawler/`（内含 `sites/<site>/` 与 `delivery.py`）+ `output/` + `tests/`。
 ```
 
 注意：
