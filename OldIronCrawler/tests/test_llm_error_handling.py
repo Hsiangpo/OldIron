@@ -736,11 +736,12 @@ def test_dashboard_wrap_and_pad_handle_wide_characters() -> None:
 
 def test_dashboard_uses_numeric_back_options() -> None:
     assert "0. 返回主菜单" in dashboard_module._build_file_select_lines([], None)
-    assert "6. 返回主菜单" in dashboard_module._build_system_config_lines(
+    assert "7. 返回主菜单" in dashboard_module._build_system_config_lines(
         key_status="已设置",
         concurrency=32,
         site_timeout_seconds=180,
         extract_representative_enabled=True,
         search_representative_enabled=True,
+        email_ai_enabled=True,
     )
     assert "3. 返回系统配置" in dashboard_module._build_key_settings_lines("已设置")

@@ -257,6 +257,38 @@ class WebsiteLlmClient:
             evidence_quote=evidence_quote,
         )
 
+    def extract_emails_from_pages(
+        self,
+        *,
+        homepage: str,
+        pages: list[dict[str, str]],
+        deadline_monotonic: float | None = None,
+    ) -> list[str]:
+        safe_pages = self._convert_pages_to_markdown(pages)
+        prompt = (
+            "你是企业官网邮箱抽取器。\n"
+            "目标：把给定网页内容里出现的所有真实邮箱地址全部找出来。\n\n"
+            "规则：\n"
+            "1. 既要抓 mailto: 链接和正文里明写的邮箱，也要还原被混淆的邮箱，例如 "
+            "name [at] domain [dot] com、name(at)domain、把 @ 写成 ＠/(at)、把 . 写成 [dot]，统一还原成标准 user@domain。\n"
+            "2. 只返回页面内容里确有出处的邮箱，绝不编造、不猜域名、不拿人名硬拼邮箱。\n"
+            "3. 排除占位 / 示例邮箱：example、test、sample、yourname、youremail、name@domain、no-reply、donotreply 这类。\n"
+            "4. 全部转小写并去重。\n"
+            '返回 JSON：{"emails":["a@b.com"]}\n\n'
+            f"首页: {homepage}\n"
+            f"页面(JSON): {json.dumps(safe_pages, ensure_ascii=False)}"
+        )
+        data = self._call_json(prompt, deadline_monotonic=deadline_monotonic)
+        raw = data.get("emails")
+        if not isinstance(raw, list):
+            return []
+        result: list[str] = []
+        for item in raw:
+            email = str(item or "").strip().lower()
+            if email and email not in result:
+                result.append(email)
+        return result
+
     def build_active_representative_queries(
         self,
         *,

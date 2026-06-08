@@ -6,8 +6,8 @@ import time
 
 from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.company_rules import clean_company_name_candidate, extract_company_name_fallback
-from oldironcrawler.extractor.email_rules import analyze_email_set, collect_emails_for_pages, join_emails
-from oldironcrawler.extractor.llm_client import LlmExtractionResult, WebsiteLlmClient
+from oldironcrawler.extractor.email_rules import analyze_email_set, collect_emails_for_pages, join_emails, merge_ai_emails_for_website
+from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtractionResult, LlmTemporaryError, WebsiteLlmClient
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_phones
 from oldironcrawler.extractor.protocol_client import HtmlPage, ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient, SiteProtocolConfig
@@ -184,6 +184,9 @@ class SiteProfileService:
                 "email_rule_ms",
                 lambda: _collect_contact_details(website, email_rule_pages),
             )
+            emails = self._merge_ai_emails_if_enabled(
+                website, emails, email_rule_pages, deadline_monotonic
+            )
             searched_representative = _finish_active_representative_search(
                 search_future,
                 metrics,
@@ -341,6 +344,28 @@ class SiteProfileService:
         )
         return _normalize_llm_result(llm_result, rep_pages)
 
+    def _merge_ai_emails_if_enabled(
+        self,
+        website: str,
+        rule_emails: list[str],
+        email_rule_pages: list[tuple[str, str]],
+        deadline_monotonic: float | None,
+    ) -> list[str]:
+        # 开了「AI 提取邮箱」就在规则结果上并集补全；规则始终是保底地板。
+        if not bool(getattr(self._config, "email_ai_enabled", True)):
+            return rule_emails
+        if not email_rule_pages:
+            return rule_emails
+        ai_emails = _extract_ai_emails_or_empty(
+            llm_client=self._llm,
+            homepage=website,
+            email_rule_pages=email_rule_pages,
+            deadline_monotonic=deadline_monotonic,
+        )
+        if not ai_emails:
+            return rule_emails
+        return merge_ai_emails_for_website(website, rule_emails, ai_emails, email_rule_pages)
+
     def _fetch_email_overflow_pages_if_needed(
         self,
         protocol: SiteProtocolClient,
@@ -445,6 +470,29 @@ def _collect_contact_details(
     emails, email_sources = collect_emails_for_pages(website, email_rule_pages)
     phones, phone_sources = collect_phones_for_pages(email_rule_pages)
     return emails, email_sources, phones, phone_sources
+
+
+def _extract_ai_emails_or_empty(
+    *,
+    llm_client: WebsiteLlmClient,
+    homepage: str,
+    email_rule_pages: list[tuple[str, str]],
+    deadline_monotonic: float | None,
+) -> list[str]:
+    if not email_rule_pages:
+        return []
+    try:
+        return llm_client.extract_emails_from_pages(
+            homepage=homepage,
+            pages=[{"url": url, "html": html_text} for url, html_text in email_rule_pages],
+            deadline_monotonic=deadline_monotonic,
+        )
+    except (LlmConfigurationError, LlmTemporaryError):
+        # 配额 / Key 类故障要冒泡出去触发统一的 Key 恢复，不在这里吞掉。
+        raise
+    except Exception:  # noqa: BLE001
+        # AI 邮箱只是增量，解析异常等就退回规则结果，别因此拖垮整站。
+        return []
 
 
 def _replace_shell_pages_with_evidence(

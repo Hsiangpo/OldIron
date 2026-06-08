@@ -254,6 +254,59 @@ def collect_emails_for_pages(website: str, pages: list[tuple[str, str]]) -> tupl
     return drop_typo_domains_for_site(website, filter_emails_for_website(website, collected)), page_hits
 
 
+def _normalize_text_for_email_evidence(pages: list[tuple[str, str]]) -> str:
+    parts: list[str] = []
+    for _url, html_text in pages:
+        text = str(html_text or "")
+        if not text.strip():
+            continue
+        normalized = html.unescape(text)
+        normalized = normalized.replace("%40", "@").replace("%2e", ".").replace("%2E", ".")
+        normalized = re.sub(r"(?i)\[(?:at)\]|\((?:at)\)|\s+at\s+", "@", normalized)
+        normalized = re.sub(r"(?i)\[(?:dot)\]|\((?:dot)\)|\s+dot\s+", ".", normalized)
+        parts.append(normalized.lower())
+    return "\n".join(parts)
+
+
+def select_emails_present_in_pages(emails: Iterable[str], pages: list[tuple[str, str]]) -> list[str]:
+    """只保留在页面正文里能找到出处的邮箱，挡掉 AI 凭空编造的地址。
+
+    对去混淆后整页文本做证据匹配：整条邮箱命中，或本地名与域名分别都在页面里出现
+    （覆盖 name [at] domain [dot] com 这类被拆开的写法），才算有据。
+    """
+    evidence = _normalize_text_for_email_evidence(pages)
+    if not evidence:
+        return []
+    # 去掉所有空白后再比对：name [at] acme [dot] com 去混淆后是 "name @ acme . com"，
+    # 压成 "name@acme.com" 才能和 AI 还原出的标准邮箱对上。
+    evidence_nospace = re.sub(r"\s+", "", evidence)
+    kept: list[str] = []
+    for raw in emails:
+        email = str(raw or "").strip().lower()
+        if "@" not in email or email in kept:
+            continue
+        local, domain = email.split("@", 1)
+        if email in evidence_nospace or (
+            local and domain and local in evidence_nospace and domain in evidence_nospace
+        ):
+            kept.append(email)
+    return kept
+
+
+def merge_ai_emails_for_website(
+    website: str,
+    rule_emails: Iterable[str],
+    ai_emails: Iterable[str],
+    pages: list[tuple[str, str]],
+) -> list[str]:
+    """规则邮箱 ∪ 经证据校验的 AI 邮箱，走和规则同一套站点域优先 / 去重收尾。"""
+    evidenced_ai = select_emails_present_in_pages(split_emails(ai_emails), pages)
+    rule_list = list(rule_emails)
+    seen = set(rule_list)
+    combined = rule_list + [email for email in evidenced_ai if email not in seen]
+    return drop_typo_domains_for_site(website, filter_emails_for_website(website, combined))
+
+
 def _email_appears_inside_url_token(text: str, email: str) -> bool:
     for token in re.split(r"\s+", str(text or "").strip()):
         if "://" in token and email in token:
