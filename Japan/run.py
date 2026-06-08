@@ -44,6 +44,7 @@ USAGE_TEXT = """用法：
   onecareer   — One Career 日本企业信息列表
   pasonacareer — パソナキャリア 日本职位转公司采集
   xlsximport  — xlsx 导入官网+邮箱，Protocol+LLM 补全公司名和代表人
+  buffettcode — バフェット・コード 日本企业(公司名/代表者/官网, 按行业, 协议爬虫+CapSolver过WAF)
 """
 
 BASE_REQUIRED_MODULES = (
@@ -125,6 +126,11 @@ def _dispatch(argv: list[str]) -> int:
         from japan_crawler.sites.xlsximport.cli import run_xlsximport
 
         return run_xlsximport(rest)
+
+    if site == "buffettcode":
+        from japan_crawler.sites.buffettcode.cli import run_buffettcode
+
+        return run_buffettcode(rest)
 
     print(f"不支持的网站: {argv[0]}")
     print(USAGE_TEXT)
