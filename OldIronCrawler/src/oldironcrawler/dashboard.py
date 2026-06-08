@@ -23,6 +23,8 @@ class DashboardSession:
     site_timeout_seconds: int = app_module.DEFAULT_SITE_TIMEOUT_SECONDS
     last_delivery_path: Path | None = None
     llm_base_url: str = ""
+    extract_representative_enabled: bool = False
+    search_representative_enabled: bool = False
 
 
 def run_dashboard(project_root: Path, initial_key: str) -> int:
@@ -42,6 +44,8 @@ def run_dashboard(project_root: Path, initial_key: str) -> int:
                 f"API 入口：{session.llm_base_url or '未测速'}",
                 f"并发设置：{session.concurrency}",
                 f"单站等待上限：{session.site_timeout_seconds} 秒",
+                f"提取代表人：{'开' if session.extract_representative_enabled else '关'}",
+                f"搜索现役最大代表人：{'开' if session.search_representative_enabled else '关'}",
                 "",
                 "1. 开始抓取",
                 "2. 打开 websites 文件夹",
@@ -101,6 +105,8 @@ def _handle_start_crawl(session: DashboardSession) -> None:
             concurrency=session.concurrency,
             site_timeout_seconds=session.site_timeout_seconds,
             llm_base_url=session.llm_base_url,
+            extract_representative_enabled=session.extract_representative_enabled,
+            search_representative_enabled=session.search_representative_enabled,
         )
     except Exception as exc:  # noqa: BLE001
         _show_message(f"抓取过程中出现未处理错误：{exc}")
@@ -164,6 +170,8 @@ def _handle_system_config(session: DashboardSession) -> str | None:
                 key_status=_display_key_status(session),
                 concurrency=session.concurrency,
                 site_timeout_seconds=session.site_timeout_seconds,
+                extract_representative_enabled=session.extract_representative_enabled,
+                search_representative_enabled=session.search_representative_enabled,
             ),
         )
         choice = input("请输入菜单序号: ").strip().upper()
@@ -192,6 +200,18 @@ def _handle_system_config(session: DashboardSession) -> str | None:
             )
             continue
         if choice == "4":
+            session.extract_representative_enabled = not session.extract_representative_enabled
+            _show_message(
+                f"提取代表人已{'开启' if session.extract_representative_enabled else '关闭'}。"
+            )
+            continue
+        if choice == "5":
+            session.search_representative_enabled = not session.search_representative_enabled
+            _show_message(
+                f"搜索现役最大代表人已{'开启' if session.search_representative_enabled else '关闭'}。"
+            )
+            continue
+        if choice == "6":
             return None
         _show_message("输入无效，请重新选择。")
 
@@ -352,16 +372,27 @@ def _build_file_select_lines(files: list[Path], selected_input: Path | None) -> 
     return lines
 
 
-def _build_system_config_lines(*, key_status: str, concurrency: int, site_timeout_seconds: int) -> list[str]:
+def _build_system_config_lines(
+    *,
+    key_status: str,
+    concurrency: int,
+    site_timeout_seconds: int,
+    extract_representative_enabled: bool,
+    search_representative_enabled: bool,
+) -> list[str]:
     return [
         f"Key 状态：{key_status}",
         f"并发设置：{concurrency}",
         f"单站等待上限：{site_timeout_seconds} 秒",
+        f"提取代表人：{'开' if extract_representative_enabled else '关'}",
+        f"搜索现役最大代表人：{'开' if search_representative_enabled else '关'}",
         "",
         "1. Key 设置",
         "2. 并发设置",
         "3. 单站等待上限",
-        "4. 返回主菜单",
+        "4. 提取代表人（开/关切换）",
+        "5. 搜索现役最大代表人（开/关切换）",
+        "6. 返回主菜单",
     ]
 
 

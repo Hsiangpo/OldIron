@@ -109,6 +109,11 @@ class SiteProfileService:
         deadline_monotonic: float | None = None,
     ) -> SiteProcessingResult:
         metrics = SiteStageMetrics()
+        extract_rep_enabled = bool(getattr(self._config, "extract_representative_enabled", True))
+        has_input_company = bool(str(input_company_name or "").strip())
+        # AI 网页提取只在「需要补公司名」或「要提代表人」时才跑；
+        # 表里已带公司名且关闭提取代表人时，这段 LLM 整体跳过。
+        need_llm_extract = extract_rep_enabled or not has_input_company
         search_started = time.monotonic()
         search_future = _start_active_representative_search(
             self._representative_searcher,
@@ -145,21 +150,26 @@ class SiteProfileService:
                 discovery.homepage_html,
                 metrics,
                 deadline_monotonic,
+                need_llm_extract=need_llm_extract,
             )
             metrics.rep_url_count = len(rep_pages)
             metrics.fetched_page_count = len(page_map)
             self._store.update_stage_metrics(site_id, metrics)
             fetched_pages = list(page_map.values())
-            company_name = clean_company_name_candidate(str(llm_result.company_name or "").strip())
-            if not company_name:
-                company_name = clean_company_name_candidate(self._time_call(
-                    metrics,
-                    "company_rule_ms",
-                    lambda: extract_company_name_fallback(
-                        website,
-                        [(page.url, page.html) for page in fetched_pages],
-                ),
-            ))
+            if has_input_company:
+                # 表里已经给了公司名，直接采用，不再让 AI 提取公司名。
+                company_name = str(input_company_name or "").strip()
+            else:
+                company_name = clean_company_name_candidate(str(llm_result.company_name or "").strip())
+                if not company_name:
+                    company_name = clean_company_name_candidate(self._time_call(
+                        metrics,
+                        "company_rule_ms",
+                        lambda: extract_company_name_fallback(
+                            website,
+                            [(page.url, page.html) for page in fetched_pages],
+                        ),
+                    ))
             if search_future is None and not str(input_company_name or "").strip() and company_name:
                 search_started = time.monotonic()
                 search_future = _start_active_representative_search(
@@ -181,9 +191,13 @@ class SiteProfileService:
                 deadline_monotonic,
             )
             self._store.update_stage_metrics(site_id, metrics)
+            # 关闭「提取代表人」时，丢弃 AI 抽到的代表人及其证据，只保留公司名。
+            effective_representative = str(llm_result.representative or "").strip() if extract_rep_enabled else ""
+            effective_evidence_url = str(llm_result.evidence_url or "").strip() if extract_rep_enabled else ""
+            effective_evidence_quote = str(llm_result.evidence_quote or "").strip() if extract_rep_enabled else ""
             learning_feedback = build_learning_feedback(
-                representative=llm_result.representative,
-                evidence_url=llm_result.evidence_url,
+                representative=effective_representative,
+                evidence_url=effective_evidence_url,
                 rep_urls=fetch_plan["rep_urls"],
                 rep_fetched_urls=[page.url for page in rep_pages],
                 emails=join_emails(emails),
@@ -194,15 +208,15 @@ class SiteProfileService:
             return SiteProcessingResult(
                 result=SiteResult(
                     company_name=company_name,
-                    representative=llm_result.representative,
+                    representative=effective_representative,
                     emails=join_emails(emails),
                     website=website,
                     phones=join_phones(phones),
                     searched_representative=searched_representative.representative,
                     searched_representative_evidence_url=searched_representative.evidence_url,
                     searched_representative_confidence=searched_representative.confidence,
-                    evidence_url=llm_result.evidence_url,
-                    evidence_quote=llm_result.evidence_quote,
+                    evidence_url=effective_evidence_url,
+                    evidence_quote=effective_evidence_quote,
                 ),
                 learning_feedback=learning_feedback,
                 stage_metrics=metrics,
@@ -244,6 +258,8 @@ class SiteProfileService:
         homepage_html: str,
         metrics: SiteStageMetrics,
         deadline_monotonic: float | None,
+        *,
+        need_llm_extract: bool = True,
     ) -> tuple[dict[str, object], list, LlmExtractionResult]:
         primary_fetch_ms = 0
         overflow_fetch_ms = 0
@@ -274,12 +290,18 @@ class SiteProfileService:
                 page_map,
                 _canonicalize_target_urls(fetch_plan["rep_urls"], shell_alias_map),
             )
-            llm_result = self._extract_primary_representative(
-                website,
-                rep_pages,
-                metrics,
-                deadline_monotonic,
-            )
+            if need_llm_extract:
+                llm_result = self._extract_primary_representative(
+                    website,
+                    rep_pages,
+                    metrics,
+                    deadline_monotonic,
+                )
+            else:
+                # 不需要 AI 抽公司名/代表人时，给一个空结果，后续走表内公司名 + 规则邮箱/电话。
+                llm_result = LlmExtractionResult(
+                    company_name="", representative="", evidence_url="", evidence_quote=""
+                )
             overflow_pages, overflow_fetch_ms = self._fetch_email_overflow_pages_if_needed(
                 protocol,
                 website,

@@ -8,6 +8,7 @@ from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmTemporaryError, WebsiteLlmClient
 from oldironcrawler.extractor.page_pool import PageFetchPool, PageFetchPoolConfig
 from oldironcrawler.extractor.protocol_client import ProtocolPermanentError, ProtocolTemporaryError
+from oldironcrawler.extractor.bing_search import BingSearchClient
 from oldironcrawler.extractor.representative_search import ActiveRepresentativeSearcher, TavilySearchClient
 from oldironcrawler.extractor.service import SiteProfileService
 from oldironcrawler.reporter import print_progress_heartbeat, print_site_result, write_delivery_csv
@@ -23,7 +24,14 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
     total = progress["total"]
     completed_count = _count_completed_sites(progress)
     heartbeat_seconds = 10.0
-    delivery_writer = _DeliverySnapshotWriter(Path(delivery_path), store)
+    show_rep = bool(getattr(config, "extract_representative_enabled", True))
+    show_search = bool(getattr(config, "search_representative_enabled", True))
+    delivery_writer = _DeliverySnapshotWriter(
+        Path(delivery_path),
+        store,
+        include_representative=show_rep,
+        include_searched_representative=show_search,
+    )
     llm_client = WebsiteLlmClient(
         api_key=config.llm_key,
         base_url=config.llm_base_url,
@@ -86,6 +94,8 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                 store=store,
                 learning_store=learning_store,
                 delivery_writer=delivery_writer,
+                show_representative=show_rep,
+                show_searched_representative=show_search,
             )
             if llm_error is not None:
                 completed_count, _ = _process_done_futures(
@@ -96,6 +106,8 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                     store=store,
                     learning_store=learning_store,
                     delivery_writer=delivery_writer,
+                    show_representative=show_rep,
+                    show_searched_representative=show_search,
                 )
                 for pending_future in list(futures):
                     pending_future.cancel()
@@ -118,28 +130,46 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
 
 
 def _build_representative_searcher(config: AppConfig, llm_client: WebsiteLlmClient):
-    tavily_api_key = str(getattr(config, "tavily_api_key", "") or "").strip()
-    search_enabled = bool(getattr(config, "search_representative_enabled", True))
-    if not tavily_api_key or not search_enabled:
+    if not bool(getattr(config, "search_representative_enabled", True)):
+        return None, None
+    search_client = _build_search_client(config)
+    if search_client is None:
         return None, None
     search_executor = ThreadPoolExecutor(
         max_workers=max(int(getattr(config, "search_representative_concurrency", 1) or 1), 1)
     )
-    tavily_client = TavilySearchClient(
-        api_key=tavily_api_key,
-        max_results=int(getattr(config, "tavily_max_results", 5) or 5),
-        search_depth=str(getattr(config, "tavily_search_depth", "basic") or "basic"),
-        timeout_seconds=float(getattr(config, "tavily_timeout_seconds", 20.0) or 20.0),
-        proxy_url=str(getattr(config, "proxy_url", "") or ""),
-    )
     representative_searcher = ActiveRepresentativeSearcher(
         llm_client=llm_client,
-        tavily_client=tavily_client,
-        enabled=tavily_client.is_configured,
+        tavily_client=search_client,
+        enabled=bool(getattr(search_client, "is_configured", True)),
         max_queries=2,
         executor=search_executor,
     )
     return representative_searcher, search_executor
+
+
+def _build_search_client(config: AppConfig):
+    """按 SEARCH_BACKEND 选搜索后端：默认 bing（免 key、合一体），可切回 tavily。"""
+    backend = str(getattr(config, "search_backend", "bing") or "bing").strip().lower()
+    max_results = int(getattr(config, "tavily_max_results", 5) or 5)
+    timeout_seconds = float(getattr(config, "tavily_timeout_seconds", 20.0) or 20.0)
+    proxy_url = str(getattr(config, "proxy_url", "") or "")
+    if backend == "tavily":
+        tavily_api_key = str(getattr(config, "tavily_api_key", "") or "").strip()
+        if not tavily_api_key:
+            return None
+        return TavilySearchClient(
+            api_key=tavily_api_key,
+            max_results=max_results,
+            search_depth=str(getattr(config, "tavily_search_depth", "basic") or "basic"),
+            timeout_seconds=timeout_seconds,
+            proxy_url=proxy_url,
+        )
+    return BingSearchClient(
+        max_results=max_results,
+        timeout_seconds=timeout_seconds,
+        proxy_url=proxy_url,
+    )
 
 
 def _submit_single_site(
@@ -182,6 +212,8 @@ def _process_done_futures(
     store: RuntimeStore,
     learning_store: GlobalLearningStore,
     delivery_writer,
+    show_representative: bool = True,
+    show_searched_representative: bool = True,
 ) -> tuple[int, LlmConfigurationError | None]:
     llm_error: LlmConfigurationError | None = None
     for future in done:
@@ -197,6 +229,8 @@ def _process_done_futures(
                 store,
                 learning_store,
                 delivery_writer,
+                show_representative=show_representative,
+                show_searched_representative=show_searched_representative,
             )
         except LlmConfigurationError as exc:
             llm_error = llm_error or exc
@@ -256,6 +290,9 @@ def _handle_future(
     store: RuntimeStore,
     learning_store: GlobalLearningStore,
     delivery_writer,
+    *,
+    show_representative: bool = True,
+    show_searched_representative: bool = True,
 ) -> int:
     try:
         processed = future.result()
@@ -278,6 +315,8 @@ def _handle_future(
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
+                show_representative=show_representative,
+                show_searched_representative=show_searched_representative,
             )
         return completed_count
     except ProtocolPermanentError as exc:
@@ -301,6 +340,8 @@ def _handle_future(
             phones="",
             reason=_describe_error_reason(str(exc)),
             stage_metrics=stage_metrics,
+            show_representative=show_representative,
+            show_searched_representative=show_searched_representative,
         )
         return completed_count
     except ProtocolTemporaryError as exc:
@@ -320,6 +361,8 @@ def _handle_future(
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
+                show_representative=show_representative,
+                show_searched_representative=show_searched_representative,
             )
         return completed_count
     except Exception as exc:  # noqa: BLE001
@@ -339,6 +382,8 @@ def _handle_future(
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
+                show_representative=show_representative,
+                show_searched_representative=show_searched_representative,
             )
         return completed_count
     store.mark_done(task.id, processed.result)
@@ -356,14 +401,25 @@ def _handle_future(
         phones=processed.result.phones,
         reason=_describe_missing_reason(processed.result),
         stage_metrics=processed.stage_metrics,
+        show_representative=show_representative,
+        show_searched_representative=show_searched_representative,
     )
     return completed_count
 
 
 class _DeliverySnapshotWriter:
-    def __init__(self, delivery_path: Path, store: RuntimeStore) -> None:
+    def __init__(
+        self,
+        delivery_path: Path,
+        store: RuntimeStore,
+        *,
+        include_representative: bool = True,
+        include_searched_representative: bool = True,
+    ) -> None:
         self._delivery_path = delivery_path
         self._store = store
+        self._include_representative = include_representative
+        self._include_searched_representative = include_searched_representative
         self._dirty = False
         self._completed_since_flush = 0
         self._last_flush_monotonic = time.monotonic()
@@ -389,16 +445,32 @@ class _DeliverySnapshotWriter:
             self._flush(time.monotonic())
 
     def _flush(self, now_monotonic: float) -> None:
-        if not _flush_delivery_snapshot(self._delivery_path, self._store):
+        if not _flush_delivery_snapshot(
+            self._delivery_path,
+            self._store,
+            include_representative=self._include_representative,
+            include_searched_representative=self._include_searched_representative,
+        ):
             return
         self._dirty = False
         self._completed_since_flush = 0
         self._last_flush_monotonic = now_monotonic
 
 
-def _flush_delivery_snapshot(delivery_path, store: RuntimeStore) -> bool:
+def _flush_delivery_snapshot(
+    delivery_path,
+    store: RuntimeStore,
+    *,
+    include_representative: bool = True,
+    include_searched_representative: bool = True,
+) -> bool:
     try:
-        write_delivery_csv(delivery_path, store.delivery_rows())
+        write_delivery_csv(
+            delivery_path,
+            store.delivery_rows(),
+            include_representative=include_representative,
+            include_searched_representative=include_searched_representative,
+        )
         return True
     except OSError as exc:
         print(f"写入交付文件失败：{exc}", flush=True)

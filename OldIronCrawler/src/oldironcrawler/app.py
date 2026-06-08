@@ -59,6 +59,8 @@ def run_selected_input(
     concurrency: int = DEFAULT_SITE_CONCURRENCY,
     site_timeout_seconds: int = DEFAULT_SITE_TIMEOUT_SECONDS,
     llm_base_url: str = "",
+    extract_representative_enabled: bool = False,
+    search_representative_enabled: bool = False,
 ) -> CrawlRunResult:
     config, rows, current_key = _load_rows_with_llm_recovery(
         project_root,
@@ -67,6 +69,8 @@ def run_selected_input(
         concurrency=concurrency,
         site_timeout_seconds=site_timeout_seconds,
         llm_base_url=llm_base_url,
+        extract_representative_enabled=extract_representative_enabled,
+        search_representative_enabled=search_representative_enabled,
     )
     artifact_stem = _build_artifact_stem(input_path)
     db_path = config.runtime_dir / f"{artifact_stem}.sqlite3"
@@ -82,6 +86,8 @@ def run_selected_input(
             delivery_path=delivery_path,
             concurrency=concurrency,
             site_timeout_seconds=site_timeout_seconds,
+            extract_representative_enabled=extract_representative_enabled,
+            search_representative_enabled=search_representative_enabled,
         )
         return CrawlRunResult(
             exit_code=exit_code,
@@ -139,6 +145,8 @@ def _load_rows_with_llm_recovery(
     concurrency: int,
     site_timeout_seconds: int,
     llm_base_url: str = "",
+    extract_representative_enabled: bool = False,
+    search_representative_enabled: bool = False,
 ) -> tuple[AppConfig, list, str]:
     selected_llm_base_url = str(llm_base_url or "").strip()
     while True:
@@ -147,6 +155,8 @@ def _load_rows_with_llm_recovery(
             config,
             concurrency=concurrency,
             site_timeout_seconds=site_timeout_seconds,
+            extract_representative_enabled=extract_representative_enabled,
+            search_representative_enabled=search_representative_enabled,
         )
         try:
             rows = _load_input_rows(config, input_path)
@@ -167,6 +177,8 @@ def _run_session_with_llm_recovery(
     delivery_path: Path,
     concurrency: int,
     site_timeout_seconds: int,
+    extract_representative_enabled: bool = False,
+    search_representative_enabled: bool = False,
 ) -> tuple[int, str]:
     current_key = config.llm_key
     selected_llm_base_url = config.llm_base_url
@@ -178,6 +190,8 @@ def _run_session_with_llm_recovery(
             config,
             concurrency=concurrency,
             site_timeout_seconds=site_timeout_seconds,
+            extract_representative_enabled=extract_representative_enabled,
+            search_representative_enabled=search_representative_enabled,
         )
         if not key_already_validated:
             try:
@@ -289,6 +303,8 @@ def _apply_runtime_preferences(
     *,
     concurrency: int,
     site_timeout_seconds: int,
+    extract_representative_enabled: bool | None = None,
+    search_representative_enabled: bool | None = None,
 ) -> None:
     budget = _derive_runtime_concurrency_budget(concurrency)
     bounded_timeout = min(max(int(site_timeout_seconds), 60), 600)
@@ -297,14 +313,24 @@ def _apply_runtime_preferences(
     config.page_concurrency = budget.page_concurrency
     config.page_worker_count = budget.page_worker_count
     config.page_host_limit = budget.page_host_limit
+    # 全局唯一并发：AI 搜法人池也跟随同一个并发数，
+    # 避免出现“站点并发设了，但搜法人池还停在独立的小值”这种隐藏瓶颈。
+    config.search_representative_concurrency = budget.site_concurrency
     config.total_wait_seconds = float(bounded_timeout)
+    # None 表示沿用 .env 里的默认值；菜单跑任务时才用勾选值覆盖这两个开关。
+    if extract_representative_enabled is not None:
+        config.extract_representative_enabled = bool(extract_representative_enabled)
+    if search_representative_enabled is not None:
+        config.search_representative_enabled = bool(search_representative_enabled)
 
 
 def _derive_runtime_concurrency_budget(concurrency: int) -> RuntimeConcurrencyBudget:
     runtime_concurrency = min(max(int(concurrency), 1), 64)
     return RuntimeConcurrencyBudget(
         site_concurrency=runtime_concurrency,
-        llm_concurrency=runtime_concurrency,
+        # 大模型并发按站点并发放大 3 倍（每家约调 3 次大模型），上限 64；
+        # 否则 AI 搜法人的大模型调用会排在站点抽取后面、排队超时被丢弃。
+        llm_concurrency=min(runtime_concurrency * 3, 64),
         page_concurrency=runtime_concurrency,
         page_worker_count=runtime_concurrency,
         page_host_limit=runtime_concurrency,

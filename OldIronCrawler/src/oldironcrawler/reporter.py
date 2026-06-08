@@ -18,12 +18,16 @@ def print_site_result(
     phones: str = "",
     reason: str = "",
     stage_metrics: SiteStageMetrics | None = None,
+    show_representative: bool = True,
+    show_searched_representative: bool = True,
 ) -> None:
     print(f"[{completed_index}/{total}] {website}", flush=True)
     print(f"  公司名: {_display(company_name)}", flush=True)
-    print(f"  姓名: {_display(representative)}", flush=True)
+    if show_representative:
+        print(f"  代表人: {_display(representative)}", flush=True)
     print(f"  邮箱: {_display(emails)}", flush=True)
-    print(f"  搜索现役最大代表人: {_display(searched_representative)}", flush=True)
+    if show_searched_representative:
+        print(f"  搜索现役最大代表人: {_display(searched_representative)}", flush=True)
     print(f"  电话: {_display(phones)}", flush=True)
     if stage_metrics is not None:
         print(f"  阶段耗时: {_format_stage_timing(stage_metrics)}", flush=True)
@@ -40,21 +44,25 @@ def print_progress_heartbeat(*, total: int, done: int, running: int, dropped: in
     )
 
 
-def write_delivery_csv(path: Path, rows: list[dict[str, str]]) -> None:
+def write_delivery_csv(
+    path: Path,
+    rows: list[dict[str, str]],
+    *,
+    include_representative: bool = True,
+    include_searched_representative: bool = True,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp")
+    # 交付列随开关动态裁剪：关掉的字段那一列直接不出现在 CSV 里。
+    fieldnames = ["company_name"]
+    if include_representative:
+        fieldnames.append("representative")
+    fieldnames.append("emails")
+    if include_searched_representative:
+        fieldnames.append("searched_representative")
+    fieldnames.extend(["phones", "website"])
     with temp_path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "company_name",
-                "representative",
-                "emails",
-                "searched_representative",
-                "phones",
-                "website",
-            ],
-        )
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)

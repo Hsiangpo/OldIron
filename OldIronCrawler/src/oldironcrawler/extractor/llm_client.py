@@ -269,7 +269,7 @@ class WebsiteLlmClient:
             "目标：根据公司名和官网，为搜索引擎生成最多2条短查询，用来查找该公司的现役最高负责人。\n"
             "规则：\n"
             "1. 查询必须包含公司名。\n"
-            "2. 可以包含官网域名，帮助排除同名公司。\n"
+            "2. 可以把官网域名当作普通关键词写进查询帮助排除同名公司，但不要使用 site: 等限定符（site: 会把结果限制在官网内、反而搜不到负责人）。\n"
             "3. 优先查询 current CEO, president, managing director, representative director, owner。\n"
             "4. 不要生成解释文字。\n"
             '返回 JSON：{"queries":[""]}\n\n'

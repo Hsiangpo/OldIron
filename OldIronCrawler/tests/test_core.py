@@ -1295,7 +1295,7 @@ def test_run_crawl_session_resume_keeps_completed_display_index(tmp_path: Path, 
         "print_site_result",
         lambda **kwargs: displayed_indexes.append(int(kwargs["completed_index"])),
     )
-    monkeypatch.setattr(runner_module, "write_delivery_csv", lambda delivery_path, rows: None)
+    monkeypatch.setattr(runner_module, "write_delivery_csv", lambda delivery_path, rows, **_kwargs: None)
 
     config = SimpleNamespace(
         llm_key="test-key",
@@ -1326,7 +1326,7 @@ def test_run_crawl_session_retries_temporary_llm_error_without_restarting_whole_
     attempts: list[int] = []
     snapshots: list[list[dict[str, str]]] = []
 
-    def fake_run_single_site(_config, _store, _learning_store, _llm_client, _page_pool, task):
+    def fake_run_single_site(_config, _store, _learning_store, _llm_client, _page_pool, task, *_extra):
         attempts.append(task.id)
         if len(attempts) == 1:
             raise LlmTemporaryError("503 service_temporarily_unavailable")
@@ -1371,7 +1371,7 @@ def test_run_crawl_session_retries_temporary_llm_error_without_restarting_whole_
     monkeypatch.setattr(
         runner_module,
         "write_delivery_csv",
-        lambda _delivery_path, rows: snapshots.append(list(rows)),
+        lambda _delivery_path, rows, **_kwargs: snapshots.append(list(rows)),
     )
 
     config = SimpleNamespace(
@@ -1452,7 +1452,7 @@ def test_run_crawl_session_batches_delivery_snapshot_writes(tmp_path: Path, monk
     monkeypatch.setattr(
         runner_module,
         "write_delivery_csv",
-        lambda _delivery_path, rows: write_calls.append(list(rows)),
+        lambda _delivery_path, rows, **_kwargs: write_calls.append(list(rows)),
     )
 
     config = SimpleNamespace(
@@ -1528,7 +1528,7 @@ def test_run_crawl_session_ignores_final_delivery_write_permission_error(tmp_pat
 
     write_calls = {"count": 0}
 
-    def flaky_write(_delivery_path, _rows) -> None:
+    def flaky_write(_delivery_path, _rows, **_kwargs) -> None:
         write_calls["count"] += 1
         raise PermissionError("delivery locked")
 
@@ -1607,7 +1607,7 @@ def test_run_crawl_session_retries_delivery_write_after_transient_error(tmp_path
     )
     write_calls: list[int] = []
 
-    def flaky_then_ok(_delivery_path, rows) -> None:
+    def flaky_then_ok(_delivery_path, rows, **_kwargs) -> None:
         write_calls.append(len(rows))
         if len(write_calls) == 1:
             raise PermissionError("delivery locked")
@@ -1678,6 +1678,9 @@ def test_run_crawl_session_persists_other_done_futures_before_raising_llm_error(
         def submit(self, *_args, **_kwargs):
             return self._futures.pop(0)
 
+        def shutdown(self, *_args, **_kwargs) -> None:
+            return None
+
     class FutureStore:
         def __init__(self) -> None:
             self._claim_count = 0
@@ -1740,7 +1743,7 @@ def test_run_crawl_session_persists_other_done_futures_before_raising_llm_error(
         ),
     )
     monkeypatch.setattr(runner_module, "print_site_result", lambda **_kwargs: None)
-    monkeypatch.setattr(runner_module, "write_delivery_csv", lambda delivery_path, rows: None)
+    monkeypatch.setattr(runner_module, "write_delivery_csv", lambda delivery_path, rows, **_kwargs: None)
 
     config = SimpleNamespace(
         llm_key="test-key",
@@ -1797,7 +1800,7 @@ def test_run_crawl_session_returns_quickly_after_fatal_llm_error(tmp_path: Path,
         def close(self) -> None:
             return None
 
-    def fake_run_single_site(_config, _store, _learning_store, _llm_client, _page_pool, task):
+    def fake_run_single_site(_config, _store, _learning_store, _llm_client, _page_pool, task, *_extra):
         if task.id == 1:
             time.sleep(0.05)
             raise LlmConfigurationError("invalid_api_key")
@@ -1835,7 +1838,7 @@ def test_run_crawl_session_returns_quickly_after_fatal_llm_error(tmp_path: Path,
     )
     monkeypatch.setattr(runner_module, "print_site_result", lambda **_kwargs: None)
     monkeypatch.setattr(runner_module, "print_progress_heartbeat", lambda **_kwargs: None)
-    monkeypatch.setattr(runner_module, "write_delivery_csv", lambda _delivery_path, _rows: None)
+    monkeypatch.setattr(runner_module, "write_delivery_csv", lambda _delivery_path, _rows, **_kwargs: None)
 
     config = SimpleNamespace(
         llm_key="test-key",

@@ -195,6 +195,8 @@ class AppConfig:
     email_stop_same_domain_count: int
     tavily_api_key: str
     search_representative_enabled: bool
+    extract_representative_enabled: bool
+    search_backend: str
     search_representative_concurrency: int
     tavily_max_results: int
     tavily_search_depth: str
@@ -240,7 +242,9 @@ class AppConfig:
             page_total_hard_limit=max(_config_int(values, "PAGE_TOTAL_HARD_LIMIT", 20), 1),
             email_stop_same_domain_count=max(_config_int(values, "EMAIL_STOP_SAME_DOMAIN_COUNT", 2), 1),
             tavily_api_key=_config_str(values, "TAVILY_API_KEY"),
-            search_representative_enabled=_config_bool(values, "SEARCH_REPRESENTATIVE_ENABLED", True),
+            search_representative_enabled=_config_bool(values, "SEARCH_REPRESENTATIVE_ENABLED", False),
+            extract_representative_enabled=_config_bool(values, "EXTRACT_REPRESENTATIVE_ENABLED", False),
+            search_backend=_config_str(values, "SEARCH_BACKEND", "bing").lower(),
             search_representative_concurrency=max(_config_int(values, "SEARCH_REPRESENTATIVE_CONCURRENCY", 8), 1),
             tavily_max_results=min(max(_config_int(values, "TAVILY_MAX_RESULTS", 5), 1), 10),
             tavily_search_depth=_config_str(values, "TAVILY_SEARCH_DEPTH", "basic"),

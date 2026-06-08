@@ -280,8 +280,12 @@ def _patch_service_for_fast_profile(monkeypatch, service: SiteProfileService) ->
 
 
 def _build_profile_service(tmp_path: Path, searcher) -> SiteProfileService:
+    config = AppConfig.load(tmp_path, llm_key_override="key")
+    # 这几个用例专门验证「提取代表人 + 搜索现役」开启时的行为，显式打开两个开关。
+    config.extract_representative_enabled = True
+    config.search_representative_enabled = True
     return SiteProfileService(
-        AppConfig.load(tmp_path, llm_key_override="key"),
+        config,
         RuntimeStore(tmp_path / "runtime.sqlite3"),
         GlobalLearningStore(tmp_path / "learning.sqlite3"),
         llm_client=object(),
@@ -349,7 +353,7 @@ def test_reporter_prints_searched_representative(capsys) -> None:
 
     out = capsys.readouterr().out
     assert "公司名: Acme Holdings Ltd" in out
-    assert "姓名: Alice Website" in out
+    assert "代表人: Alice Website" in out
     assert "邮箱: info@acme.example" in out
     assert "搜索现役最大代表人: Alice Search" in out
 
@@ -374,3 +378,40 @@ def test_delivery_csv_writes_searched_representative(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8-sig")
     assert text.splitlines()[0] == "company_name,representative,emails,searched_representative,phones,website"
     assert "Alice Search" in text
+
+
+def test_delivery_csv_respects_field_toggles(tmp_path: Path) -> None:
+    row = {
+        "company_name": "C",
+        "representative": "R",
+        "emails": "e",
+        "searched_representative": "S",
+        "phones": "p",
+        "website": "w",
+    }
+    path = tmp_path / "toggle.csv"
+    write_delivery_csv(path, [row], include_representative=False, include_searched_representative=True)
+    assert path.read_text(encoding="utf-8-sig").splitlines()[0] == "company_name,emails,searched_representative,phones,website"
+    write_delivery_csv(path, [row], include_representative=True, include_searched_representative=False)
+    assert path.read_text(encoding="utf-8-sig").splitlines()[0] == "company_name,representative,emails,phones,website"
+    write_delivery_csv(path, [row], include_representative=False, include_searched_representative=False)
+    assert path.read_text(encoding="utf-8-sig").splitlines()[0] == "company_name,emails,phones,website"
+
+
+def test_print_site_result_respects_toggles(capsys) -> None:
+    print_site_result(
+        completed_index=1,
+        total=1,
+        website="w",
+        company_name="C",
+        representative="R",
+        emails="e",
+        searched_representative="S",
+        phones="p",
+        show_representative=False,
+        show_searched_representative=False,
+    )
+    out = capsys.readouterr().out
+    assert "公司名: C" in out
+    assert "代表人:" not in out
+    assert "搜索现役最大代表人:" not in out
