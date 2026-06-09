@@ -61,7 +61,6 @@ def run_selected_input(
     llm_base_url: str = "",
     extract_representative_enabled: bool = False,
     search_representative_enabled: bool = False,
-    email_ai_enabled: bool = True,
 ) -> CrawlRunResult:
     config, rows, current_key = _load_rows_with_llm_recovery(
         project_root,
@@ -72,7 +71,6 @@ def run_selected_input(
         llm_base_url=llm_base_url,
         extract_representative_enabled=extract_representative_enabled,
         search_representative_enabled=search_representative_enabled,
-        email_ai_enabled=email_ai_enabled,
     )
     artifact_stem = _build_artifact_stem(input_path)
     db_path = config.runtime_dir / f"{artifact_stem}.sqlite3"
@@ -90,7 +88,6 @@ def run_selected_input(
             site_timeout_seconds=site_timeout_seconds,
             extract_representative_enabled=extract_representative_enabled,
             search_representative_enabled=search_representative_enabled,
-            email_ai_enabled=email_ai_enabled,
         )
         return CrawlRunResult(
             exit_code=exit_code,
@@ -150,7 +147,6 @@ def _load_rows_with_llm_recovery(
     llm_base_url: str = "",
     extract_representative_enabled: bool = False,
     search_representative_enabled: bool = False,
-    email_ai_enabled: bool = True,
 ) -> tuple[AppConfig, list, str]:
     selected_llm_base_url = str(llm_base_url or "").strip()
     while True:
@@ -161,7 +157,6 @@ def _load_rows_with_llm_recovery(
             site_timeout_seconds=site_timeout_seconds,
             extract_representative_enabled=extract_representative_enabled,
             search_representative_enabled=search_representative_enabled,
-            email_ai_enabled=email_ai_enabled,
         )
         try:
             rows = _load_input_rows(config, input_path)
@@ -184,7 +179,6 @@ def _run_session_with_llm_recovery(
     site_timeout_seconds: int,
     extract_representative_enabled: bool = False,
     search_representative_enabled: bool = False,
-    email_ai_enabled: bool = True,
 ) -> tuple[int, str]:
     current_key = config.llm_key
     selected_llm_base_url = config.llm_base_url
@@ -198,7 +192,6 @@ def _run_session_with_llm_recovery(
             site_timeout_seconds=site_timeout_seconds,
             extract_representative_enabled=extract_representative_enabled,
             search_representative_enabled=search_representative_enabled,
-            email_ai_enabled=email_ai_enabled,
         )
         if not key_already_validated:
             try:
@@ -312,7 +305,6 @@ def _apply_runtime_preferences(
     site_timeout_seconds: int,
     extract_representative_enabled: bool | None = None,
     search_representative_enabled: bool | None = None,
-    email_ai_enabled: bool | None = None,
 ) -> None:
     budget = _derive_runtime_concurrency_budget(concurrency)
     bounded_timeout = min(max(int(site_timeout_seconds), 60), 600)
@@ -330,8 +322,6 @@ def _apply_runtime_preferences(
         config.extract_representative_enabled = bool(extract_representative_enabled)
     if search_representative_enabled is not None:
         config.search_representative_enabled = bool(search_representative_enabled)
-    if email_ai_enabled is not None:
-        config.email_ai_enabled = bool(email_ai_enabled)
 
 
 def _derive_runtime_concurrency_budget(concurrency: int) -> RuntimeConcurrencyBudget:

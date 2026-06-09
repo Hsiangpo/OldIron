@@ -196,7 +196,6 @@ class AppConfig:
     tavily_api_key: str
     search_representative_enabled: bool
     extract_representative_enabled: bool
-    email_ai_enabled: bool
     search_backend: str
     search_representative_concurrency: int
     tavily_max_results: int
@@ -245,7 +244,6 @@ class AppConfig:
             tavily_api_key=_config_str(values, "TAVILY_API_KEY"),
             search_representative_enabled=_config_bool(values, "SEARCH_REPRESENTATIVE_ENABLED", False),
             extract_representative_enabled=_config_bool(values, "EXTRACT_REPRESENTATIVE_ENABLED", False),
-            email_ai_enabled=_config_bool(values, "EMAIL_AI_ENABLED", True),
             search_backend=_config_str(values, "SEARCH_BACKEND", "bing").lower(),
             search_representative_concurrency=max(_config_int(values, "SEARCH_REPRESENTATIVE_CONCURRENCY", 8), 1),
             tavily_max_results=min(max(_config_int(values, "TAVILY_MAX_RESULTS", 5), 1), 10),

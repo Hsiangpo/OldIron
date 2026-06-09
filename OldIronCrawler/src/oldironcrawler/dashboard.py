@@ -25,7 +25,6 @@ class DashboardSession:
     llm_base_url: str = ""
     extract_representative_enabled: bool = False
     search_representative_enabled: bool = False
-    email_ai_enabled: bool = True
 
 
 def run_dashboard(project_root: Path, initial_key: str) -> int:
@@ -47,7 +46,6 @@ def run_dashboard(project_root: Path, initial_key: str) -> int:
                 f"单站等待上限：{session.site_timeout_seconds} 秒",
                 f"提取代表人：{'开' if session.extract_representative_enabled else '关'}",
                 f"搜索现役最大代表人：{'开' if session.search_representative_enabled else '关'}",
-                f"AI 提取邮箱：{'开' if session.email_ai_enabled else '关'}",
                 "",
                 "1. 开始抓取",
                 "2. 打开 websites 文件夹",
@@ -109,7 +107,6 @@ def _handle_start_crawl(session: DashboardSession) -> None:
             llm_base_url=session.llm_base_url,
             extract_representative_enabled=session.extract_representative_enabled,
             search_representative_enabled=session.search_representative_enabled,
-            email_ai_enabled=session.email_ai_enabled,
         )
     except Exception as exc:  # noqa: BLE001
         _show_message(f"抓取过程中出现未处理错误：{exc}")
@@ -175,7 +172,6 @@ def _handle_system_config(session: DashboardSession) -> str | None:
                 site_timeout_seconds=session.site_timeout_seconds,
                 extract_representative_enabled=session.extract_representative_enabled,
                 search_representative_enabled=session.search_representative_enabled,
-                email_ai_enabled=session.email_ai_enabled,
             ),
         )
         choice = input("请输入菜单序号: ").strip().upper()
@@ -216,12 +212,6 @@ def _handle_system_config(session: DashboardSession) -> str | None:
             )
             continue
         if choice == "6":
-            session.email_ai_enabled = not session.email_ai_enabled
-            _show_message(
-                f"AI 提取邮箱已{'开启' if session.email_ai_enabled else '关闭'}。"
-            )
-            continue
-        if choice == "7":
             return None
         _show_message("输入无效，请重新选择。")
 
@@ -389,7 +379,6 @@ def _build_system_config_lines(
     site_timeout_seconds: int,
     extract_representative_enabled: bool,
     search_representative_enabled: bool,
-    email_ai_enabled: bool,
 ) -> list[str]:
     return [
         f"Key 状态：{key_status}",
@@ -397,15 +386,13 @@ def _build_system_config_lines(
         f"单站等待上限：{site_timeout_seconds} 秒",
         f"提取代表人：{'开' if extract_representative_enabled else '关'}",
         f"搜索现役最大代表人：{'开' if search_representative_enabled else '关'}",
-        f"AI 提取邮箱：{'开' if email_ai_enabled else '关'}",
         "",
         "1. Key 设置",
         "2. 并发设置",
         "3. 单站等待上限",
         "4. 提取代表人（开/关切换）",
         "5. 搜索现役最大代表人（开/关切换）",
-        "6. AI 提取邮箱（开/关切换）",
-        "7. 返回主菜单",
+        "6. 返回主菜单",
     ]
 
 

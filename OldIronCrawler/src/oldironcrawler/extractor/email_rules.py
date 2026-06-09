@@ -121,8 +121,8 @@ def normalize_email_candidate(value: object) -> str:
         return ""
     text = text.replace("mailto:", "")
     text = re.sub(r"^(?:u003e|u003c|>|<)+", "", text)
-    text = re.sub(r"(?i)\[(?:at)\]|\((?:at)\)|\s+at\s+", "@", text)
-    text = re.sub(r"(?i)\[(?:dot)\]|\((?:dot)\)|\s+dot\s+", ".", text)
+    text = re.sub(r"(?i)\s*(?:\[at\]|\(at\))\s*|\s+at\s+", "@", text)
+    text = re.sub(r"(?i)\s*(?:\[dot\]|\(dot\))\s*|\s+dot\s+", ".", text)
     match = _EMAIL_RE.search(text)
     if match is None:
         return ""
@@ -200,8 +200,8 @@ def extract_emails_from_html(raw_html: str) -> list[str]:
     normalized = html.unescape(html_text)
     normalized = _SCRIPT_BLOCK_RE.sub(" ", normalized)
     normalized = normalized.replace("%40", "@").replace("%2E", ".")
-    normalized = re.sub(r"(?i)\[(?:at)\]|\((?:at)\)|\s+at\s+", "@", normalized)
-    normalized = re.sub(r"(?i)\[(?:dot)\]|\((?:dot)\)|\s+dot\s+", ".", normalized)
+    normalized = re.sub(r"(?i)\s*(?:\[at\]|\(at\))\s*|\s+at\s+", "@", normalized)
+    normalized = re.sub(r"(?i)\s*(?:\[dot\]|\(dot\))\s*|\s+dot\s+", ".", normalized)
     found: list[str] = []
     for match in _EMAIL_RE.findall(normalized):
         value = str(match or "").strip().lower().rstrip(".,);:]}>")
@@ -216,8 +216,8 @@ def extract_same_domain_emails_from_embedded_content(website: str, raw_html: str
         return []
     normalized = html.unescape(html_text)
     normalized = normalized.replace("%40", "@").replace("%2E", ".")
-    normalized = re.sub(r"(?i)\[(?:at)\]|\((?:at)\)|\s+at\s+", "@", normalized)
-    normalized = re.sub(r"(?i)\[(?:dot)\]|\((?:dot)\)|\s+dot\s+", ".", normalized)
+    normalized = re.sub(r"(?i)\s*(?:\[at\]|\(at\))\s*|\s+at\s+", "@", normalized)
+    normalized = re.sub(r"(?i)\s*(?:\[dot\]|\(dot\))\s*|\s+dot\s+", ".", normalized)
     found: list[str] = []
     for match in _EMAIL_RE.findall(normalized):
         email = normalize_email_candidate(match)
@@ -262,8 +262,8 @@ def _normalize_text_for_email_evidence(pages: list[tuple[str, str]]) -> str:
             continue
         normalized = html.unescape(text)
         normalized = normalized.replace("%40", "@").replace("%2e", ".").replace("%2E", ".")
-        normalized = re.sub(r"(?i)\[(?:at)\]|\((?:at)\)|\s+at\s+", "@", normalized)
-        normalized = re.sub(r"(?i)\[(?:dot)\]|\((?:dot)\)|\s+dot\s+", ".", normalized)
+        normalized = re.sub(r"(?i)\s*(?:\[at\]|\(at\))\s*|\s+at\s+", "@", normalized)
+        normalized = re.sub(r"(?i)\s*(?:\[dot\]|\(dot\))\s*|\s+dot\s+", ".", normalized)
         parts.append(normalized.lower())
     return "\n".join(parts)
 

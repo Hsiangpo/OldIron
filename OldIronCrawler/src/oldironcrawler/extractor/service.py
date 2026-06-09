@@ -184,7 +184,7 @@ class SiteProfileService:
                 "email_rule_ms",
                 lambda: _collect_contact_details(website, email_rule_pages),
             )
-            emails = self._merge_ai_emails_if_enabled(
+            emails = self._merge_ai_emails(
                 website, emails, email_rule_pages, deadline_monotonic
             )
             searched_representative = _finish_active_representative_search(
@@ -344,16 +344,14 @@ class SiteProfileService:
         )
         return _normalize_llm_result(llm_result, rep_pages)
 
-    def _merge_ai_emails_if_enabled(
+    def _merge_ai_emails(
         self,
         website: str,
         rule_emails: list[str],
         email_rule_pages: list[tuple[str, str]],
         deadline_monotonic: float | None,
     ) -> list[str]:
-        # 开了「AI 提取邮箱」就在规则结果上并集补全；规则始终是保底地板。
-        if not bool(getattr(self._config, "email_ai_enabled", True)):
-            return rule_emails
+        # AI 邮箱强制常开：始终在规则结果上并集补全混淆/拆分邮箱，规则是保底地板。
         if not email_rule_pages:
             return rule_emails
         ai_emails = _extract_ai_emails_or_empty(
