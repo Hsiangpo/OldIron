@@ -7,6 +7,7 @@ import logging
 import re
 from pathlib import Path
 
+from .parser import clean_representative
 from .store import Store
 
 log = logging.getLogger("buffettcode.export")
@@ -40,7 +41,9 @@ def export_per_industry(store: Store, out_dir: str) -> dict:
             w = csv.writer(fp)
             w.writerow(_HEADER)
             for company_name, rep, website, address, capital, path in rows:
-                rep, website, address, capital = _na(rep), _na(website), _na(address), _na(capital)
+                # 代表者：剥离职衔前缀/括注、清纯标签污染，得纯人名（导出口径）
+                rep = clean_representative(_na(rep), strip_title=True)
+                website, address, capital = _na(website), _na(address), _na(capital)
                 if company_name and rep and website:
                     full += 1
                 w.writerow([company_name or "", rep, website, address, capital, _BASE + path])
