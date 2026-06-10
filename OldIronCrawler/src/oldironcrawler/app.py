@@ -12,11 +12,6 @@ from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmTempor
 from oldironcrawler.importer import choose_input_file, compute_rows_fingerprint, load_websites
 from oldironcrawler.llm_errors import classify_llm_exception
 from oldironcrawler.runner import run_crawl_session
-from oldironcrawler.runtime.llm_ingress import (
-    format_ingress_selection,
-    resolve_llm_ingress_nodes,
-    select_best_llm_ingress,
-)
 from oldironcrawler.runtime.store import RuntimeStore
 
 
@@ -256,24 +251,15 @@ def _is_packaged_runtime() -> bool:
 
 
 def _validate_llm_runtime(config: AppConfig) -> None:
-    nodes = resolve_llm_ingress_nodes(
-        primary_base_url=config.llm_base_url,
-        extra_base_urls=config.llm_base_urls,
-    )
+    # 只有一个固定入口，不再测速选节点：对该入口做一次 ping，校验 Key 与连通性即可。
+    client = _build_llm_client(config)
     try:
-        selection = select_best_llm_ingress(
-            api_key=config.llm_key,
-            model=config.llm_model,
-            reasoning_effort=config.llm_reasoning_effort,
-            nodes=nodes,
-            rounds=config.llm_ingress_rounds,
-            timeout_seconds=config.llm_ingress_timeout_seconds,
-            proxy_url=config.proxy_url,
-        )
+        client.ping()
     except Exception as exc:  # noqa: BLE001
         _raise_classified_llm_validation_error(exc)
-    config.llm_base_url = selection.best.node.base_url
-    print(format_ingress_selection(selection), flush=True)
+    finally:
+        client.close()
+    print(f"LLM API 入口已就绪：{config.llm_base_url}", flush=True)
 
 
 def _raise_classified_llm_validation_error(exc: Exception) -> None:

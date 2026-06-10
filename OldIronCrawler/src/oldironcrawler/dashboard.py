@@ -41,7 +41,7 @@ def run_dashboard(project_root: Path, initial_key: str) -> int:
                 f"当前文件：{session.selected_input.name if session.selected_input else '未选择'}",
                 f"可爬表数量：{len(list_input_files(_get_websites_dir(session.project_root)))}",
                 f"结果文件数量：{len(_list_output_results(session.project_root / 'output'))}",
-                f"API 入口：{session.llm_base_url or '未测速'}",
+                f"API 入口：{session.llm_base_url or '未就绪'}",
                 f"并发设置：{session.concurrency}",
                 f"单站等待上限：{session.site_timeout_seconds} 秒",
                 f"提取代表人：{'开' if session.extract_representative_enabled else '关'}",

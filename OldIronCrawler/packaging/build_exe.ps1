@@ -121,7 +121,16 @@ package_root = build_portable_dist_folder(repo_root=repo_root, built_exe_path=ex
 print(package_root)
 '@
     $builtExe = Join-Path $distDir "OldIronCrawler.exe"
-    $packageRoot = & $pythonExe -c $code $repoRoot $builtExe
+    # 把内联脚本写到临时 .py 再执行：PowerShell 5.1 用 -c 把多行字符串传给原生 python 时
+    # 会吞掉其中的双引号（"src" 变裸 src，触发 NameError），改走文件方式最稳。
+    $assembleScript = Join-Path ([System.IO.Path]::GetTempPath()) "oldironcrawler_assemble.py"
+    Set-Content -LiteralPath $assembleScript -Value $code -Encoding UTF8
+    try {
+        $packageRoot = & $pythonExe $assembleScript $repoRoot $builtExe
+    }
+    finally {
+        Remove-Item -LiteralPath $assembleScript -Force -ErrorAction SilentlyContinue
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Portable folder assembly failed."
     }

@@ -175,8 +175,6 @@ class AppConfig:
     llm_reasoning_effort: str
     llm_api_style: str
     llm_concurrency: int
-    llm_ingress_rounds: int
-    llm_ingress_timeout_seconds: float
     capsolver_api_key: str
     capsolver_api_base_url: str
     capsolver_proxy: str
@@ -223,8 +221,6 @@ class AppConfig:
             llm_reasoning_effort=_config_str(values, "LLM_REASONING_EFFORT", "low"),
             llm_api_style=_config_str(values, "LLM_API_STYLE", "responses").lower(),
             llm_concurrency=max(_config_int(values, "LLM_CONCURRENCY", 32), 1),
-            llm_ingress_rounds=min(max(_config_int(values, "LLM_INGRESS_ROUNDS", 2), 1), 5),
-            llm_ingress_timeout_seconds=max(_config_float(values, "LLM_INGRESS_TIMEOUT_SECONDS", 15.0), 3.0),
             capsolver_api_key=_config_str(values, "CAPSOLVER_API_KEY"),
             capsolver_api_base_url=_config_str(values, "CAPSOLVER_API_BASE_URL", "https://api.capsolver.com"),
             capsolver_proxy=_config_str(values, "CAPSOLVER_PROXY"),
