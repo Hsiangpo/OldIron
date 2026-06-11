@@ -1,32 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-06-11T20:36:58Z",
-  "tasks": [
-    {
-      "task_id": "oldironcrawler-field-output-split-20260612",
-      "status": "in_progress",
-      "machine": "local-windows-D",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [
-        "OldIronCrawler/src/oldironcrawler/app.py",
-        "OldIronCrawler/src/oldironcrawler/dashboard.py",
-        "OldIronCrawler/src/oldironcrawler/reporter.py",
-        "OldIronCrawler/src/oldironcrawler/runtime/store.py",
-        "OldIronCrawler/tests/test_core.py",
-        "OldIronCrawler/tests/test_windows_runtime.py",
-        "OldIronCrawler/tests/test_llm_error_handling.py"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-11T20:36:58Z",
-      "last_heartbeat_at": "2026-06-11T20:36:58Z",
-      "notes": "Continue field selection and success/failed output split for OldIronCrawler."
-    }
-  ]
+  "updated_at": "2026-06-11T21:13:49Z",
+  "tasks": []
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import sys
 import time
 import threading
@@ -31,12 +32,13 @@ from oldironcrawler.extractor.protocol_client import ProtocolPermanentError, Pro
 from oldironcrawler.extractor.protocol_client import HtmlPage
 from oldironcrawler.extractor.umbraco_people import UmbracoBio, maybe_build_umbraco_people_page
 from oldironcrawler.extractor.service import _build_site_protocol_config, _merge_page_targets, _normalize_llm_result
-from oldironcrawler.extractor.service import SiteProfileService
+from oldironcrawler.extractor.service import DiscoverySnapshot, SiteProfileService
 from oldironcrawler.extractor.value_rules import build_candidates, extract_path_tokens, select_email_urls, select_representative_urls
 from oldironcrawler.importer import ImportedWebsite, choose_input_file, compute_rows_fingerprint, load_websites
 from oldironcrawler.runtime.global_learning import GlobalLearningStore
 from oldironcrawler import runner as runner_module
 from oldironcrawler.runner import _describe_error_reason, _describe_missing_reason, _looks_temporary_error
+from oldironcrawler.reporter import write_delivery_reports
 from oldironcrawler.runtime.store import RuntimeStore, SiteResult, SiteStageMetrics
 
 
@@ -348,6 +350,220 @@ def test_runtime_store_delivery_rows_include_phones(tmp_path: Path) -> None:
             "website": "https://a.com",
         }
     ]
+    store.close()
+
+
+def test_runtime_store_delivery_report_rows_include_status_and_errors(tmp_path: Path) -> None:
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    rows = [
+        ImportedWebsite(
+            input_index=1,
+            raw_website="a.com",
+            website="https://a.com",
+            dedupe_key="a.com",
+            company_name="Input A",
+        ),
+        ImportedWebsite(
+            input_index=2,
+            raw_website="b.com",
+            website="https://b.com",
+            dedupe_key="b.com",
+            company_name="Input B",
+        ),
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    first = store.claim_next_site()
+    second = store.claim_next_site()
+
+    assert first is not None and second is not None
+    store.mark_done(
+        first.id,
+        SiteResult(company_name="Result A", representative="", emails="a@a.com", website="https://a.com"),
+    )
+    store.mark_dropped(second.id, "http_401")
+
+    assert store.delivery_report_rows() == [
+        {
+            "input_company_name": "Input A",
+            "company_name": "Result A",
+            "representative": "",
+            "emails": "a@a.com",
+            "searched_representative": "",
+            "phones": "",
+            "website": "https://a.com",
+            "status": "done",
+            "last_error": "",
+        },
+        {
+            "input_company_name": "Input B",
+            "company_name": "",
+            "representative": "",
+            "emails": "",
+            "searched_representative": "",
+            "phones": "",
+            "website": "https://b.com",
+            "status": "dropped",
+            "last_error": "http_401",
+        },
+    ]
+    store.close()
+
+
+def test_write_delivery_reports_splits_rows_by_selected_fields(tmp_path: Path) -> None:
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    rows = [
+        ImportedWebsite(input_index=1, raw_website="a.com", website="https://a.com", dedupe_key="a.com"),
+        ImportedWebsite(input_index=2, raw_website="b.com", website="https://b.com", dedupe_key="b.com"),
+        ImportedWebsite(
+            input_index=3,
+            raw_website="c.com",
+            website="https://c.com",
+            dedupe_key="c.com",
+            company_name="Input C",
+        ),
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    first = store.claim_next_site()
+    second = store.claim_next_site()
+    third = store.claim_next_site()
+
+    assert first is not None and second is not None and third is not None
+    store.mark_done(
+        first.id,
+        SiteResult(company_name="A", representative="", emails="a@a.com", website="https://a.com", phones=""),
+    )
+    store.mark_done(
+        second.id,
+        SiteResult(company_name="B", representative="", emails="", website="https://b.com", phones="+441234"),
+    )
+    store.mark_dropped(third.id, "http_401")
+
+    success_path = tmp_path / "success.csv"
+    failed_path = tmp_path / "failed.csv"
+    write_delivery_reports(
+        store=store,
+        success_path=success_path,
+        failed_path=failed_path,
+        include_email=True,
+        include_phone=False,
+        include_representative=False,
+        include_searched_representative=False,
+    )
+
+    with success_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        success_rows = list(csv.DictReader(handle))
+    with failed_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        failed_rows = list(csv.DictReader(handle))
+
+    assert success_rows == [{"company_name": "A", "emails": "a@a.com", "website": "https://a.com"}]
+    assert failed_rows == [
+        {
+            "company_name": "B",
+            "website": "https://b.com",
+            "missing_fields": "emails",
+            "status": "done",
+            "failure_reason": "缺少：emails",
+            "emails": "",
+        },
+        {
+            "company_name": "Input C",
+            "website": "https://c.com",
+            "missing_fields": "emails",
+            "status": "dropped",
+            "failure_reason": "http_401",
+            "emails": "",
+        },
+    ]
+    store.close()
+
+
+def test_site_profile_email_only_skips_representative_pages_when_company_name_given(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    rows = [
+        ImportedWebsite(
+            input_index=1,
+            raw_website="acme.com",
+            website="https://acme.com",
+            dedupe_key="acme.com",
+            company_name="Acme Ltd",
+        )
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    task = store.claim_next_site()
+    fetched_urls: list[str] = []
+
+    class FakeProtocol:
+        def close(self) -> None:
+            return None
+
+    class FakeLlm:
+        def extract_company_and_representative(self, **_kwargs):
+            raise AssertionError("representative LLM should not run for email-only rows with company names")
+
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+    assert task is not None
+    monkeypatch.setattr("oldironcrawler.extractor.service.SiteProtocolClient", lambda _config: FakeProtocol())
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=["https://acme.com", "https://acme.com/team", "https://acme.com/contact"],
+            candidates=[],
+            rep_urls=["https://acme.com/team"],
+            teacher_pool=["https://acme.com/leadership"],
+            email_urls=["https://acme.com/contact"],
+            homepage_html="<html>Home</html>",
+        ),
+    )
+
+    def fake_fetch_primary_pages(_protocol, urls, **_kwargs):
+        fetched_urls.extend(urls)
+        return [HtmlPage(url=url, html="<html>info@acme.com</html>") for url in urls], 1
+
+    monkeypatch.setattr("oldironcrawler.extractor.service._fetch_primary_pages", fake_fetch_primary_pages)
+    monkeypatch.setattr("oldironcrawler.extractor.service.replace_shell_pages_with_evidence", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr("oldironcrawler.extractor.service._collect_contact_details", lambda *_args: (["info@acme.com"], {}, [], {}))
+
+    service = SiteProfileService(
+        SimpleNamespace(
+            request_timeout_seconds=10.0,
+            proxy_url="",
+            capsolver_api_key="",
+            capsolver_api_base_url="",
+            capsolver_proxy="",
+            capsolver_poll_seconds=1.0,
+            capsolver_max_wait_seconds=5.0,
+            cloudflare_proxy_url="",
+            page_worker_count=1,
+            page_host_limit=1,
+            page_concurrency=1,
+            total_wait_seconds=180.0,
+            rep_page_limit=5,
+            email_page_soft_limit=8,
+            email_page_hard_limit=16,
+            page_total_hard_limit=20,
+            email_stop_same_domain_count=2,
+            collect_email_enabled=True,
+            collect_phone_enabled=False,
+            extract_representative_enabled=False,
+            search_representative_enabled=False,
+        ),
+        store,
+        GlobalLearningStore(tmp_path / "learning.sqlite3"),
+        FakeLlm(),
+        page_pool=None,
+    )
+
+    result = service.process(task.id, task.website, input_company_name=task.company_name)
+
+    assert result.result.company_name == "Acme Ltd"
+    assert result.result.emails == "info@acme.com"
+    assert "https://acme.com/contact" in fetched_urls
+    assert "https://acme.com/team" not in fetched_urls
     store.close()
 
 

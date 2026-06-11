@@ -216,6 +216,77 @@ def enrich_shell_page_html(
     return build_shell_evidence_html(page_url, page_html, asset_texts)
 
 
+def replace_shell_pages_with_evidence(
+    page_map: dict[str, object],
+    target_urls: list[str],
+    *,
+    proxy_url: str,
+    timeout_seconds: float,
+    deadline_monotonic: float | None,
+) -> int:
+    started = time.monotonic()
+    for url in target_urls:
+        page = page_map.get(url)
+        if page is None or not looks_like_shell_page(getattr(page, "html", "")):
+            continue
+        enriched_html = enrich_shell_page_html(
+            page.url,
+            page.html,
+            proxy_url=proxy_url,
+            timeout_seconds=timeout_seconds,
+            deadline_monotonic=deadline_monotonic,
+        )
+        if enriched_html.strip() and enriched_html != page.html:
+            page_map[url] = type(page)(url=page.url, html=enriched_html)
+    return int(round((time.monotonic() - started) * 1000))
+
+
+def build_shell_alias_map(
+    *,
+    start_url: str,
+    page_map: dict[str, object],
+    target_urls: list[str],
+) -> dict[str, str]:
+    ordered_urls = _merge_unique_urls([start_url], target_urls, limit=max(len(target_urls) + 1, 1))
+    fingerprint_to_urls: dict[str, list[str]] = {}
+    homepage_fingerprint = _page_shell_fingerprint(page_map.get(start_url))
+    for url in ordered_urls:
+        fingerprint = _page_shell_fingerprint(page_map.get(url))
+        if not fingerprint:
+            continue
+        fingerprint_to_urls.setdefault(fingerprint, []).append(url)
+    alias_map: dict[str, str] = {}
+    for fingerprint, urls in fingerprint_to_urls.items():
+        if len(urls) <= 1:
+            continue
+        canonical_url = _pick_shell_canonical_url(
+            start_url=start_url,
+            homepage_fingerprint=homepage_fingerprint,
+            fingerprint=fingerprint,
+            urls=urls,
+        )
+        for url in urls:
+            alias_map[url] = canonical_url
+    return alias_map
+
+
+def canonicalize_shell_target_urls(urls: list[str], alias_map: dict[str, str]) -> list[str]:
+    if not alias_map:
+        return [str(url or "").strip() for url in urls if str(url or "").strip()]
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_url in urls:
+        url = str(raw_url or "").strip()
+        if not url:
+            continue
+        canonical = str(alias_map.get(url, url) or "").strip()
+        if not canonical or canonical in seen:
+            continue
+        seen.add(canonical)
+        result.append(canonical)
+    return result
+
+
 def _resolve_deadline_timeout(*, timeout_seconds: float, deadline_monotonic: float | None) -> float | None:
     base_timeout = max(float(timeout_seconds or 0), 1.0)
     if deadline_monotonic is None:
@@ -530,3 +601,83 @@ def _should_keep_shell_email(page_url: str, email: str, context: str) -> bool:
     if any(keyword in f" {lowered} " for keyword in _COMPANY_KEYWORDS):
         return True
     return False
+
+
+def _page_shell_fingerprint(page: object | None) -> str:
+    if page is None:
+        return ""
+    url = str(getattr(page, "url", "") or "").strip()
+    html_text = str(getattr(page, "html", "") or "")
+    if not url or not html_text:
+        return ""
+    return build_shell_fingerprint(url, html_text)
+
+
+def _pick_shell_canonical_url(
+    *,
+    start_url: str,
+    homepage_fingerprint: str,
+    fingerprint: str,
+    urls: list[str],
+) -> str:
+    if homepage_fingerprint and fingerprint == homepage_fingerprint and start_url in urls:
+        return start_url
+    return sorted(urls, key=_shell_canonical_sort_key)[0]
+
+
+def _shell_canonical_sort_key(url: str) -> tuple[int, int, int, str]:
+    lowered = str(url or "").strip().lower()
+    path = lowered.rstrip("/").split("://", 1)[-1].split("/", 1)[-1]
+    score = 0
+    for token, value in (
+        ("impressum", 120),
+        ("imprint", 118),
+        ("legal-notice", 110),
+        ("legal", 100),
+        ("contact-us", 94),
+        ("contact", 90),
+        ("about-us", 82),
+        ("about", 76),
+        ("company", 70),
+        ("our-team", 58),
+        ("team", 52),
+        ("people", 48),
+        ("executive-team", 18),
+        ("leadership", 12),
+        ("management", 8),
+    ):
+        if token in lowered:
+            score += value
+    depth = path.count("/") if path else 0
+    return (-score, depth, len(lowered), lowered)
+
+
+def _merge_unique_urls(left: list[str], right: list[str], *, limit: int) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for url in [*left, *right]:
+        value = str(url or "").strip()
+        canonical = _canonical_target_url(value)
+        if not value or canonical in seen:
+            continue
+        seen.add(canonical)
+        result.append(value)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _canonical_target_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return str(url or "").strip().lower().rstrip("/")
+    host = str(parsed.netloc or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = str(parsed.path or "").rstrip("/")
+    query = str(parsed.query or "").strip()
+    if path == "/":
+        path = ""
+    if query:
+        return f"{parsed.scheme.lower()}://{host}{path}?{query}"
+    return f"{parsed.scheme.lower()}://{host}{path}"

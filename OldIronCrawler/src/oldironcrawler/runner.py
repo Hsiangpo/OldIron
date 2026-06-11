@@ -24,11 +24,15 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
     total = progress["total"]
     completed_count = _count_completed_sites(progress)
     heartbeat_seconds = 10.0
+    show_email = bool(getattr(config, "collect_email_enabled", True))
+    show_phone = bool(getattr(config, "collect_phone_enabled", True))
     show_rep = bool(getattr(config, "extract_representative_enabled", True))
     show_search = bool(getattr(config, "search_representative_enabled", True))
     delivery_writer = _DeliverySnapshotWriter(
         Path(delivery_path),
         store,
+        include_email=show_email,
+        include_phone=show_phone,
         include_representative=show_rep,
         include_searched_representative=show_search,
     )
@@ -94,6 +98,8 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                 store=store,
                 learning_store=learning_store,
                 delivery_writer=delivery_writer,
+                show_email=show_email,
+                show_phone=show_phone,
                 show_representative=show_rep,
                 show_searched_representative=show_search,
             )
@@ -106,6 +112,8 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                     store=store,
                     learning_store=learning_store,
                     delivery_writer=delivery_writer,
+                    show_email=show_email,
+                    show_phone=show_phone,
                     show_representative=show_rep,
                     show_searched_representative=show_search,
                 )
@@ -212,6 +220,8 @@ def _process_done_futures(
     store: RuntimeStore,
     learning_store: GlobalLearningStore,
     delivery_writer,
+    show_email: bool = True,
+    show_phone: bool = True,
     show_representative: bool = True,
     show_searched_representative: bool = True,
 ) -> tuple[int, LlmConfigurationError | None]:
@@ -229,6 +239,8 @@ def _process_done_futures(
                 store,
                 learning_store,
                 delivery_writer,
+                show_email=show_email,
+                show_phone=show_phone,
                 show_representative=show_representative,
                 show_searched_representative=show_searched_representative,
             )
@@ -291,6 +303,8 @@ def _handle_future(
     learning_store: GlobalLearningStore,
     delivery_writer,
     *,
+    show_email: bool = True,
+    show_phone: bool = True,
     show_representative: bool = True,
     show_searched_representative: bool = True,
 ) -> int:
@@ -308,13 +322,15 @@ def _handle_future(
                 completed_index=completed_count,
                 total=total,
                 website=task.website,
-                company_name="",
+                company_name=getattr(task, "company_name", ""),
                 representative="",
                 emails="",
                 searched_representative="",
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
+                show_emails=show_email,
+                show_phones=show_phone,
                 show_representative=show_representative,
                 show_searched_representative=show_searched_representative,
             )
@@ -333,13 +349,15 @@ def _handle_future(
             completed_index=completed_count,
             total=total,
             website=task.website,
-            company_name="",
+            company_name=getattr(task, "company_name", ""),
             representative="",
             emails="",
             searched_representative="",
             phones="",
             reason=_describe_error_reason(str(exc)),
             stage_metrics=stage_metrics,
+            show_emails=show_email,
+            show_phones=show_phone,
             show_representative=show_representative,
             show_searched_representative=show_searched_representative,
         )
@@ -354,13 +372,15 @@ def _handle_future(
                 completed_index=completed_count,
                 total=total,
                 website=task.website,
-                company_name="",
+                company_name=getattr(task, "company_name", ""),
                 representative="",
                 emails="",
                 searched_representative="",
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
+                show_emails=show_email,
+                show_phones=show_phone,
                 show_representative=show_representative,
                 show_searched_representative=show_searched_representative,
             )
@@ -375,13 +395,15 @@ def _handle_future(
                 completed_index=completed_count,
                 total=total,
                 website=task.website,
-                company_name="",
+                company_name=getattr(task, "company_name", ""),
                 representative="",
                 emails="",
                 searched_representative="",
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
+                show_emails=show_email,
+                show_phones=show_phone,
                 show_representative=show_representative,
                 show_searched_representative=show_searched_representative,
             )
@@ -399,8 +421,15 @@ def _handle_future(
         emails=processed.result.emails,
         searched_representative=processed.result.searched_representative,
         phones=processed.result.phones,
-        reason=_describe_missing_reason(processed.result),
+        reason=_describe_missing_reason(
+            processed.result,
+            include_email=show_email,
+            include_phone=show_phone,
+            include_representative=show_representative,
+        ),
         stage_metrics=processed.stage_metrics,
+        show_emails=show_email,
+        show_phones=show_phone,
         show_representative=show_representative,
         show_searched_representative=show_searched_representative,
     )
@@ -413,11 +442,15 @@ class _DeliverySnapshotWriter:
         delivery_path: Path,
         store: RuntimeStore,
         *,
+        include_email: bool = True,
+        include_phone: bool = True,
         include_representative: bool = True,
         include_searched_representative: bool = True,
     ) -> None:
         self._delivery_path = delivery_path
         self._store = store
+        self._include_email = include_email
+        self._include_phone = include_phone
         self._include_representative = include_representative
         self._include_searched_representative = include_searched_representative
         self._dirty = False
@@ -448,6 +481,8 @@ class _DeliverySnapshotWriter:
         if not _flush_delivery_snapshot(
             self._delivery_path,
             self._store,
+            include_email=self._include_email,
+            include_phone=self._include_phone,
             include_representative=self._include_representative,
             include_searched_representative=self._include_searched_representative,
         ):
@@ -461,6 +496,8 @@ def _flush_delivery_snapshot(
     delivery_path,
     store: RuntimeStore,
     *,
+    include_email: bool = True,
+    include_phone: bool = True,
     include_representative: bool = True,
     include_searched_representative: bool = True,
 ) -> bool:
@@ -468,6 +505,8 @@ def _flush_delivery_snapshot(
         write_delivery_csv(
             delivery_path,
             store.delivery_rows(),
+            include_email=include_email,
+            include_phone=include_phone,
             include_representative=include_representative,
             include_searched_representative=include_searched_representative,
         )
@@ -526,15 +565,21 @@ def _should_retry_protocol_deadline(error: Exception, stage_metrics) -> bool:
     return int(getattr(stage_metrics, "fetched_page_count", 0) or 0) <= 0
 
 
-def _describe_missing_reason(result) -> str:
+def _describe_missing_reason(
+    result,
+    *,
+    include_email: bool = True,
+    include_phone: bool = True,
+    include_representative: bool = True,
+) -> str:
     reasons: list[str] = []
     if not str(result.company_name or "").strip():
         reasons.append("官网页面里未识别到明确公司名")
-    if not str(result.representative or "").strip():
+    if include_representative and not str(result.representative or "").strip():
         reasons.append("官网页面里未识别到负责人姓名")
-    if not str(result.emails or "").strip():
+    if include_email and not str(result.emails or "").strip():
         reasons.append("价值页里未命中有效邮箱")
-    if not str(result.phones or "").strip():
+    if include_phone and not str(result.phones or "").strip():
         reasons.append("价值页里未命中有效电话")
     return "；".join(reasons)
 

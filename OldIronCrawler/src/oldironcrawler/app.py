@@ -23,6 +23,7 @@ DEFAULT_SITE_TIMEOUT_SECONDS = 180
 class CrawlRunResult:
     exit_code: int
     delivery_path: Path
+    failed_path: Path
     effective_key: str
     llm_base_url: str = ""
 
@@ -54,6 +55,8 @@ def run_selected_input(
     concurrency: int = DEFAULT_SITE_CONCURRENCY,
     site_timeout_seconds: int = DEFAULT_SITE_TIMEOUT_SECONDS,
     llm_base_url: str = "",
+    collect_email_enabled: bool = True,
+    collect_phone_enabled: bool = True,
     extract_representative_enabled: bool = False,
     search_representative_enabled: bool = False,
 ) -> CrawlRunResult:
@@ -64,12 +67,16 @@ def run_selected_input(
         concurrency=concurrency,
         site_timeout_seconds=site_timeout_seconds,
         llm_base_url=llm_base_url,
+        collect_email_enabled=collect_email_enabled,
+        collect_phone_enabled=collect_phone_enabled,
         extract_representative_enabled=extract_representative_enabled,
         search_representative_enabled=search_representative_enabled,
     )
     artifact_stem = _build_artifact_stem(input_path)
     db_path = config.runtime_dir / f"{artifact_stem}.sqlite3"
-    delivery_path = config.delivery_dir / f"{artifact_stem}.csv"
+    snapshot_path = config.runtime_dir / f"{artifact_stem}.snapshot.csv"
+    success_path = config.delivery_dir / f"{artifact_stem}_success.csv"
+    failed_path = config.delivery_dir / f"{artifact_stem}_failed.csv"
     store = RuntimeStore(db_path)
     try:
         exit_code, effective_key = _run_session_with_llm_recovery(
@@ -78,15 +85,29 @@ def run_selected_input(
             rows=rows,
             config=config,
             store=store,
-            delivery_path=delivery_path,
+            delivery_path=snapshot_path,
             concurrency=concurrency,
             site_timeout_seconds=site_timeout_seconds,
+            collect_email_enabled=collect_email_enabled,
+            collect_phone_enabled=collect_phone_enabled,
             extract_representative_enabled=extract_representative_enabled,
             search_representative_enabled=search_representative_enabled,
         )
+        from oldironcrawler.reporter import write_delivery_reports
+
+        write_delivery_reports(
+            store=store,
+            success_path=success_path,
+            failed_path=failed_path,
+            include_email=collect_email_enabled,
+            include_phone=collect_phone_enabled,
+            include_representative=extract_representative_enabled,
+            include_searched_representative=search_representative_enabled,
+        )
         return CrawlRunResult(
             exit_code=exit_code,
-            delivery_path=delivery_path,
+            delivery_path=success_path,
+            failed_path=failed_path,
             effective_key=effective_key,
             llm_base_url=config.llm_base_url,
         )
@@ -123,6 +144,8 @@ def _ensure_runtime_key_ready(project_root: Path, current_key: str) -> AppConfig
             config,
             concurrency=DEFAULT_SITE_CONCURRENCY,
             site_timeout_seconds=DEFAULT_SITE_TIMEOUT_SECONDS,
+            collect_email_enabled=True,
+            collect_phone_enabled=True,
         )
         try:
             _validate_llm_runtime(config)
@@ -140,6 +163,8 @@ def _load_rows_with_llm_recovery(
     concurrency: int,
     site_timeout_seconds: int,
     llm_base_url: str = "",
+    collect_email_enabled: bool = True,
+    collect_phone_enabled: bool = True,
     extract_representative_enabled: bool = False,
     search_representative_enabled: bool = False,
 ) -> tuple[AppConfig, list, str]:
@@ -150,6 +175,8 @@ def _load_rows_with_llm_recovery(
             config,
             concurrency=concurrency,
             site_timeout_seconds=site_timeout_seconds,
+            collect_email_enabled=collect_email_enabled,
+            collect_phone_enabled=collect_phone_enabled,
             extract_representative_enabled=extract_representative_enabled,
             search_representative_enabled=search_representative_enabled,
         )
@@ -172,6 +199,8 @@ def _run_session_with_llm_recovery(
     delivery_path: Path,
     concurrency: int,
     site_timeout_seconds: int,
+    collect_email_enabled: bool = True,
+    collect_phone_enabled: bool = True,
     extract_representative_enabled: bool = False,
     search_representative_enabled: bool = False,
 ) -> tuple[int, str]:
@@ -185,6 +214,8 @@ def _run_session_with_llm_recovery(
             config,
             concurrency=concurrency,
             site_timeout_seconds=site_timeout_seconds,
+            collect_email_enabled=collect_email_enabled,
+            collect_phone_enabled=collect_phone_enabled,
             extract_representative_enabled=extract_representative_enabled,
             search_representative_enabled=search_representative_enabled,
         )
@@ -289,6 +320,8 @@ def _apply_runtime_preferences(
     *,
     concurrency: int,
     site_timeout_seconds: int,
+    collect_email_enabled: bool | None = None,
+    collect_phone_enabled: bool | None = None,
     extract_representative_enabled: bool | None = None,
     search_representative_enabled: bool | None = None,
 ) -> None:
@@ -303,7 +336,11 @@ def _apply_runtime_preferences(
     # 避免出现“站点并发设了，但搜法人池还停在独立的小值”这种隐藏瓶颈。
     config.search_representative_concurrency = budget.site_concurrency
     config.total_wait_seconds = float(bounded_timeout)
-    # None 表示沿用 .env 里的默认值；菜单跑任务时才用勾选值覆盖这两个开关。
+    # None 表示沿用 .env 里的默认值；菜单跑任务时才用勾选值覆盖这些开关。
+    if collect_email_enabled is not None:
+        config.collect_email_enabled = bool(collect_email_enabled)
+    if collect_phone_enabled is not None:
+        config.collect_phone_enabled = bool(collect_phone_enabled)
     if extract_representative_enabled is not None:
         config.extract_representative_enabled = bool(extract_representative_enabled)
     if search_representative_enabled is not None:

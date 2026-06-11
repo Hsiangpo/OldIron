@@ -12,7 +12,11 @@ from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_phones
 from oldironcrawler.extractor.protocol_client import HtmlPage, ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient, SiteProtocolConfig
 from oldironcrawler.extractor.representative_search import ActiveRepresentativeSearchResult
-from oldironcrawler.extractor.shell_page import build_shell_fingerprint, enrich_shell_page_html, looks_like_shell_page
+from oldironcrawler.extractor.shell_page import (
+    build_shell_alias_map,
+    canonicalize_shell_target_urls,
+    replace_shell_pages_with_evidence,
+)
 from oldironcrawler.extractor.value_rules import (
     build_fetch_plan,
     build_candidates,
@@ -109,11 +113,15 @@ class SiteProfileService:
         deadline_monotonic: float | None = None,
     ) -> SiteProcessingResult:
         metrics = SiteStageMetrics()
+        collect_email_enabled = bool(getattr(self._config, "collect_email_enabled", True))
+        collect_phone_enabled = bool(getattr(self._config, "collect_phone_enabled", True))
         extract_rep_enabled = bool(getattr(self._config, "extract_representative_enabled", True))
         has_input_company = bool(str(input_company_name or "").strip())
         # AI 网页提取只在「需要补公司名」或「要提代表人」时才跑；
         # 表里已带公司名且关闭提取代表人时，这段 LLM 整体跳过。
         need_llm_extract = extract_rep_enabled or not has_input_company
+        need_contact_extract = collect_email_enabled or collect_phone_enabled
+        rep_target_count = _get_rep_page_limit(self._config) if need_llm_extract else 0
         search_started = time.monotonic()
         search_future = _start_active_representative_search(
             self._representative_searcher,
@@ -133,11 +141,14 @@ class SiteProfileService:
                     website,
                     rep_learned,
                     email_learned,
-                    rep_target_count=_get_rep_page_limit(self._config),
+                    rep_target_count=rep_target_count,
                 ),
             )
-            rep_urls = self._resolve_representative_urls(discovery, website, metrics, deadline_monotonic)
-            fetch_plan = _plan_fetch_targets(self._config, website, rep_urls, discovery.email_urls)
+            rep_urls = []
+            if need_llm_extract:
+                rep_urls = self._resolve_representative_urls(discovery, website, metrics, deadline_monotonic)
+            email_urls = discovery.email_urls if need_contact_extract else []
+            fetch_plan = _plan_fetch_targets(self._config, website, rep_urls, email_urls)
             metrics.discovered_url_count = len(discovery.urls)
             metrics.rep_url_count = len(fetch_plan["rep_urls"])
             metrics.email_url_count = len(fetch_plan["email_primary_urls"]) + len(fetch_plan["email_overflow_urls"])
@@ -178,15 +189,25 @@ class SiteProfileService:
                     website=website,
                     deadline_monotonic=deadline_monotonic,
                 )
-            email_rule_pages = _collect_email_rule_pages(page_map, fetch_plan)
-            emails, email_sources, phones, _phone_sources = self._time_call(
-                metrics,
-                "email_rule_ms",
-                lambda: _collect_contact_details(website, email_rule_pages),
-            )
-            emails = self._merge_ai_emails(
-                website, emails, email_rule_pages, deadline_monotonic
-            )
+            email_rule_pages = _collect_email_rule_pages(page_map, fetch_plan) if need_contact_extract else []
+            emails: list[str] = []
+            email_sources: dict[str, list[str]] = {}
+            phones: list[str] = []
+            if need_contact_extract:
+                emails, email_sources, phones, _phone_sources = self._time_call(
+                    metrics,
+                    "email_rule_ms",
+                    lambda: _collect_contact_details(website, email_rule_pages),
+                )
+                if collect_email_enabled:
+                    emails = self._merge_ai_emails(
+                        website, emails, email_rule_pages, deadline_monotonic
+                    )
+                else:
+                    emails = []
+                    email_sources = {}
+                if not collect_phone_enabled:
+                    phones = []
             searched_representative = _finish_active_representative_search(
                 search_future,
                 metrics,
@@ -277,12 +298,12 @@ class SiteProfileService:
                 page_pool=self._page_pool,
             )
             _merge_pages_into_map(page_map, primary_pages)
-            shell_alias_map = _build_shell_alias_map(
+            shell_alias_map = build_shell_alias_map(
                 start_url=website,
                 page_map=page_map,
                 target_urls=[*fetch_plan["all_primary_urls"], *fetch_plan["email_overflow_urls"]],
             )
-            primary_fetch_ms += _replace_shell_pages_with_evidence(
+            primary_fetch_ms += replace_shell_pages_with_evidence(
                 page_map,
                 [*fetch_plan["all_primary_urls"], *fetch_plan["email_overflow_urls"]],
                 proxy_url=self._config.proxy_url,
@@ -291,7 +312,7 @@ class SiteProfileService:
             )
             rep_pages = _select_pages_from_map(
                 page_map,
-                _canonicalize_target_urls(fetch_plan["rep_urls"], shell_alias_map),
+                canonicalize_shell_target_urls(fetch_plan["rep_urls"], shell_alias_map),
             )
             if need_llm_extract:
                 llm_result = self._extract_primary_representative(
@@ -314,7 +335,7 @@ class SiteProfileService:
             )
             _merge_pages_into_map(page_map, overflow_pages)
             if overflow_pages:
-                overflow_fetch_ms += _replace_shell_pages_with_evidence(
+                overflow_fetch_ms += replace_shell_pages_with_evidence(
                     page_map,
                     fetch_plan["email_overflow_urls"],
                     proxy_url=self._config.proxy_url,
@@ -493,126 +514,6 @@ def _extract_ai_emails_or_empty(
         return []
 
 
-def _replace_shell_pages_with_evidence(
-    page_map: dict[str, object],
-    target_urls: list[str],
-    *,
-    proxy_url: str,
-    timeout_seconds: float,
-    deadline_monotonic: float | None,
-) -> int:
-    started = time.monotonic()
-    for url in target_urls:
-        page = page_map.get(url)
-        if page is None or not looks_like_shell_page(getattr(page, "html", "")):
-            continue
-        enriched_html = enrich_shell_page_html(
-            page.url,
-            page.html,
-            proxy_url=proxy_url,
-            timeout_seconds=timeout_seconds,
-            deadline_monotonic=deadline_monotonic,
-        )
-        if enriched_html.strip() and enriched_html != page.html:
-            page_map[url] = HtmlPage(url=page.url, html=enriched_html)
-    return int(round((time.monotonic() - started) * 1000))
-
-
-def _build_shell_alias_map(
-    *,
-    start_url: str,
-    page_map: dict[str, object],
-    target_urls: list[str],
-) -> dict[str, str]:
-    ordered_urls = _merge_unique_urls([start_url], target_urls, limit=max(len(target_urls) + 1, 1))
-    fingerprint_to_urls: dict[str, list[str]] = {}
-    homepage_fingerprint = _page_shell_fingerprint(page_map.get(start_url))
-    for url in ordered_urls:
-        fingerprint = _page_shell_fingerprint(page_map.get(url))
-        if not fingerprint:
-            continue
-        fingerprint_to_urls.setdefault(fingerprint, []).append(url)
-    alias_map: dict[str, str] = {}
-    for fingerprint, urls in fingerprint_to_urls.items():
-        if len(urls) <= 1:
-            continue
-        canonical_url = _pick_shell_canonical_url(
-            start_url=start_url,
-            homepage_fingerprint=homepage_fingerprint,
-            fingerprint=fingerprint,
-            urls=urls,
-        )
-        for url in urls:
-            alias_map[url] = canonical_url
-    return alias_map
-
-
-def _canonicalize_target_urls(urls: list[str], alias_map: dict[str, str]) -> list[str]:
-    if not alias_map:
-        return [str(url or "").strip() for url in urls if str(url or "").strip()]
-    result: list[str] = []
-    seen: set[str] = set()
-    for raw_url in urls:
-        url = str(raw_url or "").strip()
-        if not url:
-            continue
-        canonical = str(alias_map.get(url, url) or "").strip()
-        if not canonical or canonical in seen:
-            continue
-        seen.add(canonical)
-        result.append(canonical)
-    return result
-
-
-def _page_shell_fingerprint(page: object | None) -> str:
-    if page is None:
-        return ""
-    url = str(getattr(page, "url", "") or "").strip()
-    html_text = str(getattr(page, "html", "") or "")
-    if not url or not html_text:
-        return ""
-    return build_shell_fingerprint(url, html_text)
-
-
-def _pick_shell_canonical_url(
-    *,
-    start_url: str,
-    homepage_fingerprint: str,
-    fingerprint: str,
-    urls: list[str],
-) -> str:
-    if homepage_fingerprint and fingerprint == homepage_fingerprint and start_url in urls:
-        return start_url
-    return sorted(urls, key=_shell_canonical_sort_key)[0]
-
-
-def _shell_canonical_sort_key(url: str) -> tuple[int, int, int, str]:
-    lowered = str(url or "").strip().lower()
-    path = lowered.rstrip("/").split("://", 1)[-1].split("/", 1)[-1]
-    score = 0
-    for token, value in (
-        ("impressum", 120),
-        ("imprint", 118),
-        ("legal-notice", 110),
-        ("legal", 100),
-        ("contact-us", 94),
-        ("contact", 90),
-        ("about-us", 82),
-        ("about", 76),
-        ("company", 70),
-        ("our-team", 58),
-        ("team", 52),
-        ("people", 48),
-        ("executive-team", 18),
-        ("leadership", 12),
-        ("management", 8),
-    ):
-        if token in lowered:
-            score += value
-    depth = path.count("/") if path else 0
-    return (-score, depth, len(lowered), lowered)
-
-
 def _build_site_protocol_config(config: AppConfig, deadline_monotonic: float | None) -> SiteProtocolConfig:
     page_concurrency = max(int(getattr(config, "page_concurrency", 1) or 1), 1)
     page_worker_count = max(int(getattr(config, "page_worker_count", page_concurrency) or page_concurrency), 1)
@@ -716,11 +617,14 @@ def _build_discovery_snapshot(
 
 
 def _has_enough_discovery_coverage(snapshot: DiscoverySnapshot, *, rep_target_count: int = 5) -> bool:
-    if len(snapshot.rep_urls) < rep_target_count:
-        return False
+    if rep_target_count > 0:
+        if len(snapshot.rep_urls) < rep_target_count:
+            return False
+        if not _has_high_confidence_representative_coverage(snapshot):
+            return False
     if count_selected_families(snapshot.candidates, snapshot.email_urls) < _DISCOVERY_EMAIL_FAMILY_TARGET:
         return False
-    return _has_high_confidence_representative_coverage(snapshot)
+    return True
 
 
 def _has_high_confidence_representative_coverage(snapshot: DiscoverySnapshot) -> bool:

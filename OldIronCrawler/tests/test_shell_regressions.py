@@ -14,8 +14,11 @@ from oldironcrawler.extractor.email_rules import collect_emails_for_pages
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages
 from oldironcrawler.extractor.protocol_client import HtmlPage
 from oldironcrawler.extractor import shell_page as shell_module
-from oldironcrawler.extractor.service import _build_shell_alias_map, _canonicalize_target_urls
-from oldironcrawler.extractor.shell_page import build_shell_evidence_html
+from oldironcrawler.extractor.shell_page import (
+    build_shell_alias_map,
+    build_shell_evidence_html,
+    canonicalize_shell_target_urls,
+)
 
 
 def test_shell_evidence_keeps_site_emails_but_drops_placeholder_and_regulator_noise() -> None:
@@ -66,12 +69,12 @@ def test_shell_alias_map_collapses_same_shell_fallback_routes() -> None:
         fake_leadership: HtmlPage(url=fake_leadership, html=shell_html),
     }
 
-    alias_map = _build_shell_alias_map(
+    alias_map = build_shell_alias_map(
         start_url=homepage,
         page_map=page_map,
         target_urls=[homepage, fake_people, fake_leadership],
     )
-    canonical_urls = _canonicalize_target_urls(
+    canonical_urls = canonicalize_shell_target_urls(
         [fake_people, fake_leadership, homepage],
         alias_map,
     )

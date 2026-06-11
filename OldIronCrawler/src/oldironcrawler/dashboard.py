@@ -22,7 +22,10 @@ class DashboardSession:
     concurrency: int = app_module.DEFAULT_SITE_CONCURRENCY
     site_timeout_seconds: int = app_module.DEFAULT_SITE_TIMEOUT_SECONDS
     last_delivery_path: Path | None = None
+    last_failed_path: Path | None = None
     llm_base_url: str = ""
+    collect_email_enabled: bool = True
+    collect_phone_enabled: bool = True
     extract_representative_enabled: bool = False
     search_representative_enabled: bool = False
 
@@ -44,6 +47,8 @@ def run_dashboard(project_root: Path, initial_key: str) -> int:
                 f"API 入口：{session.llm_base_url or '未就绪'}",
                 f"并发设置：{session.concurrency}",
                 f"单站等待上限：{session.site_timeout_seconds} 秒",
+                f"邮箱：{'开' if session.collect_email_enabled else '关'}",
+                f"电话：{'开' if session.collect_phone_enabled else '关'}",
                 f"提取代表人：{'开' if session.extract_representative_enabled else '关'}",
                 f"搜索现役最大代表人：{'开' if session.search_representative_enabled else '关'}",
                 "",
@@ -105,6 +110,8 @@ def _handle_start_crawl(session: DashboardSession) -> None:
             concurrency=session.concurrency,
             site_timeout_seconds=session.site_timeout_seconds,
             llm_base_url=session.llm_base_url,
+            collect_email_enabled=session.collect_email_enabled,
+            collect_phone_enabled=session.collect_phone_enabled,
             extract_representative_enabled=session.extract_representative_enabled,
             search_representative_enabled=session.search_representative_enabled,
         )
@@ -114,7 +121,10 @@ def _handle_start_crawl(session: DashboardSession) -> None:
     session.current_key = result.effective_key
     session.llm_base_url = result.llm_base_url or session.llm_base_url
     session.last_delivery_path = result.delivery_path
-    wait_for_enter(f"任务完成：{result.delivery_path}\n按回车返回主菜单。")
+    session.last_failed_path = result.failed_path
+    wait_for_enter(
+        f"任务完成：\n成功文件：{result.delivery_path}\n失败文件：{result.failed_path}\n按回车返回主菜单。"
+    )
 
 
 def _select_input_file(session: DashboardSession) -> Path | None:
@@ -155,7 +165,9 @@ def _handle_open_output(session: DashboardSession) -> None:
     else:
         lines.append("当前还没有结果文件。")
     if session.last_delivery_path is not None:
-        lines.extend(["", f"最近结果：{session.last_delivery_path.name}"])
+        lines.extend(["", f"最近成功文件：{session.last_delivery_path.name}"])
+    if session.last_failed_path is not None:
+        lines.append(f"最近失败文件：{session.last_failed_path.name}")
     lines.extend(["", f"文件夹路径：{session.project_root / 'output'}"])
     _render_panel("output 文件夹", lines)
     _open_folder(session.project_root / "output")
@@ -170,6 +182,8 @@ def _handle_system_config(session: DashboardSession) -> str | None:
                 key_status=_display_key_status(session),
                 concurrency=session.concurrency,
                 site_timeout_seconds=session.site_timeout_seconds,
+                collect_email_enabled=session.collect_email_enabled,
+                collect_phone_enabled=session.collect_phone_enabled,
                 extract_representative_enabled=session.extract_representative_enabled,
                 search_representative_enabled=session.search_representative_enabled,
             ),
@@ -200,18 +214,26 @@ def _handle_system_config(session: DashboardSession) -> str | None:
             )
             continue
         if choice == "4":
+            session.collect_email_enabled = not session.collect_email_enabled
+            _show_message(f"邮箱已{'开启' if session.collect_email_enabled else '关闭'}。")
+            continue
+        if choice == "5":
+            session.collect_phone_enabled = not session.collect_phone_enabled
+            _show_message(f"电话已{'开启' if session.collect_phone_enabled else '关闭'}。")
+            continue
+        if choice == "6":
             session.extract_representative_enabled = not session.extract_representative_enabled
             _show_message(
                 f"提取代表人已{'开启' if session.extract_representative_enabled else '关闭'}。"
             )
             continue
-        if choice == "5":
+        if choice == "7":
             session.search_representative_enabled = not session.search_representative_enabled
             _show_message(
                 f"搜索现役最大代表人已{'开启' if session.search_representative_enabled else '关闭'}。"
             )
             continue
-        if choice == "6":
+        if choice == "8":
             return None
         _show_message("输入无效，请重新选择。")
 
@@ -377,6 +399,8 @@ def _build_system_config_lines(
     key_status: str,
     concurrency: int,
     site_timeout_seconds: int,
+    collect_email_enabled: bool,
+    collect_phone_enabled: bool,
     extract_representative_enabled: bool,
     search_representative_enabled: bool,
 ) -> list[str]:
@@ -384,15 +408,19 @@ def _build_system_config_lines(
         f"Key 状态：{key_status}",
         f"并发设置：{concurrency}",
         f"单站等待上限：{site_timeout_seconds} 秒",
+        f"邮箱：{'开' if collect_email_enabled else '关'}",
+        f"电话：{'开' if collect_phone_enabled else '关'}",
         f"提取代表人：{'开' if extract_representative_enabled else '关'}",
         f"搜索现役最大代表人：{'开' if search_representative_enabled else '关'}",
         "",
         "1. Key 设置",
         "2. 并发设置",
         "3. 单站等待上限",
-        "4. 提取代表人（开/关切换）",
-        "5. 搜索现役最大代表人（开/关切换）",
-        "6. 返回主菜单",
+        "4. 邮箱（开/关切换）",
+        "5. 电话（开/关切换）",
+        "6. 提取代表人（开/关切换）",
+        "7. 搜索现役最大代表人（开/关切换）",
+        "8. 返回主菜单",
     ]
 
 

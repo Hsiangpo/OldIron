@@ -16,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
 from oldironcrawler import app as app_module
 from oldironcrawler import console as console_module
 from oldironcrawler import dashboard as dashboard_module
+from oldironcrawler import reporter as reporter_module
 from oldironcrawler.extractor import llm_client as llm_module
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmTemporaryError, WebsiteLlmClient
 from oldironcrawler.importer import ImportedWebsite
@@ -50,6 +51,9 @@ class _FakeRuntimeStore:
 
     def progress(self) -> dict[str, int]:
         return {"total": 1}
+
+    def delivery_report_rows(self) -> list[dict[str, str]]:
+        return []
 
     def close(self) -> None:
         self.closed = True
@@ -160,28 +164,48 @@ def test_run_selected_input_uses_selected_ingress_for_rows_and_crawl(tmp_path: P
     )
     rows = [ImportedWebsite(input_index=1, raw_website="acme.com", website="https://acme.com", dedupe_key="acme.com")]
     seen: list[str] = []
+    report_calls: list[dict[str, object]] = []
 
     def fake_load_rows(config, _input_path: Path):
         seen.append(f"load:{config.llm_base_url}")
         return rows
 
     def fake_run(config, _store, _delivery_path) -> None:
-        seen.append(f"run:{config.llm_base_url}")
+        seen.append(
+            "run:"
+            f"{config.llm_base_url}:"
+            f"email={config.collect_email_enabled}:"
+            f"phone={config.collect_phone_enabled}:"
+            f"snapshot={Path(_delivery_path).name}"
+        )
 
     monkeypatch.setattr(app_module, "_load_input_rows", fake_load_rows)
     monkeypatch.setattr(app_module, "RuntimeStore", _FakeRuntimeStore)
     monkeypatch.setattr(app_module, "run_crawl_session", fake_run)
+    monkeypatch.setattr(reporter_module, "write_delivery_reports", lambda **kwargs: report_calls.append(kwargs))
 
     result = app_module.run_selected_input(
         tmp_path,
         "good-key",
         workbook,
         llm_base_url="https://fast.example/v1",
+        collect_email_enabled=True,
+        collect_phone_enabled=False,
     )
 
     assert result.exit_code == 0
     assert result.llm_base_url == "https://fast.example/v1"
-    assert seen == ["load:https://fast.example/v1", "run:https://fast.example/v1"]
+    assert result.delivery_path.name == "sites-xlsx_success.csv"
+    assert result.failed_path.name == "sites-xlsx_failed.csv"
+    assert seen == [
+        "load:https://fast.example/v1",
+        "run:https://fast.example/v1:email=True:phone=False:snapshot=sites-xlsx.snapshot.csv",
+    ]
+    assert len(report_calls) == 1
+    assert report_calls[0]["success_path"].name == "sites-xlsx_success.csv"
+    assert report_calls[0]["failed_path"].name == "sites-xlsx_failed.csv"
+    assert report_calls[0]["include_email"] is True
+    assert report_calls[0]["include_phone"] is False
 
 
 def test_classify_invalid_api_key_requires_new_key() -> None:
@@ -562,6 +586,7 @@ def test_run_dashboard_retries_invalid_file_choice_inside_panel(tmp_path: Path, 
         lambda project_root, current_key, input_path, **kwargs: event_log.append(f"run:{input_path.name}") or app_module.CrawlRunResult(
             exit_code=0,
             delivery_path=tmp_path / "output" / "sites.csv",
+            failed_path=tmp_path / "output" / "sites_failed.csv",
             effective_key=current_key,
         ),
     )
@@ -609,11 +634,16 @@ def test_dashboard_wrap_and_pad_handle_wide_characters() -> None:
 
 def test_dashboard_uses_numeric_back_options() -> None:
     assert "0. 返回主菜单" in dashboard_module._build_file_select_lines([], None)
-    assert "6. 返回主菜单" in dashboard_module._build_system_config_lines(
+    lines = dashboard_module._build_system_config_lines(
         key_status="已设置",
         concurrency=32,
         site_timeout_seconds=180,
+        collect_email_enabled=True,
+        collect_phone_enabled=True,
         extract_representative_enabled=True,
         search_representative_enabled=True,
     )
+    assert "8. 返回主菜单" in lines
+    assert "4. 邮箱（开/关切换）" in lines
+    assert not any("AI 邮箱" in line or "规则" in line for line in lines)
     assert "3. 返回系统配置" in dashboard_module._build_key_settings_lines("已设置")

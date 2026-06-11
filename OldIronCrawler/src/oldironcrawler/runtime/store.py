@@ -473,6 +473,39 @@ class RuntimeStore:
             for row in rows
         ]
 
+    def delivery_report_rows(self) -> list[dict[str, str]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT input_company_name,
+                       company_name,
+                       representative,
+                       emails,
+                       searched_representative,
+                       phones,
+                       website,
+                       status,
+                       last_error
+                FROM sites
+                WHERE status IN ('done', 'dropped')
+                ORDER BY input_index ASC
+                """
+            ).fetchall()
+        return [
+            {
+                "input_company_name": str(row["input_company_name"] or ""),
+                "company_name": str(row["company_name"] or ""),
+                "representative": str(row["representative"] or ""),
+                "emails": str(row["emails"] or ""),
+                "searched_representative": str(row["searched_representative"] or ""),
+                "phones": str(row["phones"] or ""),
+                "website": str(row["website"] or ""),
+                "status": str(row["status"] or ""),
+                "last_error": str(row["last_error"] or ""),
+            }
+            for row in rows
+        ]
+
     def load_learned_tokens(self, kind: str) -> dict[str, int]:
         with self._connect() as conn:
             rows = conn.execute(

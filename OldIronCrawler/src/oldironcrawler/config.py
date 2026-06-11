@@ -185,6 +185,8 @@ class AppConfig:
     email_page_hard_limit: int
     page_total_hard_limit: int
     email_stop_same_domain_count: int
+    collect_email_enabled: bool
+    collect_phone_enabled: bool
     tavily_api_key: str
     search_representative_enabled: bool
     extract_representative_enabled: bool
@@ -228,6 +230,8 @@ class AppConfig:
             email_page_hard_limit=max(_config_int(values, "EMAIL_PAGE_HARD_LIMIT", 16), 0),
             page_total_hard_limit=max(_config_int(values, "PAGE_TOTAL_HARD_LIMIT", 20), 1),
             email_stop_same_domain_count=max(_config_int(values, "EMAIL_STOP_SAME_DOMAIN_COUNT", 2), 1),
+            collect_email_enabled=_config_bool(values, "COLLECT_EMAIL_ENABLED", True),
+            collect_phone_enabled=_config_bool(values, "COLLECT_PHONE_ENABLED", True),
             tavily_api_key=_config_str(values, "TAVILY_API_KEY"),
             search_representative_enabled=_config_bool(values, "SEARCH_REPRESENTATIVE_ENABLED", False),
             extract_representative_enabled=_config_bool(values, "EXTRACT_REPRESENTATIVE_ENABLED", False),
