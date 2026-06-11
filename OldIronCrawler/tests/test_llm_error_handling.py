@@ -493,7 +493,6 @@ def test_run_dashboard_persists_validated_key_to_env(tmp_path: Path, monkeypatch
                 "LLM_BASE_URL=https://example.com/v1",
                 "LLM_MODEL=gpt-5.4-mini",
                 "LLM_KEY=",
-                "LLM_API_KEY=",
             ]
         ),
         encoding="utf-8",
@@ -510,7 +509,6 @@ def test_run_dashboard_persists_validated_key_to_env(tmp_path: Path, monkeypatch
 
     assert result == 0
     assert "LLM_KEY=saved-key" in env_text
-    assert "LLM_API_KEY=saved-key" in env_text
 
 
 def test_llm_ping_rejects_invalid_response_payload(monkeypatch) -> None:

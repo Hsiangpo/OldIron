@@ -12,7 +12,6 @@ from dotenv import dotenv_values
 
 _PACKAGED_IGNORED_ENV_KEYS = {
     "LLM_KEY",
-    "LLM_API_KEY",
     "LLM_BASE_URL",
     "LLM_BASE_URLS",
     "LLM_TLS_VERIFY",
@@ -130,7 +129,7 @@ def _directory_is_usable(directory: Path) -> bool:
 
 def read_saved_llm_key(project_root: Path) -> str:
     values = _load_config_values(project_root)
-    return _config_str(values, "LLM_KEY") or _config_str(values, "LLM_API_KEY")
+    return _config_str(values, "LLM_KEY")
 
 
 def persist_llm_key(project_root: Path, llm_key: str) -> None:
@@ -139,7 +138,6 @@ def persist_llm_key(project_root: Path, llm_key: str) -> None:
     saved_key = _sanitize_env_value(llm_key)
     updated: list[str] = []
     seen_key = False
-    seen_api_key = False
     for line in lines:
         stripped = str(line or "").strip()
         if stripped.startswith("LLM_KEY="):
@@ -147,14 +145,10 @@ def persist_llm_key(project_root: Path, llm_key: str) -> None:
             seen_key = True
             continue
         if stripped.startswith("LLM_API_KEY="):
-            updated.append(f"LLM_API_KEY={saved_key}")
-            seen_api_key = True
-            continue
+            continue  # 旧的双命名键，统一丢弃，只保留 LLM_KEY
         updated.append(line)
     if not seen_key:
         updated.append(f"LLM_KEY={saved_key}")
-    if not seen_api_key:
-        updated.append(f"LLM_API_KEY={saved_key}")
     env_path.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
 
 
@@ -205,10 +199,7 @@ class AppConfig:
     @classmethod
     def load(cls, project_root: Path, llm_key_override: str | None = None) -> "AppConfig":
         values = _load_config_values(project_root)
-        resolved_llm_key = str(llm_key_override or "").strip() or _config_str(values, "LLM_KEY") or _config_str(
-            values,
-            "LLM_API_KEY",
-        )
+        resolved_llm_key = str(llm_key_override or "").strip() or _config_str(values, "LLM_KEY")
         return cls(
             project_root=project_root,
             websites_dir=resolve_websites_dir(project_root),

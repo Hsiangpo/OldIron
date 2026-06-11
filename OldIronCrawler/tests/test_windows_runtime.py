@@ -76,7 +76,6 @@ def test_packaging_targets_portable_folder_layout(tmp_path: Path) -> None:
             [
                 "LLM_BASE_URL=https://example.com/v1",
                 "LLM_KEY=env-secret",
-                "LLM_API_KEY=env-api-secret",
                 "LLM_MODEL=gpt-5.4-mini",
                 "PROXY_URL=http://127.0.0.1:7897",
                 "CAPSOLVER_API_KEY=capsolver-secret",
@@ -98,9 +97,7 @@ def test_packaging_targets_portable_folder_layout(tmp_path: Path) -> None:
     assert (package_root / ".env").exists()
     packaged_env = (package_root / ".env").read_text(encoding="utf-8")
     assert "LLM_KEY=" in packaged_env
-    assert "LLM_API_KEY=" in packaged_env
     assert "env-secret" not in packaged_env
-    assert "env-api-secret" not in packaged_env
     assert "PROXY_URL=" in packaged_env
     assert "CAPSOLVER_API_KEY=" in packaged_env
     assert "CAPSOLVER_PROXY=" in packaged_env
@@ -276,7 +273,6 @@ def test_packaged_runtime_ignores_environment_secret_values(tmp_path: Path, monk
             [
                 "LLM_BASE_URL=https://dotenv.example/v1",
                 "LLM_KEY=",
-                "LLM_API_KEY=",
                 "LLM_MODEL=dotenv-model",
                 "CAPSOLVER_API_KEY=",
                 "PROXY_URL=",
@@ -284,7 +280,6 @@ def test_packaged_runtime_ignores_environment_secret_values(tmp_path: Path, monk
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("LLM_API_KEY", "env-secret")
     monkeypatch.setenv("LLM_BASE_URL", "https://evil.example/v1")
     monkeypatch.setenv("LLM_BASE_URLS", "https://evil-extra.example/v1")
     monkeypatch.setenv("CAPSOLVER_API_KEY", "capsolver-secret")
@@ -371,7 +366,7 @@ def test_frozen_runtime_does_not_persist_llm_key_to_portable_env(tmp_path: Path,
     import oldironcrawler.app as app_module
 
     env_path = tmp_path / ".env"
-    env_path.write_text("LLM_KEY=\nLLM_API_KEY=\n", encoding="utf-8")
+    env_path.write_text("LLM_KEY=\n", encoding="utf-8")
     monkeypatch.setattr(app_module, "sys", SimpleNamespace(frozen=True), raising=False)
 
     app_module._persist_runtime_llm_key(tmp_path, "runtime-secret")
@@ -379,7 +374,6 @@ def test_frozen_runtime_does_not_persist_llm_key_to_portable_env(tmp_path: Path,
 
     assert "runtime-secret" not in env_text
     assert "LLM_KEY=\n" in env_text
-    assert "LLM_API_KEY=\n" in env_text
 
 
 def test_build_artifact_stem_separates_suffixes() -> None:
