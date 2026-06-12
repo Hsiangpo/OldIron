@@ -16,7 +16,7 @@ from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
-from oldironcrawler.ui.console import get_console, hairline
+from oldironcrawler.ui.console import content_width, get_console, hairline
 from oldironcrawler.ui.theme import BAR_EMPTY, BAR_FULL, CHECK, CROSS, DOT
 
 
@@ -90,10 +90,10 @@ def build_card(event: SiteResultEvent) -> RenderableType:
     found = bool(str(event.company_name or "").strip())
     glyph = Text(f"{CHECK} " if found else f"{CROSS} ", style="ready" if found else "fail")
     title = Text(str(event.company_name or "").strip() or event.website, style="value.strong")
-    header = Table.grid(expand=True)
-    header.add_column(justify="left")
-    header.add_column(justify="right")
-    header.add_row(Text.assemble(glyph, title), Text(f"{event.completed_index}/{event.total}", style="hint"))
+    index = Text(f"{event.completed_index}/{event.total}", style="hint")
+    # 序号靠右对齐到内容宽度（手算间距），避免 grid expand 在宽终端里把序号推到极右、留大空隙。
+    gap = max(content_width() - glyph.cell_len - title.cell_len - index.cell_len, 1)
+    header = Text.assemble(glyph, title, " " * gap, index)
 
     rows: list[RenderableType] = [header, Text(f"   {event.website}", style="label")]
     detail = Table.grid(padding=(0, 2))
