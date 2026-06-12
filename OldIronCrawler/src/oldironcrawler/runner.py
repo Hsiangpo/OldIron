@@ -81,14 +81,7 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
             done, _ = wait(futures.keys(), timeout=heartbeat_seconds, return_when=FIRST_COMPLETED)
             if not done:
                 delivery_writer.flush_if_due()
-                progress = store.progress()
-                print_progress_heartbeat(
-                    total=total,
-                    done=progress["done"],
-                    running=progress["running"],
-                    dropped=progress["dropped"],
-                    pending=progress["pending"] + progress["failed_temp"],
-                )
+                _emit_progress_snapshot(store, total)
                 continue
             llm_error: LlmConfigurationError | None = None
             completed_count, llm_error = _process_done_futures(
@@ -104,6 +97,7 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                 show_representative=show_rep,
                 show_searched_representative=show_search,
             )
+            _emit_progress_snapshot(store, total)
             if llm_error is not None:
                 completed_count, _ = _process_done_futures(
                     done=_collect_ready_futures(futures),
@@ -254,6 +248,18 @@ def _count_completed_sites(progress: dict[str, int]) -> int:
     done = int(progress.get("done", 0) or 0)
     dropped = int(progress.get("dropped", 0) or 0)
     return done + dropped
+
+
+def _emit_progress_snapshot(store: RuntimeStore, total: int) -> None:
+    """读一次存储进度并广播：让底部进度条的计数器实时刷新，不只靠空闲心跳。"""
+    progress = store.progress()
+    print_progress_heartbeat(
+        total=total,
+        done=progress["done"],
+        running=progress["running"],
+        dropped=progress["dropped"],
+        pending=progress["pending"] + progress["failed_temp"],
+    )
 
 
 def _run_single_site(
