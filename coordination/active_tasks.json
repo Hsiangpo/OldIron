@@ -1,5 +1,30 @@
 {
   "version": 1,
-  "updated_at": "2026-06-12T17:23:28Z",
-  "tasks": []
+  "updated_at": "2026-06-12T18:02:15Z",
+  "tasks": [
+    {
+      "task_id": "oldironcrawler-devtools-no-email-turkey-20260613",
+      "status": "in_progress",
+      "machine": "Windows-D",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "OldIronCrawler"
+      ],
+      "planned_files": [
+        "OldIronCrawler/src/oldironcrawler/extractor/value_rules.py",
+        "OldIronCrawler/src/oldironcrawler/extractor/protocol_discovery.py",
+        "OldIronCrawler/src/oldironcrawler/extractor/discovery_fallback.py",
+        "OldIronCrawler/src/oldironcrawler/extractor/email_rules.py",
+        "OldIronCrawler/tests/test_core.py"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-06-12T18:02:15Z",
+      "last_heartbeat_at": "2026-06-12T18:02:15Z",
+      "notes": "Use Chrome DevTools evidence to diagnose and improve Turkey opened-no-email sites"
+    }
+  ]
 }
