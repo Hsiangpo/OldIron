@@ -1,27 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-06-12T19:16:09Z",
-  "tasks": [
-    {
-      "task_id": "oldironcrawler-turkey-remaining-no-email-20260613",
-      "status": "in_progress",
-      "machine": "windows",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [
-        "OldIronCrawler/src/oldironcrawler/extractor",
-        "OldIronCrawler/tests"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-12T19:16:09Z",
-      "last_heartbeat_at": "2026-06-12T19:16:09Z",
-      "notes": "Investigate and optimize remaining 11 Turkey open-but-no-email sites after DevTools validation."
-    }
-  ]
+  "updated_at": "2026-06-12T19:54:09Z",
+  "tasks": []
 }
