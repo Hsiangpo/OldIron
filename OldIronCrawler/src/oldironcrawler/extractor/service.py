@@ -6,11 +6,12 @@ import time
 
 from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.company_rules import clean_company_name_candidate, extract_company_name_fallback
+from oldironcrawler.extractor.discovery_fallback import has_non_homepage_email_target, probe_common_email_value_urls
 from oldironcrawler.extractor.email_rules import analyze_email_set, collect_emails_for_pages, join_emails, merge_ai_emails_for_website
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtractionResult, LlmTemporaryError, WebsiteLlmClient
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_phones
-from oldironcrawler.extractor.protocol_client import HtmlPage, ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient, SiteProtocolConfig
+from oldironcrawler.extractor.protocol_client import HtmlPage, SiteProtocolClient, SiteProtocolConfig
 from oldironcrawler.extractor.representative_search import ActiveRepresentativeSearchResult
 from oldironcrawler.extractor.shell_page import (
     build_shell_alias_map,
@@ -142,6 +143,7 @@ class SiteProfileService:
                     rep_learned,
                     email_learned,
                     rep_target_count=rep_target_count,
+                    contact_target_enabled=need_contact_extract,
                 ),
             )
             rep_urls = []
@@ -553,6 +555,7 @@ def _discover_value_snapshot(
     email_learned: dict[str, int],
     *,
     rep_target_count: int = 5,
+    contact_target_enabled: bool = True,
 ) -> DiscoverySnapshot:
     primary = protocol.discover_primary_urls(website, limit=_DISCOVERY_PRIMARY_LIMIT)
     snapshot = _build_discovery_snapshot(
@@ -584,7 +587,7 @@ def _discover_value_snapshot(
         limit=_DISCOVERY_RELATED_LIMIT,
     )
     merged = _merge_unique_urls(merged, related_urls, limit=_DISCOVERY_FINAL_LIMIT)
-    return _build_discovery_snapshot(
+    snapshot = _build_discovery_snapshot(
         website,
         merged,
         rep_learned,
@@ -592,6 +595,19 @@ def _discover_value_snapshot(
         rep_target_count=rep_target_count,
         homepage_html=primary.homepage_html,
     )
+    if contact_target_enabled and not has_non_homepage_email_target(website, snapshot.email_urls):
+        fallback_urls = probe_common_email_value_urls(protocol, website, snapshot)
+        if fallback_urls:
+            merged = _merge_unique_urls(snapshot.urls, fallback_urls, limit=_DISCOVERY_FINAL_LIMIT)
+            snapshot = _build_discovery_snapshot(
+                website,
+                merged,
+                rep_learned,
+                email_learned,
+                rep_target_count=rep_target_count,
+                homepage_html=primary.homepage_html,
+            )
+    return snapshot
 
 
 def _build_discovery_snapshot(

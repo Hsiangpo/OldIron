@@ -31,7 +31,7 @@ from oldironcrawler.extractor.page_pool import PageFetchPool, PageFetchPoolConfi
 from oldironcrawler.extractor.protocol_client import ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient, SiteProtocolConfig
 from oldironcrawler.extractor.protocol_client import HtmlPage
 from oldironcrawler.extractor.umbraco_people import UmbracoBio, maybe_build_umbraco_people_page
-from oldironcrawler.extractor.service import _build_site_protocol_config, _merge_page_targets, _normalize_llm_result
+from oldironcrawler.extractor.service import _build_site_protocol_config, _discover_value_snapshot, _merge_page_targets, _normalize_llm_result
 from oldironcrawler.extractor.service import DiscoverySnapshot, SiteProfileService
 from oldironcrawler.extractor.value_rules import build_candidates, extract_path_tokens, select_email_urls, select_representative_urls
 from oldironcrawler.importer import ImportedWebsite, choose_input_file, compute_rows_fingerprint, load_websites
@@ -1153,6 +1153,88 @@ def test_site_profile_service_skips_llm_when_rep_pages_are_empty(tmp_path: Path,
     store.close()
 
 
+def test_discovery_snapshot_probes_common_paths_when_email_targets_missing() -> None:
+    class FakeProtocol:
+        def __init__(self) -> None:
+            self.fetch_calls: list[list[str]] = []
+
+        def discover_primary_urls(self, website: str, *, limit: int):
+            urls = [f"{website}/urunler/sayfa-{index}" for index in range(20)]
+            return SimpleNamespace(urls=urls, homepage_html="")
+
+        def discover_sitemap_urls(self, website: str, *, limit: int) -> list[str]:
+            return []
+
+        def discover_related_subdomain_urls(
+            self,
+            website: str,
+            *,
+            homepage_html: str,
+            direct_urls: list[str],
+            limit: int,
+        ) -> list[str]:
+            return []
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            self.fetch_calls.append(list(urls))
+            return [
+                HtmlPage(url="https://example.com.tr/iletisim", html="<html>info@example.com.tr</html>")
+                for url in urls
+                if url == "https://example.com.tr/iletisim"
+            ]
+
+    protocol = FakeProtocol()
+
+    snapshot = _discover_value_snapshot(protocol, "https://example.com.tr", {}, {}, rep_target_count=0)
+
+    assert protocol.fetch_calls
+    assert "https://example.com.tr/iletisim" in snapshot.urls
+    assert "https://example.com.tr/iletisim" in snapshot.email_urls
+
+
+def test_discovery_snapshot_probes_locale_paths_from_discovered_urls() -> None:
+    class FakeProtocol:
+        def __init__(self) -> None:
+            self.fetch_calls: list[list[str]] = []
+
+        def discover_primary_urls(self, website: str, *, limit: int):
+            urls = [
+                f"{website}/tr/index.html",
+                f"http://www.example.com/gb/index.html",
+                f"http://www.example.com/en/index.html",
+            ]
+            return SimpleNamespace(urls=urls, homepage_html="")
+
+        def discover_sitemap_urls(self, website: str, *, limit: int) -> list[str]:
+            return []
+
+        def discover_related_subdomain_urls(
+            self,
+            website: str,
+            *,
+            homepage_html: str,
+            direct_urls: list[str],
+            limit: int,
+        ) -> list[str]:
+            return []
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            self.fetch_calls.append(list(urls))
+            return [
+                HtmlPage(url="https://example.com/tr/iletisim/index.html", html="<html>info@example.com</html>")
+                for url in urls
+                if url == "https://example.com/tr/iletisim/index.html"
+            ]
+
+    protocol = FakeProtocol()
+
+    snapshot = _discover_value_snapshot(protocol, "https://example.com", {}, {}, rep_target_count=0)
+
+    assert protocol.fetch_calls
+    assert "https://example.com/tr/iletisim/index.html" in snapshot.urls
+    assert "https://example.com/tr/iletisim/index.html" in snapshot.email_urls
+
+
 def test_describe_error_reason_for_cloudflare_challenge() -> None:
     message = _describe_error_reason("cloudflare_challenge: https://example.com")
 
@@ -1403,6 +1485,22 @@ def test_select_urls_include_german_impressum_and_kontakt() -> None:
     assert "https://atlas.de/impressum" in rep_urls
     assert "https://atlas.de/kontakt" in rep_urls
     assert "https://atlas.de/kontakt" in email_urls
+
+
+def test_select_email_urls_includes_turkey_brazil_japan_value_pages() -> None:
+    cases = [
+        ("https://x.com.tr", "https://x.com.tr/iletisim"),
+        ("https://x.com.br", "https://x.com.br/fale-conosco"),
+        ("https://x.co.jp", "https://x.co.jp/inquiry/"),
+        ("https://x.co.jp", "https://x.co.jp/recruit/form/"),
+    ]
+
+    for start_url, value_url in cases:
+        candidates = build_candidates(start_url, [value_url], {}, {})
+
+        email_urls = select_email_urls(candidates)
+
+        assert value_url in email_urls
 
 
 def test_build_site_protocol_config_separates_probe_batch_and_global_worker_limits() -> None:
@@ -2555,6 +2653,24 @@ def test_build_common_probe_urls_prefers_locale_prefixed_paths() -> None:
     assert urls.index("https://example.com/en/imprint") < urls.index("https://example.com/imprint")
     assert "https://example.com/en/company-leadership" in urls
     assert "https://www.example.com/en/executive-team" in urls
+
+
+def test_common_probe_urls_include_turkey_brazil_japan_value_paths() -> None:
+    turkey_root_urls = protocol_module._build_common_probe_urls("https://example.com.tr")
+    turkey_urls = protocol_module._build_common_probe_urls("https://example.com.tr/tr")
+    brazil_urls = protocol_module._build_common_probe_urls("https://example.com.br")
+    japan_urls = protocol_module._build_common_probe_urls("https://example.co.jp")
+
+    assert "https://example.com.tr/tr/iletisim" in turkey_root_urls
+    assert "https://example.com.tr/tr/iletisim/index.html" in turkey_root_urls
+    assert "https://example.com.tr/tr/iletisim" in turkey_urls
+    assert "https://example.com.tr/tr/bize-ulasin" in turkey_urls
+    assert "https://example.com.br/pt/contato" in brazil_urls
+    assert "https://example.com.br/fale-conosco" in brazil_urls
+    assert "https://example.com.br/ouvidoria" in brazil_urls
+    assert "https://example.co.jp/ja/inquiry" in japan_urls
+    assert "https://example.co.jp/inquiry" in japan_urls
+    assert "https://example.co.jp/recruit/form" in japan_urls
 
 
 def test_company_name_fallback_prefers_site_name_and_strips_welcome_prefix() -> None:

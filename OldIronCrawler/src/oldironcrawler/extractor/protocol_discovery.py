@@ -11,17 +11,18 @@ _SKIP_EXTENSIONS = {
     ".zip", ".tar", ".gz", ".rar", ".7z", ".exe", ".dmg", ".apk",
 }
 _RELATED_SUBDOMAIN_HOST_TOKENS = {
-    "about", "career", "careers", "company", "contact", "help", "jobs",
-    "leadership", "people", "support", "team",
+    "about", "atendimento", "career", "careers", "company", "contact", "contato",
+    "help", "inquiry", "jobs", "leadership", "people", "support", "team",
 }
 _RELATED_SUBDOMAIN_PATH_TOKENS = {
-    "about", "board", "career", "careers", "company", "contact", "director",
-    "executive", "founder", "governance", "jobs", "leadership", "management",
-    "officers", "people", "president", "privacy", "support", "team", "terms",
+    "about", "atendimento", "board", "career", "careers", "company", "contact",
+    "contato", "director", "executive", "fale", "founder", "governance",
+    "iletisim", "inquiry", "jobs", "leadership", "management", "officers",
+    "ouvidoria", "people", "president", "privacy", "support", "team", "terms",
 }
 _SUBDOMAIN_SCAN_PAGE_TOKENS = {
-    "about", "contact", "company", "help", "people", "privacy", "support",
-    "team",
+    "about", "atendimento", "contact", "contato", "company", "help", "iletisim",
+    "inquiry", "people", "privacy", "support", "team",
 }
 _TRACKING_QUERY_KEYS = {
     "fbclid",
@@ -47,8 +48,25 @@ _COMMON_VALUE_PATHS = (
     "/imprint",
     "/kontakt",
     "/kontakt.html",
+    "/iletisim",
+    "/iletisim.html",
+    "/iletisim/index.html",
+    "/bize-ulasin",
+    "/contato",
+    "/fale-conosco",
+    "/faleconosco",
+    "/atendimento",
+    "/ouvidoria",
+    "/inquiry",
+    "/contact/form",
+    "/contact/mail",
+    "/mailform",
     "/ueber-uns",
     "/uber-uns",
+    "/hakkimizda",
+    "/kurumsal",
+    "/institucional",
+    "/corporate",
     "/about-us/our-people",
     "/our-people",
     "/company-leadership",
@@ -63,12 +81,22 @@ _COMMON_VALUE_PATHS = (
     "/about",
     "/about.html",
     "/company",
+    "/ir/contact",
     "/contact-us",
     "/contact",
     "/contact.html",
+    "/form",
+    "/recruit",
+    "/recruit/form",
+    "/kariyer",
+    "/insan-kaynaklari",
+    "/trabalhe-conosco",
     "/legal-notice",
     "/privacy-policy",
     "/privacy",
+    "/kvkk",
+    "/lgpd",
+    "/privacidade",
     "/terms",
 )
 _DISCOVERY_PRIORITY_PHRASES = (
@@ -81,8 +109,19 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/impressum", 80),
     ("/imprint", 80),
     ("/kontakt", 76),
+    ("/iletisim", 76),
+    ("/bize-ulasin", 70),
+    ("/fale-conosco", 70),
+    ("/contato", 68),
+    ("/inquiry", 68),
+    ("/contact/form", 66),
+    ("/contact/mail", 66),
+    ("/mailform", 66),
     ("/ueber-uns", 60),
     ("/uber-uns", 58),
+    ("/hakkimizda", 58),
+    ("/kurumsal", 56),
+    ("/institucional", 54),
     ("/company-leadership", 78),
     ("/executive-team", 78),
     ("/leadership", 74),
@@ -94,6 +133,10 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/about", 44),
     ("/contact-us", 32),
     ("/contact", 24),
+    ("/ouvidoria", 24),
+    ("/atendimento", 22),
+    ("/trabalhe-conosco", 20),
+    ("/recruit/form", 20),
 )
 _DISCOVERY_PRIORITY_NEGATIVE_TOKENS = {
     "article",
@@ -263,20 +306,43 @@ def build_common_probe_urls(start_url: str) -> list[str]:
     if not parsed.scheme or not parsed.netloc:
         return []
     locale_prefix = extract_path_locale_prefix(parsed.path)
+    base_prefixes = _build_common_probe_prefixes(parsed.netloc, locale_prefix)
     result: list[str] = []
     seen: set[str] = set()
     hosts = [parsed.netloc]
     if parsed.netloc and not parsed.netloc.lower().startswith("www."):
         hosts.append(f"www.{parsed.netloc}")
     for host in hosts:
-        for base_prefix in ([locale_prefix] if locale_prefix else []) + [""]:
-            for path in _COMMON_VALUE_PATHS:
+        for path in _COMMON_VALUE_PATHS:
+            for base_prefix in base_prefixes:
                 joined_path = f"{base_prefix}{path}" if base_prefix else path
                 probe_url = parsed._replace(netloc=host, path=joined_path, query="", fragment="").geturl()
                 if probe_url not in seen:
                     seen.add(probe_url)
                     result.append(probe_url)
     return result
+
+
+def _build_common_probe_prefixes(host: str, locale_prefix: str) -> list[str]:
+    prefixes: list[str] = []
+    if locale_prefix:
+        prefixes.append(locale_prefix)
+    inferred = _infer_common_locale_prefixes(host)
+    for prefix in [*inferred, ""]:
+        if prefix not in prefixes:
+            prefixes.append(prefix)
+    return prefixes
+
+
+def _infer_common_locale_prefixes(host: str) -> list[str]:
+    lowered = str(host or "").strip().lower()
+    if lowered.endswith(".tr") or ".com.tr" in lowered:
+        return ["/tr", "/en"]
+    if lowered.endswith(".br") or ".com.br" in lowered:
+        return ["/pt", "/br", "/en"]
+    if lowered.endswith(".jp") or ".co.jp" in lowered:
+        return ["/ja", "/jp", "/en"]
+    return []
 
 
 def extract_path_locale_prefix(path: str) -> str:
