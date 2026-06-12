@@ -729,12 +729,13 @@ def _select_pages_from_map(page_map: dict[str, object], urls: list[str]) -> list
 
 
 def _collect_email_rule_pages(page_map: dict[str, object], fetch_plan: dict[str, list[str]]) -> list[tuple[str, str]]:
+    homepage_pages = _select_pages_from_map(page_map, fetch_plan["homepage_primary_urls"])
     email_pages = _select_pages_from_map(
         page_map,
         [*fetch_plan["email_primary_urls"], *fetch_plan["email_overflow_urls"]],
     )
     rep_pages = _select_pages_from_map(page_map, fetch_plan["rep_urls"])
-    return _merge_email_rule_pages(email_pages, rep_pages)
+    return _merge_email_rule_pages(email_pages, homepage_pages, rep_pages)
 
 
 def _collect_primary_email_rule_pages(page_map: dict[str, object], fetch_plan: dict[str, list[str]]) -> list[tuple[str, str]]:

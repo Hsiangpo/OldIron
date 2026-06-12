@@ -257,6 +257,7 @@ _EMAIL_STRONG_SCORE = 12
 _EMAIL_STOP_SCORE = 8
 _EMAIL_HARD_LIMIT = 32
 _EMAIL_FAMILY_TARGET = 6
+_LINK_HINT_FRAGMENT_PREFIX = "oi-link-"
 _REP_POSITIVE_LEARN_CAP = 10
 _REP_PERSON_DETAIL_FINAL_BONUS = 8
 _LEARNING_STOP_TOKENS = {
@@ -495,6 +496,9 @@ def count_selected_families(candidates: list[UrlCandidate], urls: list[str]) -> 
 def extract_path_tokens(url: str) -> list[str]:
     parsed = urlparse(str(url or ""))
     parts = [segment for segment in parsed.path.split("/") if segment]
+    link_hint = _extract_link_hint_fragment(parsed.fragment)
+    if link_hint:
+        parts.append(link_hint)
     tokens: list[str] = []
     for part in parts:
         decoded = re.sub(r"\.[a-z0-9]{2,5}$", "", unquote(part).strip().lower())
@@ -505,6 +509,13 @@ def extract_path_tokens(url: str) -> list[str]:
                 if clean not in tokens:
                     tokens.append(clean)
     return tokens
+
+
+def _extract_link_hint_fragment(fragment: str) -> str:
+    value = str(fragment or "").strip().lower()
+    if not value.startswith(_LINK_HINT_FRAGMENT_PREFIX):
+        return ""
+    return value[len(_LINK_HINT_FRAGMENT_PREFIX):]
 
 
 def _expand_composite_token(token: str) -> list[str]:

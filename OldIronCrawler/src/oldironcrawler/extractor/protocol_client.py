@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+﻿from __future__ import annotations
 import gzip
 import re
 import threading
@@ -7,10 +6,8 @@ import time
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
-
 import httpx
 from curl_cffi import requests as cffi_requests
-
 from oldironcrawler.challenge_solver import resolve_cloudflare_challenge
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.protocol.content import (
@@ -50,7 +47,6 @@ from oldironcrawler.extractor.protocol_discovery import (
     prioritize_discovery_urls as _prioritize_discovery_urls,
 )
 from oldironcrawler.extractor.protocol_runtime import configure_protocol_runtime, get_probe_executor, request_slot
-
 _ROBOTS_SITEMAP_RE = re.compile(r"^Sitemap:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 _NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 _SITE_DEADLINE_SAFETY_SECONDS = 8.0
@@ -61,8 +57,6 @@ _DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS = 20.0
 _COMMON_PROBE_REQUEST_TIMEOUT_SECONDS = 3.0
 _COMMON_PROBE_BATCH_WAIT_CAP_SECONDS = 6.0
 _COMMON_PROBE_SLOT_WAIT_SECONDS = 2.0
-
-
 class SiteProtocolClient:
     def __init__(self, config: SiteProtocolConfig) -> None:
         self._config = config
@@ -73,7 +67,6 @@ class SiteProtocolClient:
         self._http_client = self._build_httpx_client()
         self._session_lock = threading.Lock()
         self._thread_sessions: dict[int, cffi_requests.Session] = {}
-
     def close(self) -> None:
         with self._session_lock:
             sessions = list(self._thread_sessions.values())
@@ -98,16 +91,13 @@ class SiteProtocolClient:
             limit=limit,
         )
         return _merge_unique_urls(extra_urls, urls, limit=limit)
-
     def discover_primary_urls(self, start_url: str, *, limit: int = 80) -> DiscoveryStageResult:
         session = self._get_or_create_session()
         urls, homepage_html = self._discover_primary_urls(session, start_url, limit=limit)
         return DiscoveryStageResult(urls=urls, homepage_html=homepage_html)
-
     def discover_sitemap_urls(self, start_url: str, *, limit: int = 80) -> list[str]:
         session = self._get_or_create_session()
         return self._discover_sitemap_urls(session, start_url, limit=limit)
-
     def discover_related_subdomain_urls(
         self,
         start_url: str,
@@ -208,7 +198,6 @@ class SiteProtocolClient:
         return session
     def _build_httpx_client(self) -> httpx.Client:
         return httpx.Client(**self._build_httpx_client_kwargs(self._config.timeout_seconds))
-
     def _build_httpx_client_kwargs(self, timeout_seconds: float) -> dict[str, object]:
         client_kwargs: dict[str, object] = {
             "follow_redirects": True,
@@ -349,7 +338,6 @@ class SiteProtocolClient:
         if last_error is not None:
             raise ProtocolTemporaryError(str(last_error or f"temporary_request: {url}"))
         return ""
-
     def _resolve_timeout(
         self,
         timeout_seconds: float | None = None,
@@ -363,14 +351,12 @@ class SiteProtocolClient:
         if remaining <= 0:
             raise ProtocolTemporaryError("site_deadline_exceeded")
         return max(min(base_timeout, remaining), 0.05)
-
     def _remaining_deadline_seconds(self, *, deadline_monotonic: float | None = None) -> float | None:
         if deadline_monotonic is not None:
             return deadline_monotonic - time.monotonic()
         if self._config.deadline_monotonic is None:
             return None
         return self._config.deadline_monotonic - time.monotonic() - _SITE_DEADLINE_SAFETY_SECONDS
-
     def _resolve_request_slot_wait_timeout(
         self,
         request_timeout_seconds: float,
@@ -388,7 +374,6 @@ class SiteProtocolClient:
         if remaining <= 0:
             raise ProtocolTemporaryError("site_deadline_exceeded")
         return max(min(wait_timeout, remaining), 0.05)
-
     def _bounded_request_slot_wait_timeout(
         self,
         request_timeout_seconds: float,
@@ -403,7 +388,6 @@ class SiteProtocolClient:
         if wait_timeout_seconds is None:
             return resolved
         return max(min(resolved, float(wait_timeout_seconds)), 0.01)
-
     def _call_optional_fallback(self, func, *args, **kwargs):
         pending_kwargs = dict(kwargs)
         optional_keys = ("request_deadline_monotonic", "request_slot_wait_seconds", "timeout_seconds")
@@ -422,7 +406,6 @@ class SiteProtocolClient:
                         break
                 if not removed:
                     raise
-
     def _call_fetch_page_optional(self, url: str, **kwargs):
         try:
             return self._fetch_page_optional(url, **kwargs)
@@ -432,7 +415,6 @@ class SiteProtocolClient:
             fallback_kwargs = dict(kwargs)
             fallback_kwargs.pop("request_deadline_monotonic", None)
             return self._fetch_page_optional(url, **fallback_kwargs)
-
     def _maybe_challenge_fallback(
         self,
         session: cffi_requests.Session,
@@ -459,13 +441,11 @@ class SiteProtocolClient:
             cloudflare_proxy_url=self._config.cloudflare_proxy_url,
             impersonate=self._config.impersonate,
         )
-
     def _cap_challenge_wait_seconds(self) -> float:
         remaining = self._remaining_deadline_seconds()
         if remaining is None:
             return self._config.capsolver_max_wait_seconds
         return max(min(self._config.capsolver_max_wait_seconds, remaining - 1.0), 0.0)
-
     def _refetch_challenge_html(self, session: cffi_requests.Session, url: str, timeout_seconds: float) -> str:
         response = None
         try:
@@ -489,7 +469,6 @@ class SiteProtocolClient:
                     response.close()
                 except Exception:  # noqa: BLE001
                     pass
-
     def _try_httpx_fallback(
         self,
         url: str,
@@ -510,7 +489,6 @@ class SiteProtocolClient:
             )
         except Exception:  # noqa: BLE001
             return None
-
     def _try_httpx_status_fallback(
         self,
         url: str,
@@ -835,7 +813,7 @@ class SiteProtocolClient:
             raise _normalize_homepage_open_error(start_url, homepage_error) from homepage_error
         guessed_urls = self._probe_common_value_urls(session, start_url, limit=limit)
         homepage_links = _extract_same_site_links(homepage_html, start_url, limit=limit) if homepage_html else []
-        merged = _merge_unique_urls(guessed_urls, homepage_links, limit=limit)
+        merged = _merge_unique_urls(homepage_links, guessed_urls, limit=limit)
         if homepage_html:
             return merged, homepage_html
         if guessed_urls:
@@ -939,7 +917,7 @@ class SiteProtocolClient:
                 allow_httpx_fallback=False,
             )
         except ProtocolPermanentError:
-            # 公共探测阶段只保留真实正文页，挑战页不再当成“命中页”。
+            # 鍏叡鎺㈡祴闃舵鍙繚鐣欑湡瀹炴鏂囬〉锛屾寫鎴橀〉涓嶅啀褰撴垚鈥滃懡涓〉鈥濄€?
             return None
         return probe_url if html_text.strip() else None
 

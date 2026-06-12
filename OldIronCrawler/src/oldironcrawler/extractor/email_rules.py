@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 
 _EMAIL_RE = re.compile(r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})", re.IGNORECASE)
+_CFEMAIL_RE = re.compile(r"data-cfemail=[\"']([0-9a-fA-F]+)[\"']", re.IGNORECASE)
 _INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad\u2060]")
 _SCRIPT_BLOCK_RE = re.compile(r"(?is)<(script|style|template)\b[^>]*>.*?</\1>")
 _MULTI_LABEL_PUBLIC_SUFFIXES = {
@@ -207,7 +208,33 @@ def extract_emails_from_html(raw_html: str) -> list[str]:
         value = str(match or "").strip().lower().rstrip(".,);:]}>")
         if value and value not in found:
             found.append(value)
+    for decoded in _extract_cloudflare_emails(normalized):
+        if decoded not in found:
+            found.append(decoded)
     return found
+
+
+def _extract_cloudflare_emails(html_text: str) -> list[str]:
+    found: list[str] = []
+    for encoded in _CFEMAIL_RE.findall(str(html_text or "")):
+        email = normalize_email_candidate(_decode_cloudflare_email(encoded))
+        if email and email not in found:
+            found.append(email)
+    return found
+
+
+def _decode_cloudflare_email(encoded: str) -> str:
+    value = str(encoded or "").strip()
+    if len(value) < 4 or len(value) % 2 != 0:
+        return ""
+    try:
+        data = bytes.fromhex(value)
+    except ValueError:
+        return ""
+    if not data:
+        return ""
+    key = data[0]
+    return "".join(chr(byte ^ key) for byte in data[1:])
 
 
 def extract_same_domain_emails_from_embedded_content(website: str, raw_html: str) -> list[str]:

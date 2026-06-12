@@ -103,14 +103,15 @@ def looks_like_shell_page(page_html: str) -> bool:
 
 def extract_first_party_asset_urls(page_url: str, page_html: str, *, limit: int = 6) -> list[str]:
     soup = BeautifulSoup(str(page_html or ""), "lxml")
-    page_domain = extract_registrable_domain(page_url)
+    asset_base_url = _select_asset_base_url(page_url, soup)
+    page_domain = extract_registrable_domain(asset_base_url)
     urls: list[str] = []
     seen: set[str] = set()
     for script in soup.find_all("script", src=True):
         src = str(script.get("src") or "").strip()
         if not src:
             continue
-        resolved = urljoin(page_url, src)
+        resolved = urljoin(asset_base_url, src)
         if resolved in seen:
             continue
         if not _is_first_party_asset(page_domain, resolved):
@@ -120,6 +121,21 @@ def extract_first_party_asset_urls(page_url: str, page_html: str, *, limit: int 
         if len(urls) >= limit:
             break
     return urls
+
+
+def _select_asset_base_url(page_url: str, soup: BeautifulSoup) -> str:
+    for link in soup.find_all("link", href=True):
+        rel_values = link.get("rel") or []
+        if isinstance(rel_values, str):
+            rel_values = [rel_values]
+        if "canonical" not in {str(value).strip().lower() for value in rel_values}:
+            continue
+        href = str(link.get("href") or "").strip()
+        resolved = urljoin(page_url, href)
+        parsed = urlparse(resolved)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return resolved
+    return page_url
 
 
 def build_shell_fingerprint(page_url: str, page_html: str) -> str:

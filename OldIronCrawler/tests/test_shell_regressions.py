@@ -120,6 +120,22 @@ def test_shell_asset_fetch_respects_deadline_and_stops_extra_requests(monkeypatc
     assert calls == ["https://0xam.de/assets/a.js"]
 
 
+def test_shell_asset_urls_use_canonical_url_for_relative_assets() -> None:
+    html_text = """
+    <html>
+      <head>
+        <link rel="canonical" href="https://biggbrandsglobal.com" />
+        <script type="module" src="/assets/index.js"></script>
+      </head>
+      <body><div id="root"></div></body>
+    </html>
+    """
+
+    urls = shell_module.extract_first_party_asset_urls("https://biggbrands.com", html_text)
+
+    assert urls == ["https://biggbrandsglobal.com/assets/index.js"]
+
+
 def test_shell_page_detects_root_container_even_with_cookie_text() -> None:
     html_text = """
     <html>

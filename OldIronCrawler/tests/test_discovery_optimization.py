@@ -36,6 +36,43 @@ def test_extract_same_site_links_strips_tracking_query_duplicates() -> None:
     assert urls == ["https://example.com/contact"]
 
 
+def test_primary_discovery_prefers_real_homepage_links_over_guessed_paths(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+    homepage_html = '<a href="/tr/iletisim">İletişim</a>'
+
+    monkeypatch.setattr(client, "_fetch_discovery_homepage", lambda *_args, **_kwargs: homepage_html)
+    monkeypatch.setattr(
+        client,
+        "_probe_common_value_urls",
+        lambda *_args, **_kwargs: ["https://example.com/kontakt", "https://example.com/impressum"],
+    )
+
+    urls, _homepage_html = client._discover_primary_urls(object(), "https://example.com", limit=2)
+
+    assert "https://example.com/tr/iletisim" in urls
+    client.close()
+
+
+def test_extract_same_site_links_uses_dominant_www_host_for_relative_links() -> None:
+    html = """
+    <a href="https://www.example.com/tr/hakkimizda">Hakkımızda</a>
+    <a href="https://www.example.com/tr/raporlar">Raporlar</a>
+    <a href="/tr/iletisim">İletişim</a>
+    """
+
+    urls = extract_same_site_links(html, "https://example.com", limit=10)
+
+    assert "https://www.example.com/tr/iletisim" in urls
+
+
+def test_extract_same_site_links_treats_extensionless_path_as_directory_base() -> None:
+    html = '<a href="iletisim.php">İletişim</a>'
+
+    urls = extract_same_site_links(html, "https://example.com/tr", limit=10)
+
+    assert "https://example.com/tr/iletisim.php" in urls
+
+
 def test_common_probe_scan_stops_after_low_yield_batches(monkeypatch) -> None:
     client = SiteProtocolClient(
         SiteProtocolConfig(

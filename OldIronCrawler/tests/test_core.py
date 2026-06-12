@@ -30,8 +30,9 @@ from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtrac
 from oldironcrawler.extractor.page_pool import PageFetchPool, PageFetchPoolConfig
 from oldironcrawler.extractor.protocol_client import ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient, SiteProtocolConfig
 from oldironcrawler.extractor.protocol_client import HtmlPage
+from oldironcrawler.extractor.protocol_discovery import extract_same_site_links
 from oldironcrawler.extractor.umbraco_people import UmbracoBio, maybe_build_umbraco_people_page
-from oldironcrawler.extractor.service import _build_site_protocol_config, _discover_value_snapshot, _merge_page_targets, _normalize_llm_result
+from oldironcrawler.extractor.service import _build_site_protocol_config, _collect_email_rule_pages, _discover_value_snapshot, _merge_page_targets, _normalize_llm_result
 from oldironcrawler.extractor.service import DiscoverySnapshot, SiteProfileService
 from oldironcrawler.extractor.value_rules import build_candidates, extract_path_tokens, select_email_urls, select_representative_urls
 from oldironcrawler.importer import ImportedWebsite, choose_input_file, compute_rows_fingerprint, load_websites
@@ -565,6 +566,32 @@ def test_site_profile_email_only_skips_representative_pages_when_company_name_gi
     assert "https://acme.com/contact" in fetched_urls
     assert "https://acme.com/team" not in fetched_urls
     store.close()
+
+
+def test_collect_email_rule_pages_includes_homepage_primary_for_footer_emails() -> None:
+    page_map = {
+        "https://yazdogan.com": HtmlPage(
+            url="https://yazdogan.com",
+            html="<html><body><p>bilgi@yazdogan.com</p></body></html>",
+        ),
+        "https://yazdogan.com/contact": HtmlPage(
+            url="https://yazdogan.com/contact",
+            html="<html><body>Contact form</body></html>",
+        ),
+    }
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": ["https://yazdogan.com"],
+        "email_primary_urls": ["https://yazdogan.com/contact"],
+        "email_overflow_urls": [],
+        "all_primary_urls": ["https://yazdogan.com", "https://yazdogan.com/contact"],
+    }
+
+    pages = _collect_email_rule_pages(page_map, fetch_plan)
+    emails, sources = collect_emails_for_pages("https://yazdogan.com", pages)
+
+    assert emails == ["bilgi@yazdogan.com"]
+    assert sources == {"https://yazdogan.com": ["bilgi@yazdogan.com"]}
 
 
 def test_runtime_store_reuses_connection_in_same_thread(tmp_path: Path) -> None:
@@ -1470,6 +1497,23 @@ def test_collect_phones_for_pages_drops_prefixed_extension_variants() -> None:
     assert phones == ["08000141999", "02086592558"]
 
 
+def test_collect_emails_for_pages_decodes_cloudflare_cfemail() -> None:
+    html_text = """
+    <html>
+      <body>
+        e-mail:
+        <a href="/cdn-cgi/l/email-protection" class="__cf_email__"
+           data-cfemail="8febe0e4fbeefccfebe0e4fbeefca1ece0e2">[email protected]</a>
+      </body>
+    </html>
+    """
+
+    emails, sources = collect_emails_for_pages("https://doktas.com", [("https://doktas.com/tr/iletisim", html_text)])
+
+    assert emails == ["doktas@doktas.com"]
+    assert sources == {"https://doktas.com/tr/iletisim": ["doktas@doktas.com"]}
+
+
 def test_select_urls_include_german_impressum_and_kontakt() -> None:
     urls = [
         "https://atlas.de/",
@@ -1501,6 +1545,24 @@ def test_select_email_urls_includes_turkey_brazil_japan_value_pages() -> None:
         email_urls = select_email_urls(candidates)
 
         assert value_url in email_urls
+
+
+def test_select_email_urls_uses_value_anchor_text_for_query_only_links() -> None:
+    html_text = """
+    <html>
+      <body>
+        <a href="/?page_id=33">İletişim</a>
+        <a href="/?page_id=218">Hakkımızda</a>
+      </body>
+    </html>
+    """
+
+    discovered = extract_same_site_links(html_text, "https://taluinsaat.com/", limit=10)
+    candidates = build_candidates("https://taluinsaat.com", discovered, {}, {})
+
+    email_urls = select_email_urls(candidates)
+
+    assert any(url.startswith("https://taluinsaat.com/?page_id=33") for url in email_urls)
 
 
 def test_build_site_protocol_config_separates_probe_batch_and_global_worker_limits() -> None:

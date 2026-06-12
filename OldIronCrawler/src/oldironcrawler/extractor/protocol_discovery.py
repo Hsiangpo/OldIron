@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import re
+import unicodedata
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 _SKIP_EXTENSIONS = {
@@ -43,6 +45,39 @@ _UNSUPPORTED_PATH_FRAGMENTS = (
 _UNSUPPORTED_QUERY_PAIRS = (
     ("action", "lostpassword"),
 )
+_ANCHOR_RE = re.compile(r"<a\b[^>]*\bhref=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+_LINK_HINT_FRAGMENT_PREFIX = "oi-link-"
+_VALUE_ANCHOR_PHRASES = (
+    ("bize ulasin", "bize-ulasin"),
+    ("fale conosco", "fale-conosco"),
+    ("insan kaynaklari", "insan-kaynaklari"),
+    ("trabalhe conosco", "trabalhe-conosco"),
+    ("e posta", "email"),
+)
+_VALUE_ANCHOR_TOKENS = {
+    "atendimento",
+    "career",
+    "careers",
+    "contact",
+    "contato",
+    "email",
+    "fale",
+    "hakkimizda",
+    "iletisim",
+    "inquiry",
+    "kariyer",
+    "kontakt",
+    "kurumsal",
+    "kvkk",
+    "mail",
+    "mailform",
+    "otoiawase",
+    "ouvidoria",
+    "recruit",
+    "saiyo",
+    "toiawase",
+    "ulasin",
+}
 _COMMON_VALUE_PATHS = (
     "/impressum",
     "/imprint",
@@ -207,24 +242,107 @@ def extract_same_site_links(html_text: str, page_url: str, *, limit: int) -> lis
     base_host = (urlparse(page_url).netloc or "").strip().lower()
     if not base_host:
         return []
+    join_base = _pick_relative_link_base_url(html_text, page_url)
     result: list[str] = []
     seen: set[str] = set()
-    for raw_href in re.findall(r'<a\s[^>]*href=["\']([^"\']+)["\']', html_text, re.IGNORECASE):
+    for raw_href, anchor_text in _iter_anchor_links(html_text):
         href = raw_href.strip()
         if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
             continue
-        absolute = urljoin(page_url, href)
+        absolute = urljoin(join_base, href)
         parsed = urlparse(absolute)
         link_host = (parsed.netloc or "").strip().lower()
         if not link_host or not (link_host == base_host or link_host.endswith(f".{base_host}") or base_host.endswith(f".{link_host}")):
             continue
-        normalized = normalize_discovery_url(absolute)
+        normalized = normalize_discovery_url(_add_anchor_hint_fragment(absolute, anchor_text))
         if normalized not in seen and is_supported_url(normalized):
             seen.add(normalized)
             result.append(normalized)
             if len(result) >= limit:
                 break
     return result
+
+
+def _iter_anchor_links(html_text: str) -> list[tuple[str, str]]:
+    return [(match.group(1), match.group(2)) for match in _ANCHOR_RE.finditer(str(html_text or ""))]
+
+
+def _pick_relative_link_base_url(html_text: str, page_url: str) -> str:
+    directory_base_url = _ensure_directory_base_url(page_url)
+    parsed = urlparse(directory_base_url)
+    base_host = (parsed.netloc or "").strip().lower()
+    dominant_host = _pick_dominant_www_pair_host(html_text, base_host)
+    if not dominant_host:
+        return directory_base_url
+    return parsed._replace(netloc=dominant_host).geturl()
+
+
+def _ensure_directory_base_url(page_url: str) -> str:
+    parsed = urlparse(page_url)
+    path = str(parsed.path or "")
+    if not path or path.endswith("/"):
+        return page_url
+    last_segment = path.rsplit("/", 1)[-1]
+    if "." in last_segment:
+        return page_url
+    return parsed._replace(path=f"{path}/").geturl()
+
+
+def _pick_dominant_www_pair_host(html_text: str, base_host: str) -> str:
+    counts: dict[str, int] = {}
+    for raw_href, _anchor_text in _iter_anchor_links(html_text):
+        parsed = urlparse(str(raw_href or "").strip())
+        host = (parsed.netloc or "").strip().lower()
+        if not host or not _is_www_pair(base_host, host):
+            continue
+        counts[host] = counts.get(host, 0) + 1
+    if not counts:
+        return ""
+    host, count = max(counts.items(), key=lambda item: (item[1], item[0]))
+    return host if count >= 2 else ""
+
+
+def _is_www_pair(left: str, right: str) -> bool:
+    if not left or not right or left == right:
+        return False
+    return left == f"www.{right}" or right == f"www.{left}"
+
+
+def _add_anchor_hint_fragment(url: str, anchor_text: str) -> str:
+    hint = _pick_anchor_value_hint(anchor_text)
+    if not hint:
+        return url
+    if _url_has_value_hint(url):
+        return url
+    parsed = urlparse(url)
+    if parsed.fragment.startswith(_LINK_HINT_FRAGMENT_PREFIX):
+        return url
+    return parsed._replace(fragment=f"{_LINK_HINT_FRAGMENT_PREFIX}{hint}").geturl()
+
+
+def _pick_anchor_value_hint(anchor_text: str) -> str:
+    normalized = _normalize_anchor_text(anchor_text)
+    if not normalized:
+        return ""
+    for phrase, hint in _VALUE_ANCHOR_PHRASES:
+        if phrase in normalized:
+            return hint
+    for token in re.split(r"[\W_]+", normalized):
+        if token in _VALUE_ANCHOR_TOKENS:
+            return token
+    return ""
+
+
+def _normalize_anchor_text(anchor_text: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", html.unescape(str(anchor_text or "")))
+    lowered = re.sub(r"\s+", " ", text).strip().lower()
+    if not lowered:
+        return ""
+    return unicodedata.normalize("NFKD", lowered).encode("ascii", "ignore").decode("ascii")
+
+
+def _url_has_value_hint(url: str) -> bool:
+    return any(token in _VALUE_ANCHOR_TOKENS for token in extract_url_hint_tokens(url))
 
 
 def extract_same_org_seed_urls(html_text: str, page_url: str, *, site_domain: str, limit: int) -> list[str]:
@@ -298,7 +416,8 @@ def normalize_discovery_url(url: str) -> str:
         if clean_key.startswith("utm_") or clean_key in _TRACKING_QUERY_KEYS:
             continue
         kept_pairs.append((key, value))
-    return parsed._replace(query=urlencode(kept_pairs, doseq=True), fragment="").geturl()
+    fragment = parsed.fragment if parsed.fragment.startswith(_LINK_HINT_FRAGMENT_PREFIX) else ""
+    return parsed._replace(query=urlencode(kept_pairs, doseq=True), fragment=fragment).geturl()
 
 
 def build_common_probe_urls(start_url: str) -> list[str]:
