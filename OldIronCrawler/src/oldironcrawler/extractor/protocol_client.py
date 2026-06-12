@@ -4,8 +4,6 @@ import re
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, wait
-from urllib.parse import urljoin, urlparse
-from xml.etree import ElementTree
 import httpx
 from curl_cffi import requests as cffi_requests
 from oldironcrawler.challenge_solver import resolve_cloudflare_challenge
@@ -14,6 +12,7 @@ from oldironcrawler.extractor.protocol.content import (
     decode_bytes as _decode_bytes,
     decode_response_text as _decode_response_text,
     detect_challenge_kind as _detect_challenge_kind,
+    extract_same_site_meta_refresh_url as _extract_same_site_meta_refresh_url,
     raise_if_challenge_page as _raise_if_challenge_page,
     truncate_html as _truncate_html,
 )
@@ -36,6 +35,7 @@ from oldironcrawler.extractor.protocol.fallbacks import (
     should_try_httpx_status_fallback as _should_try_httpx_status_fallback,
 )
 from oldironcrawler.extractor.protocol.types import DiscoveryStageResult, HtmlPage, SiteProtocolConfig
+from oldironcrawler.extractor.protocol.sitemap import discover_sitemap_urls as _discover_sitemap_urls
 from oldironcrawler.extractor.protocol_discovery import (
     build_common_probe_urls as _build_common_probe_urls,
     extract_registrable_domain as _extract_registrable_domain,
@@ -44,11 +44,8 @@ from oldironcrawler.extractor.protocol_discovery import (
     is_supported_url as _is_supported_url,
     merge_unique_urls as _merge_unique_urls,
     pick_subdomain_probe_urls as _pick_subdomain_probe_urls,
-    prioritize_discovery_urls as _prioritize_discovery_urls,
 )
 from oldironcrawler.extractor.protocol_runtime import configure_protocol_runtime, get_probe_executor, request_slot
-_ROBOTS_SITEMAP_RE = re.compile(r"^Sitemap:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 _SITE_DEADLINE_SAFETY_SECONDS = 8.0
 _REQUEST_SLOT_WAIT_FLOOR_SECONDS = 20.0
 _REQUEST_SLOT_WAIT_CAP_SECONDS = 45.0
@@ -220,6 +217,7 @@ class SiteProtocolClient:
         request_slot_wait_seconds: float | None = None,
         request_deadline_monotonic: float | None = None,
         allow_httpx_fallback: bool = True,
+        meta_refresh_depth: int = 0,
     ) -> str:
         retries = self._config.max_retries if max_retries_override is None else max(max_retries_override, 0)
         attempts = retries + 1
@@ -248,6 +246,18 @@ class SiteProtocolClient:
                     html_text = _truncate_html(_decode_response_text(response), self._config.max_html_chars)
                     html_text = self._maybe_challenge_fallback(session, url, html_text, request_timeout)
                     _raise_if_challenge_page(url, html_text)
+                    if meta_refresh_depth <= 0:
+                        refresh_html = self._fetch_meta_refresh_target_html(
+                            session,
+                            url,
+                            html_text,
+                            timeout_seconds=request_timeout,
+                            request_slot_wait_seconds=request_slot_wait_seconds,
+                            request_deadline_monotonic=request_deadline_monotonic,
+                            allow_httpx_fallback=allow_httpx_fallback,
+                        )
+                        if refresh_html is not None:
+                            return refresh_html
                     return html_text
                 if status in {429, 500, 502, 503, 504}:
                     raise ProtocolTemporaryError(f"temporary_http_{status}: {url}")
@@ -441,6 +451,18 @@ class SiteProtocolClient:
             cloudflare_proxy_url=self._config.cloudflare_proxy_url,
             impersonate=self._config.impersonate,
         )
+    def _fetch_meta_refresh_target_html(
+        self,
+        session: cffi_requests.Session,
+        url: str,
+        html_text: str,
+        **kwargs,
+    ) -> str | None:
+        target_url = _extract_same_site_meta_refresh_url(html_text, url)
+        if not target_url or target_url == url:
+            return None
+        redirected = self._fetch_html(session, target_url, required=False, max_retries_override=0, meta_refresh_depth=1, **kwargs)
+        return redirected if redirected.strip() else None
     def _cap_challenge_wait_seconds(self) -> float:
         remaining = self._remaining_deadline_seconds()
         if remaining is None:
@@ -705,81 +727,7 @@ class SiteProtocolClient:
                     pass
 
     def _discover_sitemap_urls(self, session: cffi_requests.Session, base_url: str, *, limit: int) -> list[str]:
-        locations = self._find_sitemap_locations(session, base_url)
-        if not locations:
-            locations = [urljoin(base_url, "/sitemap.xml")]
-        scan_limit = min(max(limit * 4, limit), 400)
-        urls: list[str] = []
-        visited: set[str] = set()
-        base_host = (urlparse(base_url).netloc or "").strip().lower()
-        for location in locations:
-            if len(urls) >= scan_limit:
-                break
-            self._parse_sitemap_recursive(session, location, urls, visited, base_host=base_host, limit=scan_limit, depth=0)
-        return _prioritize_discovery_urls(base_url, urls, limit=limit)
-
-    def _find_sitemap_locations(self, session: cffi_requests.Session, base_url: str) -> list[str]:
-        robots_url = urljoin(base_url, "/robots.txt")
-        try:
-            request_timeout = self._resolve_timeout()
-            with request_slot(
-                timeout_seconds=request_timeout,
-                wait_timeout_seconds=self._resolve_request_slot_wait_timeout(request_timeout),
-            ):
-                response = session.get(robots_url, timeout=request_timeout)
-            if int(response.status_code) != 200:
-                return []
-            text = _decode_response_text(response)
-            return [item.strip() for item in _ROBOTS_SITEMAP_RE.findall(text) if item.strip()]
-        except Exception:  # noqa: BLE001
-            return []
-
-    def _parse_sitemap_recursive(
-        self,
-        session: cffi_requests.Session,
-        sitemap_url: str,
-        result: list[str],
-        visited: set[str],
-        *,
-        base_host: str,
-        limit: int,
-        depth: int,
-    ) -> None:
-        if depth > 3 or sitemap_url in visited or len(result) >= limit:
-            return
-        visited.add(sitemap_url)
-        xml_text = self._fetch_sitemap_text(session, sitemap_url)
-        if not xml_text:
-            return
-        try:
-            root = ElementTree.fromstring(xml_text)
-        except ElementTree.ParseError:
-            return
-        tag = root.tag.split("}")[-1] if "}" in root.tag else root.tag
-        if tag == "sitemapindex":
-            for child_loc in root.findall(".//sm:sitemap/sm:loc", _NS):
-                child_url = str(child_loc.text or "").strip()
-                if child_url:
-                    self._parse_sitemap_recursive(
-                        session,
-                        child_url,
-                        result,
-                        visited,
-                        base_host=base_host,
-                        limit=limit,
-                        depth=depth + 1,
-                    )
-            return
-        for loc in root.findall(".//sm:url/sm:loc", _NS):
-            page_url = str(loc.text or "").strip()
-            if not page_url or page_url in visited or not _is_supported_url(page_url):
-                continue
-            host = (urlparse(page_url).netloc or "").strip().lower()
-            if host == base_host or host.endswith(f".{base_host}") or base_host.endswith(f".{host}"):
-                visited.add(page_url)
-                result.append(page_url)
-                if len(result) >= limit:
-                    return
+        return _discover_sitemap_urls(base_url, limit=limit, fetch_text=lambda url: self._fetch_sitemap_text(session, url))
 
     def _discover_direct_urls(
         self,

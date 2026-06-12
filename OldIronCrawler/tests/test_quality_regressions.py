@@ -199,13 +199,20 @@ def test_discover_sitemap_urls_prioritizes_value_urls_before_limit(monkeypatch) 
         "https://example.com/en/imprint",
     ]
 
-    monkeypatch.setattr(client, "_find_sitemap_locations", lambda *_args, **_kwargs: ["https://example.com/sitemap.xml"])
+    sitemap_xml = (
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        + "".join(f"<url><loc>{url}</loc></url>" for url in [*low_value, *high_value])
+        + "</urlset>"
+    )
 
-    def fake_parse(_session, _sitemap_url, result, visited, *, base_host: str, limit: int, depth: int) -> None:
-        for url in [*low_value, *high_value]:
-            result.append(url)
+    def fake_fetch_sitemap_text(_session, url: str) -> str:
+        if url.endswith("/robots.txt"):
+            return "Sitemap: https://example.com/sitemap.xml"
+        if url == "https://example.com/sitemap.xml":
+            return sitemap_xml
+        return ""
 
-    monkeypatch.setattr(client, "_parse_sitemap_recursive", fake_parse)
+    monkeypatch.setattr(client, "_fetch_sitemap_text", fake_fetch_sitemap_text)
 
     urls = client._discover_sitemap_urls(object(), "https://example.com/en", limit=5)
 

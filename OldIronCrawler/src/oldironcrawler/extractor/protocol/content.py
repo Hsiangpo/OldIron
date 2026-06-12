@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import re
+from urllib.parse import urljoin, urlparse
 
 from oldironcrawler.extractor.protocol.errors import ProtocolPermanentError
 
@@ -9,6 +10,11 @@ CHARSET_RE = re.compile(r"charset\s*=\s*[\"']?\s*([a-zA-Z0-9._-]+)", re.IGNORECA
 HTML_META_CHARSET_RE = re.compile(br"<meta[^>]+charset=[\"']?\s*([a-zA-Z0-9._-]+)", re.IGNORECASE)
 XML_ENCODING_RE = re.compile(br"<\?xml[^>]+encoding=[\"']\s*([a-zA-Z0-9._-]+)", re.IGNORECASE)
 EMAIL_SIGNAL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+META_REFRESH_RE = re.compile(
+    r"<meta\b[^>]*http-equiv\s*=\s*['\"]?\s*refresh\s*['\"]?[^>]*>",
+    re.IGNORECASE | re.DOTALL,
+)
+META_REFRESH_URL_RE = re.compile(r"\burl\s*=\s*['\"]?([^'\";>]+)", re.IGNORECASE)
 HTML_SIGNAL_PATTERNS = (
     re.compile(r"<h[1-4][^>]*>.*?</h[1-4]>", re.IGNORECASE | re.DOTALL),
     re.compile(
@@ -87,6 +93,38 @@ def detect_challenge_kind(html_text: str) -> str:
     if any(hint in lowered for hint in INCAPSULA_CHALLENGE_HINTS):
         return "imperva_challenge"
     return ""
+
+
+def extract_same_site_meta_refresh_url(html_text: str, source_url: str) -> str:
+    if detect_challenge_kind(html_text):
+        return ""
+    match = META_REFRESH_RE.search(str(html_text or ""))
+    if match is None:
+        return ""
+    target_match = META_REFRESH_URL_RE.search(match.group(0))
+    if target_match is None:
+        return ""
+    target_url = urljoin(source_url, html.unescape(str(target_match.group(1) or "").strip()))
+    if not _is_same_site_refresh_target(source_url, target_url):
+        return ""
+    return target_url
+
+
+def _is_same_site_refresh_target(source_url: str, target_url: str) -> bool:
+    source = urlparse(str(source_url or ""))
+    target = urlparse(str(target_url or ""))
+    if target.scheme not in {"http", "https"}:
+        return False
+    source_host = _normalize_refresh_host(source.netloc)
+    target_host = _normalize_refresh_host(target.netloc)
+    return bool(source_host and source_host == target_host)
+
+
+def _normalize_refresh_host(host: str) -> str:
+    value = str(host or "").strip().lower().split("@")[-1].split(":", 1)[0]
+    if value.startswith("www."):
+        return value[4:]
+    return value
 
 
 def _collect_signal_html_windows(text: str, max_chars: int) -> str:

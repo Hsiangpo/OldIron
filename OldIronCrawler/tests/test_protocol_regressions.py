@@ -92,6 +92,36 @@ def test_protocol_fetch_html_uses_httpx_fallback_when_curl_returns_false_404(mon
     client.close()
 
 
+def test_protocol_fetch_html_follows_same_site_meta_refresh() -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+    calls: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, html_text: str) -> None:
+            self.status_code = 200
+            self.headers = {"Content-Type": "text/html"}
+            self.text = html_text
+            self.content = html_text.encode("utf-8")
+
+        def close(self) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, url, timeout):
+            calls.append(url)
+            if url == "https://example.com":
+                return FakeResponse(
+                    '<meta http-equiv="refresh" content="0;URL=\'https://www.example.com\'" />'
+                )
+            return FakeResponse("<html><body>real homepage info@example.com</body></html>")
+
+    html = client._fetch_html(FakeSession(), "https://example.com", required=False)
+
+    assert "real homepage" in html
+    assert calls == ["https://example.com", "https://www.example.com"]
+    client.close()
+
+
 def test_protocol_fetch_html_marks_plain_403_as_blocked(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
 

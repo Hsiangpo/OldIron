@@ -52,6 +52,7 @@ _EMAIL_WEIGHTS = {
     "kontakt": 22,
     "driver": 10,
     "drive": 8,
+    "eposta": 22,
     "fale": 16,
     "faleconosco": 24,
     "form": 10,
@@ -655,6 +656,8 @@ def _path_phrase_bonus(url: str, *, kind: str) -> int:
             ("contact/mail", 12),
             ("contact/", 6),
             ("datenschutz", 10),
+            ("e-posta", 18),
+            ("eposta", 18),
             ("fale-conosco", 20),
             ("impressum", 12),
             ("iletisim", 20),
@@ -664,6 +667,8 @@ def _path_phrase_bonus(url: str, *, kind: str) -> int:
             ("ouvidoria", 14),
             ("privacy-policy", 6),
             ("recruit/form", 10),
+            ("telefon-e-posta", 22),
+            ("telefon-eposta", 22),
             ("trabalhe-conosco", 10),
         ):
             if phrase in lowered:

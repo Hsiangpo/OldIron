@@ -136,6 +136,39 @@ def test_shell_asset_urls_use_canonical_url_for_relative_assets() -> None:
     assert urls == ["https://biggbrandsglobal.com/assets/index.js"]
 
 
+def test_shell_replacement_preserves_existing_page_emails(monkeypatch) -> None:
+    shell_html = """
+    <html>
+      <head><script src="/assets/app.js"></script></head>
+      <body>
+        <div id="root"></div>
+        <p>Brand@wppmedia.com</p>
+      </body>
+    </html>
+    """
+    page_map = {"https://www.wppmedia.com/contact": HtmlPage(url="https://www.wppmedia.com/contact", html=shell_html)}
+
+    monkeypatch.setattr(
+        shell_module,
+        "fetch_first_party_asset_texts",
+        lambda *_args, **_kwargs: {"https://www.wppmedia.com/assets/app.js": '"Telefon: +90 212 123 4567"'},
+    )
+
+    shell_module.replace_shell_pages_with_evidence(
+        page_map,
+        ["https://www.wppmedia.com/contact"],
+        proxy_url="",
+        timeout_seconds=1.0,
+        deadline_monotonic=None,
+    )
+    emails, _page_hits = collect_emails_for_pages(
+        "https://wppmedia.com",
+        [("https://www.wppmedia.com/contact", page_map["https://www.wppmedia.com/contact"].html)],
+    )
+
+    assert emails == ["brand@wppmedia.com"]
+
+
 def test_shell_page_detects_root_container_even_with_cookie_text() -> None:
     html_text = """
     <html>

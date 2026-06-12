@@ -253,8 +253,18 @@ def replace_shell_pages_with_evidence(
             deadline_monotonic=deadline_monotonic,
         )
         if enriched_html.strip() and enriched_html != page.html:
-            page_map[url] = type(page)(url=page.url, html=enriched_html)
+            page_map[url] = type(page)(url=page.url, html=_merge_shell_evidence(page.html, enriched_html))
     return int(round((time.monotonic() - started) * 1000))
+
+
+def _merge_shell_evidence(original_html: str, enriched_html: str) -> str:
+    original = str(original_html or "")
+    enriched = str(enriched_html or "")
+    if not original.strip():
+        return enriched
+    if not enriched.strip() or enriched == original:
+        return original
+    return f"{original}\n{enriched}"
 
 
 def build_shell_alias_map(

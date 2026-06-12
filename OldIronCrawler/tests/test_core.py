@@ -1547,6 +1547,15 @@ def test_select_email_urls_includes_turkey_brazil_japan_value_pages() -> None:
         assert value_url in email_urls
 
 
+def test_select_email_urls_includes_turkish_eposta_pages() -> None:
+    value_url = "https://x.com.tr/bilgi/Telefon-Eposta.htm"
+    candidates = build_candidates("https://x.com.tr", [value_url], {}, {})
+
+    email_urls = select_email_urls(candidates)
+
+    assert value_url in email_urls
+
+
 def test_select_email_urls_uses_value_anchor_text_for_query_only_links() -> None:
     html_text = """
     <html>
