@@ -24,6 +24,8 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
     progress = store.progress()
     total = progress["total"]
     completed_count = _count_completed_sites(progress)
+    # 一进来（含断点续跑）就先广播一次进度：底部计数器立刻显示真实的已完成/待处理，而非从 0 起跳。
+    _emit_progress_snapshot(store, total)
     heartbeat_seconds = 10.0
     show_email = bool(getattr(config, "collect_email_enabled", True))
     show_phone = bool(getattr(config, "collect_phone_enabled", True))
