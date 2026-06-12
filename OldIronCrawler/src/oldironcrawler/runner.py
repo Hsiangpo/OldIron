@@ -14,6 +14,7 @@ from oldironcrawler.extractor.service import SiteProfileService
 from oldironcrawler.reporter import print_progress_heartbeat, print_site_result, write_delivery_csv
 from oldironcrawler.runtime.global_learning import GlobalLearningStore
 from oldironcrawler.runtime.store import RuntimeStore, SiteTask
+from oldironcrawler.ui import crawl_view
 
 _DELIVERY_FLUSH_EVERY_SITES = 25
 _DELIVERY_FLUSH_EVERY_SECONDS = 5.0
@@ -512,7 +513,7 @@ def _flush_delivery_snapshot(
         )
         return True
     except OSError as exc:
-        print(f"写入交付文件失败：{exc}", flush=True)
+        crawl_view.emit_log(f"写入交付文件失败：{exc}")
         return False
 
 

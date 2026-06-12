@@ -12,7 +12,10 @@ def prompt_runtime_llm_key(
 ) -> str:
     read_char = reader or _build_char_reader()
     stream = writer or sys.stdout
-    if notice:
+    # 生产环境（无注入 writer）渲染主题化页眉；注入 writer 的测试场景走原路径，保证断言不变。
+    if writer is None:
+        _render_key_banner(notice)
+    elif notice:
         stream.write(f"{notice}\n")
         stream.flush()
     while True:
@@ -112,3 +115,19 @@ def _build_char_reader() -> Callable[[], str]:
 
 def _build_line_reader() -> Callable[[], str]:
     return sys.stdin.readline
+
+
+def _render_key_banner(notice: str | None = None) -> None:
+    """密钥输入屏的发丝线页眉（附加渲染到主题 console，不影响掩码输入流）。"""
+    from rich.console import Group
+    from rich.text import Text
+
+    from oldironcrawler.ui.console import get_console, hairline, screen, wordmark
+
+    console = get_console()
+    console.clear()
+    blocks = [wordmark("OLDIRONCRAWLER", "公司官网采集 · 密钥"), Text(), hairline(), Text()]
+    if str(notice or "").strip():
+        blocks += [Text(str(notice).strip(), style="fail"), Text()]
+    blocks.append(Text("输入密钥后回车，内容以 * 掩码，Ctrl+C 退出", style="hint"))
+    console.print(screen(*blocks))

@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 
 from oldironcrawler.runtime.store import SiteStageMetrics
+from oldironcrawler.ui import crawl_view
 
 
 def print_site_result(
@@ -23,29 +24,28 @@ def print_site_result(
     show_representative: bool = True,
     show_searched_representative: bool = True,
 ) -> None:
-    print(f"[{completed_index}/{total}] {website}", flush=True)
-    print(f"  公司名: {_display(company_name)}", flush=True)
-    if show_representative:
-        print(f"  代表人: {_display(representative)}", flush=True)
-    if show_emails:
-        print(f"  邮箱: {_display(emails)}", flush=True)
-    if show_searched_representative:
-        print(f"  搜索现役最大代表人: {_display(searched_representative)}", flush=True)
-    if show_phones:
-        print(f"  电话: {_display(phones)}", flush=True)
-    if stage_metrics is not None:
-        print(f"  阶段耗时: {_format_stage_timing(stage_metrics)}", flush=True)
-        print(f"  页面统计: {_format_stage_counts(stage_metrics)}", flush=True)
-    if str(reason or "").strip():
-        print(f"  原因: {reason.strip()}", flush=True)
-    print("  ------------------------------------------------------------", flush=True)
+    # 渲染交给 UI 的实时视图；非 TTY / 无活跃视图时 crawl_view 自动降级成纯文本。
+    crawl_view.emit_site_result(
+        completed_index=completed_index,
+        total=total,
+        website=website,
+        company_name=company_name,
+        representative=representative,
+        emails=emails,
+        searched_representative=searched_representative,
+        phones=phones,
+        reason=reason,
+        stage_timing=_format_stage_timing(stage_metrics) if stage_metrics is not None else "",
+        stage_counts=_format_stage_counts(stage_metrics) if stage_metrics is not None else "",
+        show_emails=show_emails,
+        show_phones=show_phones,
+        show_representative=show_representative,
+        show_searched_representative=show_searched_representative,
+    )
 
 
 def print_progress_heartbeat(*, total: int, done: int, running: int, dropped: int, pending: int) -> None:
-    print(
-        f"[进度] total={total} done={done} running={running} dropped={dropped} pending={pending}",
-        flush=True,
-    )
+    crawl_view.emit_progress(total=total, done=done, running=running, dropped=dropped, pending=pending)
 
 
 def write_delivery_csv(
@@ -189,11 +189,6 @@ def _build_failure_reason(row: dict[str, str], missing_fields: list[str]) -> str
     if missing_fields:
         return f"缺少：{';'.join(missing_fields)}"
     return "未满足本次选择字段"
-
-
-def _display(value: str) -> str:
-    text = str(value or "").strip()
-    return text if text else "未找到"
 
 
 def _format_stage_timing(metrics: SiteStageMetrics) -> str:

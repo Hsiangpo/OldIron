@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+
+from rich.console import Group
+from rich.text import Text
 
 from oldironcrawler import app as app_module
 from oldironcrawler.config import resolve_websites_dir
 from oldironcrawler.console import prompt_runtime_llm_key, wait_for_enter
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmTemporaryError
 from oldironcrawler.importer import list_input_files
+from oldironcrawler.ui.console import get_console, hairline, inline_stats, kv_block, screen, wordmark
+from oldironcrawler.ui.menu import MenuItem, MenuSpec, run_menu
+
+_BACK = "__back__"
+_WORDMARK = "OLDIRONCRAWLER"
+_SUBTITLE = "公司官网采集"
 
 
 @dataclass
@@ -37,45 +44,81 @@ def run_dashboard(project_root: Path, initial_key: str) -> int:
     )
     _ensure_key_before_panel(session)
     while True:
-        _render_panel(
-            "OldIronCrawler 控制面板",
-            [
-                f"Key 状态：{_display_key_status(session)}",
-                f"当前文件：{session.selected_input.name if session.selected_input else '未选择'}",
-                f"可爬表数量：{len(list_input_files(_get_websites_dir(session.project_root)))}",
-                f"结果文件数量：{len(_list_output_results(session.project_root / 'output'))}",
-                f"API 入口：{session.llm_base_url or '未就绪'}",
-                f"并发设置：{session.concurrency}",
-                f"单站等待上限：{session.site_timeout_seconds} 秒",
-                f"邮箱：{'开' if session.collect_email_enabled else '关'}",
-                f"电话：{'开' if session.collect_phone_enabled else '关'}",
-                f"提取代表人：{'开' if session.extract_representative_enabled else '关'}",
-                f"搜索现役最大代表人：{'开' if session.search_representative_enabled else '关'}",
-                "",
-                "1. 开始抓取",
-                "2. 打开 websites 文件夹",
-                "3. 打开 output 文件夹",
-                "4. 系统配置",
-                "5. 退出程序",
-            ],
-        )
-        choice = input("请输入菜单序号: ").strip().upper()
-        if choice == "1":
+        choice = run_menu(_main_menu_spec(session))
+        if choice in (None, "quit"):
+            return 0
+        if choice == "start":
             _handle_start_crawl(session)
-            continue
-        if choice == "2":
+        elif choice == "websites":
             _handle_open_websites(session)
-            continue
-        if choice == "3":
+        elif choice == "output":
             _handle_open_output(session)
-            continue
-        if choice == "4":
+        elif choice == "config":
             if _handle_system_config(session) == "exit":
                 return 0
-            continue
-        if choice == "5":
-            return 0
-        _show_message("输入无效，请重新选择。")
+
+
+def _main_menu_spec(session: DashboardSession) -> MenuSpec:
+    return MenuSpec(
+        title=_WORDMARK,
+        subtitle=f"{_SUBTITLE} · v1",
+        status_block=_main_status_block(session),
+        items=[
+            MenuItem("start", "开始抓取"),
+            MenuItem("websites", "打开 websites 文件夹"),
+            MenuItem("output", "打开 output 文件夹"),
+            MenuItem("config", "系统配置"),
+            MenuItem("quit", "退出程序"),
+        ],
+        hint="↑↓ 移动   Enter 确认   1–5 直达   Ctrl+C 退出",
+        back_value="quit",
+    )
+
+
+def _main_status_block(session: DashboardSession) -> Group:
+    websites = len(list_input_files(_get_websites_dir(session.project_root)))
+    results = len(_list_output_results(session.project_root / "output"))
+    rows = [
+        ("KEY", _key_value(session)),
+        ("入口", session.llm_base_url or "未就绪"),
+        ("当前文件", session.selected_input.name if session.selected_input else "未选择"),
+    ]
+    stats = inline_stats(
+        [
+            ("待爬", str(websites)),
+            ("结果", str(results)),
+            ("并发", str(session.concurrency)),
+            ("超时", f"{session.site_timeout_seconds}s"),
+        ]
+    )
+    return Group(kv_block(rows), Text(), stats, _toggles_line(session))
+
+
+def _toggles_line(session: DashboardSession) -> Text:
+    toggles = [
+        ("邮箱", session.collect_email_enabled),
+        ("电话", session.collect_phone_enabled),
+        ("代表人", session.extract_representative_enabled),
+        ("搜索代表人", session.search_representative_enabled),
+    ]
+    text = Text()
+    for index, (label, enabled) in enumerate(toggles):
+        if index:
+            text.append("    ", style="hair")
+        text.append("● " if enabled else "○ ", style="ready" if enabled else "dim")
+        text.append(label, style="value" if enabled else "dim")
+    return text
+
+
+def _key_value(session: DashboardSession) -> Text:
+    text = Text()
+    if session.current_key:
+        text.append("● ", style="ready")
+        text.append("已就绪", style="value")
+    else:
+        text.append("○ ", style="dim")
+        text.append("未设置", style="dim")
+    return text
 
 
 def _ensure_key_before_panel(session: DashboardSession) -> None:
@@ -116,7 +159,7 @@ def _handle_start_crawl(session: DashboardSession) -> None:
             search_representative_enabled=session.search_representative_enabled,
         )
     except Exception as exc:  # noqa: BLE001
-        _show_message(f"抓取过程中出现未处理错误：{exc}")
+        _notice(f"抓取过程中出现未处理错误：{exc}")
         return
     session.current_key = result.effective_key
     session.llm_base_url = result.llm_base_url or session.llm_base_url
@@ -128,72 +171,60 @@ def _handle_start_crawl(session: DashboardSession) -> None:
 
 
 def _select_input_file(session: DashboardSession) -> Path | None:
-    while True:
-        files = list_input_files(_get_websites_dir(session.project_root))
-        _render_panel("选择爬取表", _build_file_select_lines(files, session.selected_input))
-        raw = input("你的选择: ").strip()
-        if raw == "0":
-            return None
-        if not files:
-            _show_message("还没有可抓取表。")
-            continue
-        matched = _match_file_choice(files, raw)
-        if matched is not None:
-            return matched
-        _show_message("文件序号或文件名无效，请重新选择。")
+    files = list_input_files(_get_websites_dir(session.project_root))
+    items = [MenuItem(str(index), path.name) for index, path in enumerate(files)]
+    subtitle = f"共 {len(files)} 个可抓取表" if files else "把 txt/csv/xlsx 放进 websites 文件夹"
+    spec = MenuSpec(
+        title="选择爬取表",
+        subtitle=subtitle,
+        status_block=Text(
+            f"当前文件 {session.selected_input.name if session.selected_input else '未选择'}",
+            style="label",
+        ),
+        items=items,
+        hint="↑↓ 移动   Enter 确认   Esc 返回",
+        back_value=_BACK,
+    )
+    choice = run_menu(spec)
+    if choice in (None, _BACK) or not files:
+        return None
+    return files[int(choice)]
 
 
 def _handle_open_websites(session: DashboardSession) -> None:
     websites_dir = _get_websites_dir(session.project_root)
     files = list_input_files(websites_dir)
-    lines = [f"当前共 {len(files)} 个可抓取表：", ""]
-    if files:
-        lines.extend(f"  {index}. {path.name}" for index, path in enumerate(files, start=1))
-    else:
-        lines.append("当前没有可抓取表。")
-    lines.extend(["", f"文件夹路径：{websites_dir}"])
-    _render_panel("websites 文件夹", lines)
+    lines = [Text(f"当前共 {len(files)} 个可抓取表", style="value"), Text()]
+    lines.extend(Text(f"  {index}. {path.name}", style="label") for index, path in enumerate(files, start=1))
+    lines.extend([Text(), Text(f"路径 {websites_dir}", style="hint")])
+    _render_info("websites 文件夹", lines)
     _open_folder(websites_dir)
     wait_for_enter("已尝试打开 websites 文件夹，按回车返回主菜单。")
 
 
 def _handle_open_output(session: DashboardSession) -> None:
     results = _list_output_results(session.project_root / "output")
-    lines = [f"当前共 {len(results)} 个结果文件：", ""]
-    if results:
-        lines.extend(f"  {index}. {path.name}" for index, path in enumerate(results, start=1))
-    else:
-        lines.append("当前还没有结果文件。")
+    lines = [Text(f"当前共 {len(results)} 个结果文件", style="value"), Text()]
+    lines.extend(Text(f"  {index}. {path.name}", style="label") for index, path in enumerate(results, start=1))
     if session.last_delivery_path is not None:
-        lines.extend(["", f"最近成功文件：{session.last_delivery_path.name}"])
+        lines.extend([Text(), Text(f"最近成功 {session.last_delivery_path.name}", style="ready")])
     if session.last_failed_path is not None:
-        lines.append(f"最近失败文件：{session.last_failed_path.name}")
-    lines.extend(["", f"文件夹路径：{session.project_root / 'output'}"])
-    _render_panel("output 文件夹", lines)
+        lines.append(Text(f"最近失败 {session.last_failed_path.name}", style="hint"))
+    lines.extend([Text(), Text(f"路径 {session.project_root / 'output'}", style="hint")])
+    _render_info("output 文件夹", lines)
     _open_folder(session.project_root / "output")
     wait_for_enter("已尝试打开 output 文件夹，按回车返回主菜单。")
 
 
 def _handle_system_config(session: DashboardSession) -> str | None:
     while True:
-        _render_panel(
-            "系统配置",
-            _build_system_config_lines(
-                key_status=_display_key_status(session),
-                concurrency=session.concurrency,
-                site_timeout_seconds=session.site_timeout_seconds,
-                collect_email_enabled=session.collect_email_enabled,
-                collect_phone_enabled=session.collect_phone_enabled,
-                extract_representative_enabled=session.extract_representative_enabled,
-                search_representative_enabled=session.search_representative_enabled,
-            ),
-        )
-        choice = input("请输入菜单序号: ").strip().upper()
-        if choice == "1":
+        choice = run_menu(_config_menu_spec(session))
+        if choice in (None, "back"):
+            return None
+        if choice == "key":
             if _handle_key_settings(session) == "exit":
                 return "exit"
-            continue
-        if choice == "2":
+        elif choice == "concurrency":
             _handle_numeric_setting(
                 title="并发设置",
                 current_value=session.concurrency,
@@ -202,8 +233,7 @@ def _handle_system_config(session: DashboardSession) -> str | None:
                 apply_value=lambda value: setattr(session, "concurrency", value),
                 description="请输入新的并发值，范围 1-64。",
             )
-            continue
-        if choice == "3":
+        elif choice == "timeout":
             _handle_numeric_setting(
                 title="单站等待上限",
                 current_value=session.site_timeout_seconds,
@@ -212,52 +242,74 @@ def _handle_system_config(session: DashboardSession) -> str | None:
                 apply_value=lambda value: setattr(session, "site_timeout_seconds", value),
                 description="请输入新的秒数，范围 60-600。",
             )
-            continue
-        if choice == "4":
+        elif choice == "email":
             session.collect_email_enabled = not session.collect_email_enabled
-            _show_message(f"邮箱已{'开启' if session.collect_email_enabled else '关闭'}。")
-            continue
-        if choice == "5":
+            _notice(f"邮箱已{'开启' if session.collect_email_enabled else '关闭'}。")
+        elif choice == "phone":
             session.collect_phone_enabled = not session.collect_phone_enabled
-            _show_message(f"电话已{'开启' if session.collect_phone_enabled else '关闭'}。")
-            continue
-        if choice == "6":
+            _notice(f"电话已{'开启' if session.collect_phone_enabled else '关闭'}。")
+        elif choice == "rep":
             session.extract_representative_enabled = not session.extract_representative_enabled
-            _show_message(
-                f"提取代表人已{'开启' if session.extract_representative_enabled else '关闭'}。"
-            )
-            continue
-        if choice == "7":
+            _notice(f"提取代表人已{'开启' if session.extract_representative_enabled else '关闭'}。")
+        elif choice == "search":
             session.search_representative_enabled = not session.search_representative_enabled
-            _show_message(
-                f"搜索现役最大代表人已{'开启' if session.search_representative_enabled else '关闭'}。"
-            )
-            continue
-        if choice == "8":
-            return None
-        _show_message("输入无效，请重新选择。")
+            _notice(f"搜索现役最大代表人已{'开启' if session.search_representative_enabled else '关闭'}。")
+
+
+def _config_menu_spec(session: DashboardSession) -> MenuSpec:
+    return MenuSpec(
+        title="系统配置",
+        subtitle=_SUBTITLE,
+        status_block=Group(
+            kv_block(
+                [
+                    ("KEY", _key_value(session)),
+                    ("并发", str(session.concurrency)),
+                    ("单站超时", f"{session.site_timeout_seconds} 秒"),
+                ]
+            ),
+            Text(),
+            _toggles_line(session),
+        ),
+        items=[
+            MenuItem("key", "Key 设置"),
+            MenuItem("concurrency", "并发设置"),
+            MenuItem("timeout", "单站等待上限"),
+            MenuItem("email", "邮箱（开/关切换）"),
+            MenuItem("phone", "电话（开/关切换）"),
+            MenuItem("rep", "提取代表人（开/关切换）"),
+            MenuItem("search", "搜索现役最大代表人（开/关切换）"),
+            MenuItem("back", "返回主菜单"),
+        ],
+        back_value="back",
+    )
 
 
 def _handle_key_settings(session: DashboardSession) -> str | None:
     while True:
-        _render_panel(
-            "Key 设置",
-            _build_key_settings_lines(_display_key_status(session)),
+        spec = MenuSpec(
+            title="Key 设置",
+            subtitle=_SUBTITLE,
+            status_block=kv_block([("当前状态", _key_value(session))]),
+            items=[
+                MenuItem("change", "更换 Key"),
+                MenuItem("delete", "删除 Key 并退出系统"),
+                MenuItem("back", "返回系统配置"),
+            ],
+            back_value="back",
         )
-        choice = input("请输入菜单序号: ").strip().upper()
-        if choice == "1":
+        choice = run_menu(spec)
+        if choice in (None, "back"):
+            return None
+        if choice == "change":
             session.current_key = prompt_runtime_llm_key()
             _ensure_key_before_panel(session)
-            _show_message("Key 已更新并鉴权成功。")
-            continue
-        if choice == "2":
+            _notice("Key 已更新并鉴权成功。")
+        elif choice == "delete":
             session.current_key = ""
             app_module._persist_runtime_llm_key(session.project_root, "")
             wait_for_enter("Key 已删除，系统将退出，请重新启动程序。")
             return "exit"
-        if choice == "3":
-            return None
-        _show_message("输入无效，请重新选择。")
 
 
 def _handle_numeric_setting(
@@ -270,42 +322,28 @@ def _handle_numeric_setting(
     description: str,
 ) -> None:
     while True:
-        _render_panel(
+        _render_info(
             title,
             [
-                f"当前值：{current_value}",
-                description,
-                "输入 0 返回系统配置。",
+                Text(f"当前值 {current_value}", style="value"),
+                Text(description, style="label"),
+                Text("输入 0 返回。", style="hint"),
             ],
         )
-        raw = input("请输入新的数值: ").strip().upper()
+        raw = input("请输入新的数值: ").strip()
         if raw == "0":
             return
         try:
             value = int(raw)
         except ValueError:
-            _show_message("输入不是有效数字，请重新输入。")
+            _notice("输入不是有效数字，请重新输入。")
             continue
         if value < min_value or value > max_value:
-            _show_message(f"输入超出范围，请输入 {min_value}-{max_value} 之间的数字。")
+            _notice(f"输入超出范围，请输入 {min_value}-{max_value} 之间的数字。")
             continue
         apply_value(value)
-        _show_message(f"{title}已更新为 {value}。")
+        _notice(f"{title}已更新为 {value}。")
         return
-
-
-def _match_file_choice(files: list[Path], raw: str) -> Path | None:
-    name_map = {path.name.lower(): path for path in files}
-    matched = name_map.get(raw.lower())
-    if matched is not None:
-        return matched
-    try:
-        choice = int(raw)
-    except ValueError:
-        return None
-    if 1 <= choice <= len(files):
-        return files[choice - 1]
-    return None
 
 
 def _list_output_results(output_dir: Path) -> list[Path]:
@@ -336,136 +374,12 @@ def _open_folder(path: Path) -> None:
         return
 
 
-def _display_key_status(session: DashboardSession) -> str:
-    if not session.current_key:
-        return "未设置"
-    return "已设置"
+def _render_info(title: str, lines: list) -> None:
+    console = get_console()
+    console.clear()
+    console.print(screen(wordmark(title, _SUBTITLE), Text(), hairline(), Text(), Group(*lines)))
 
 
-def _show_message(message: str) -> None:
-    _render_panel("提示", [message])
+def _notice(message: str) -> None:
+    _render_info("提示", [Text(message, style="value")])
     wait_for_enter("按回车继续。")
-
-
-def _render_panel(title: str, lines: list[str]) -> None:
-    _clear_screen()
-    width = _resolve_panel_width()
-    print("+" + "-" * width + "+")
-    print("|" + _center_panel_text(title, width) + "|")
-    print("+" + "-" * width + "+")
-    for line in lines:
-        for chunk in _wrap_line(line, width):
-            print("|" + _pad_panel_text(chunk, width) + "|")
-    print("+" + "-" * width + "+")
-
-
-def _wrap_line(text: str, width: int) -> list[str]:
-    content = str(text or "")
-    if not content:
-        return [""]
-    chunks: list[str] = []
-    current = ""
-    current_width = 0
-    for char in content:
-        char_width = _char_display_width(char)
-        if current and current_width + char_width > width:
-            chunks.append(current)
-            current = char
-            current_width = char_width
-            continue
-        current += char
-        current_width += char_width
-    if current or not chunks:
-        chunks.append(current)
-    return chunks
-
-
-def _build_file_select_lines(files: list[Path], selected_input: Path | None) -> list[str]:
-    lines = [
-        f"当前文件：{selected_input.name if selected_input else '未选择'}",
-        "",
-    ]
-    if files:
-        lines.append(f"共发现 {len(files)} 个可抓取表：")
-        lines.extend(f"  {index}. {path.name}" for index, path in enumerate(files, start=1))
-    else:
-        lines.append("当前没有可抓取表，请先把 txt/csv/xlsx 放进 websites 文件夹。")
-    lines.extend(["", "0. 返回主菜单", "请输入序号选择文件。"])
-    return lines
-
-
-def _build_system_config_lines(
-    *,
-    key_status: str,
-    concurrency: int,
-    site_timeout_seconds: int,
-    collect_email_enabled: bool,
-    collect_phone_enabled: bool,
-    extract_representative_enabled: bool,
-    search_representative_enabled: bool,
-) -> list[str]:
-    return [
-        f"Key 状态：{key_status}",
-        f"并发设置：{concurrency}",
-        f"单站等待上限：{site_timeout_seconds} 秒",
-        f"邮箱：{'开' if collect_email_enabled else '关'}",
-        f"电话：{'开' if collect_phone_enabled else '关'}",
-        f"提取代表人：{'开' if extract_representative_enabled else '关'}",
-        f"搜索现役最大代表人：{'开' if search_representative_enabled else '关'}",
-        "",
-        "1. Key 设置",
-        "2. 并发设置",
-        "3. 单站等待上限",
-        "4. 邮箱（开/关切换）",
-        "5. 电话（开/关切换）",
-        "6. 提取代表人（开/关切换）",
-        "7. 搜索现役最大代表人（开/关切换）",
-        "8. 返回主菜单",
-    ]
-
-
-def _build_key_settings_lines(key_status: str) -> list[str]:
-    return [
-        f"当前状态：{key_status}",
-        "",
-        "1. 更换 Key",
-        "2. 删除 Key 并退出系统",
-        "3. 返回系统配置",
-    ]
-
-
-def _pad_panel_text(text: str, width: int) -> str:
-    content = str(text or "")
-    return content + " " * max(width - _display_width(content), 0)
-
-
-def _center_panel_text(text: str, width: int) -> str:
-    content = str(text or "")
-    content_width = _display_width(content)
-    if content_width >= width:
-        return _pad_panel_text(content, width)
-    left = (width - content_width) // 2
-    right = width - content_width - left
-    return (" " * left) + content + (" " * right)
-
-
-def _display_width(text: str) -> int:
-    return sum(_char_display_width(char) for char in str(text or ""))
-
-
-def _char_display_width(char: str) -> int:
-    if not char:
-        return 0
-    if unicodedata.combining(char):
-        return 0
-    return 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
-
-
-def _resolve_panel_width() -> int:
-    columns = shutil.get_terminal_size(fallback=(100, 30)).columns
-    return max(min(columns - 4, 76), 56)
-
-
-def _clear_screen() -> None:
-    command = "cls" if os.name == "nt" else "clear"
-    os.system(command)

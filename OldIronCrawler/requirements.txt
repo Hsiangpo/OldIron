@@ -8,5 +8,6 @@ markdownify>=0.13
 openai>=1.30
 openpyxl>=3.1
 python-dotenv>=1.0
+rich>=13.7
 pytest>=8.0
 pyinstaller>=6.0

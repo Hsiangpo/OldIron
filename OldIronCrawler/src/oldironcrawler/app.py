@@ -242,7 +242,11 @@ def _run_session_with_llm_recovery(
         print(f"开始任务：file={input_path.name} total={progress['total']} db={db_path}", flush=True)
         print(_format_runtime_budget(config), flush=True)
         try:
-            run_crawl_session(config, store, delivery_path)
+            from oldironcrawler.ui.console import get_console
+            from oldironcrawler.ui.crawl_view import CrawlView
+
+            with CrawlView(get_console()):
+                run_crawl_session(config, store, delivery_path)
             print(f"交付完成：{delivery_path}", flush=True)
             return 0, current_key
         except (LlmConfigurationError, LlmTemporaryError) as exc:

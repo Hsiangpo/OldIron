@@ -433,10 +433,13 @@ def test_run_dashboard_validates_key_before_showing_panel(tmp_path: Path, monkey
 
     monkeypatch.setattr(app_module, "_validate_llm_runtime", fake_validate)
     monkeypatch.setattr(console_module, "prompt_runtime_llm_key", lambda: event_log.append("prompt") or "good-key")
-    monkeypatch.setattr(dashboard_module, "_render_panel", lambda title, lines: event_log.append(f"panel:{title}"))
-    monkeypatch.setattr(dashboard_module, "_clear_screen", lambda: None)
+
+    def fake_run_menu(spec, **kwargs):
+        event_log.append(f"menu:{spec.title}")
+        return "quit"
+
+    monkeypatch.setattr(dashboard_module, "run_menu", fake_run_menu)
     monkeypatch.setattr(dashboard_module, "wait_for_enter", lambda *args, **kwargs: None)
-    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     result = dashboard_module.run_dashboard(tmp_path, "bad-key")
 
@@ -445,7 +448,7 @@ def test_run_dashboard_validates_key_before_showing_panel(tmp_path: Path, monkey
         "validate:bad-key",
         "prompt",
         "validate:good-key",
-        "panel:OldIronCrawler 控制面板",
+        "menu:OLDIRONCRAWLER",
     ]
 
 
@@ -460,7 +463,6 @@ def test_run_dashboard_retries_temporary_validation_error_without_crashing(tmp_p
         encoding="utf-8",
     )
     event_log: list[str] = []
-    answers = iter(["5"])
 
     def fake_validate(config) -> None:
         event_log.append(f"validate:{config.llm_key}")
@@ -470,10 +472,13 @@ def test_run_dashboard_retries_temporary_validation_error_without_crashing(tmp_p
     monkeypatch.setattr(app_module, "_validate_llm_runtime", fake_validate)
     sleep_calls: list[int] = []
     monkeypatch.setattr(app_module.time, "sleep", lambda seconds: sleep_calls.append(int(seconds)))
-    monkeypatch.setattr(dashboard_module, "_render_panel", lambda title, lines: event_log.append(f"panel:{title}"))
-    monkeypatch.setattr(dashboard_module, "_clear_screen", lambda: None)
+
+    def fake_run_menu(spec, **kwargs):
+        event_log.append(f"menu:{spec.title}")
+        return "quit"
+
+    monkeypatch.setattr(dashboard_module, "run_menu", fake_run_menu)
     monkeypatch.setattr(dashboard_module, "wait_for_enter", lambda *args, **kwargs: None)
-    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     result = dashboard_module.run_dashboard(tmp_path, "steady-key")
 
@@ -481,7 +486,7 @@ def test_run_dashboard_retries_temporary_validation_error_without_crashing(tmp_p
     assert event_log[:3] == [
         "validate:steady-key",
         "validate:steady-key",
-        "panel:OldIronCrawler 控制面板",
+        "menu:OLDIRONCRAWLER",
     ]
     assert sleep_calls == [3]
 
@@ -521,12 +526,9 @@ def test_run_dashboard_persists_validated_key_to_env(tmp_path: Path, monkeypatch
         ),
         encoding="utf-8",
     )
-    answers = iter(["5"])
-
     monkeypatch.setattr(app_module, "_validate_llm_runtime", lambda _config: None)
-    monkeypatch.setattr(dashboard_module, "_clear_screen", lambda: None)
+    monkeypatch.setattr(dashboard_module, "run_menu", lambda spec, **kwargs: "quit")
     monkeypatch.setattr(dashboard_module, "wait_for_enter", lambda *args, **kwargs: None)
-    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     result = dashboard_module.run_dashboard(tmp_path, "saved-key")
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
@@ -562,7 +564,7 @@ def test_classify_invalid_ping_response_as_temporary_issue() -> None:
     assert details.category == "temporary_unavailable"
 
 
-def test_run_dashboard_retries_invalid_file_choice_inside_panel(tmp_path: Path, monkeypatch) -> None:
+def test_run_dashboard_start_crawl_runs_selected_file(tmp_path: Path, monkeypatch) -> None:
     websites_dir = tmp_path / "websites"
     websites_dir.mkdir(parents=True)
     (tmp_path / ".env").write_text(
@@ -577,7 +579,7 @@ def test_run_dashboard_retries_invalid_file_choice_inside_panel(tmp_path: Path, 
     selected_file = websites_dir / "sites.xlsx"
     selected_file.write_text("", encoding="utf-8")
     event_log: list[str] = []
-    answers = iter(["1", "9", "1", "5"])
+    answers = iter(["start", "0", "quit"])
 
     monkeypatch.setattr(app_module, "_validate_llm_runtime", lambda _config: None)
     monkeypatch.setattr(
@@ -590,10 +592,9 @@ def test_run_dashboard_retries_invalid_file_choice_inside_panel(tmp_path: Path, 
             effective_key=current_key,
         ),
     )
-    monkeypatch.setattr(dashboard_module, "_clear_screen", lambda: None)
+    monkeypatch.setattr(dashboard_module, "run_menu", lambda spec, **kwargs: next(answers))
     monkeypatch.setattr(dashboard_module, "wait_for_enter", lambda *args, **kwargs: None)
     monkeypatch.setattr(dashboard_module, "_open_folder", lambda _path: None)
-    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     result = dashboard_module.run_dashboard(tmp_path, "good-key")
 
@@ -611,39 +612,28 @@ def test_run_dashboard_delete_key_exits_system(tmp_path: Path, monkeypatch) -> N
         ),
         encoding="utf-8",
     )
-    answers = iter(["4", "1", "2"])
+    answers = iter(["config", "key", "delete"])
 
     monkeypatch.setattr(app_module, "_validate_llm_runtime", lambda _config: None)
-    monkeypatch.setattr(dashboard_module, "_clear_screen", lambda: None)
+    monkeypatch.setattr(dashboard_module, "run_menu", lambda spec, **kwargs: next(answers))
     monkeypatch.setattr(dashboard_module, "wait_for_enter", lambda *args, **kwargs: None)
-    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     result = dashboard_module.run_dashboard(tmp_path, "good-key")
 
     assert result == 0
 
 
-def test_dashboard_wrap_and_pad_handle_wide_characters() -> None:
-    wrapped = dashboard_module._wrap_line("系统配置 Key 状态：********g666", 12)
-    padded = [dashboard_module._pad_panel_text(item, 12) for item in wrapped]
-
-    assert wrapped
-    assert all(dashboard_module._display_width(item) <= 12 for item in wrapped)
-    assert all(dashboard_module._display_width(item) == 12 for item in padded)
+def test_main_menu_spec_lists_five_actions(tmp_path: Path) -> None:
+    session = dashboard_module.DashboardSession(project_root=tmp_path, current_key="k")
+    spec = dashboard_module._main_menu_spec(session)
+    assert [item.value for item in spec.items] == ["start", "websites", "output", "config", "quit"]
 
 
-def test_dashboard_uses_numeric_back_options() -> None:
-    assert "0. 返回主菜单" in dashboard_module._build_file_select_lines([], None)
-    lines = dashboard_module._build_system_config_lines(
-        key_status="已设置",
-        concurrency=32,
-        site_timeout_seconds=180,
-        collect_email_enabled=True,
-        collect_phone_enabled=True,
-        extract_representative_enabled=True,
-        search_representative_enabled=True,
-    )
-    assert "8. 返回主菜单" in lines
-    assert "4. 邮箱（开/关切换）" in lines
-    assert not any("AI 邮箱" in line or "规则" in line for line in lines)
-    assert "3. 返回系统配置" in dashboard_module._build_key_settings_lines("已设置")
+def test_config_menu_spec_lists_toggles_and_back() -> None:
+    session = dashboard_module.DashboardSession(project_root=Path("."), current_key="k")
+    spec = dashboard_module._config_menu_spec(session)
+    values = [item.value for item in spec.items]
+    assert values == ["key", "concurrency", "timeout", "email", "phone", "rep", "search", "back"]
+    labels = [item.label for item in spec.items]
+    assert "邮箱（开/关切换）" in labels
+    assert not any("AI 邮箱" in label or "规则" in label for label in labels)
