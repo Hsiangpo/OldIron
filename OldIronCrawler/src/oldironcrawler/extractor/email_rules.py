@@ -44,15 +44,15 @@ _BAD_EMAIL_HOST_HINTS = (
     ".pb.hx",
 )
 _IGNORE_LOCAL_PARTS = {
-    "x", "xx", "xxx", "name", "test", "example", "sample", "yourname",
+    "x", "xx", "xxx", "name", "test", "example", "exemplo", "sample", "yourname",
     "youremail", "email", "noreply", "no-reply", "donotreply", "do-not-reply",
 }
 _PLACEHOLDER_EXACT_PARTS = {
-    "aaa", "aaaa", "beispiel", "dummy", "example", "hogehoge", "hoge", "name", "sample",
+    "aaa", "aaaa", "beispiel", "dummy", "example", "exemplo", "hogehoge", "hoge", "name", "sample",
     "test", "xxx", "xxxx", "xxxxx", "yourdomain", "yourdmain",
 }
-_PLACEHOLDER_DOMAIN_WORDS = {"aaa", "beispiel", "dummy", "email", "example", "sample", "test", "yourdomain", "yourdmain"}
-_PLACEHOLDER_STEM_WORDS = {"beispiel", "dummy", "email", "example", "name", "sample", "test"}
+_PLACEHOLDER_DOMAIN_WORDS = {"aaa", "beispiel", "dominio", "dummy", "email", "example", "exemplo", "sample", "test", "yourdomain", "yourdmain"}
+_PLACEHOLDER_STEM_WORDS = {"beispiel", "dummy", "email", "example", "exemplo", "name", "sample", "test"}
 _EMAIL_PRIORITY_LOCAL_PARTS = {
     "contact", "customer", "hello", "help", "hr", "info", "inquiry", "office",
     "privacy", "pr", "press", "recruit", "recruiting", "sales", "service",

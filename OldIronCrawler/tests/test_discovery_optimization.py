@@ -147,23 +147,27 @@ def test_common_probe_batch_caps_wait_below_site_deadline(monkeypatch) -> None:
     client.close()
 
 
-def test_primary_discovery_skips_common_probe_after_homepage_timeout(monkeypatch) -> None:
+def test_primary_discovery_probes_common_paths_after_homepage_timeout(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig(timeout_seconds=180.0))
+    probed: list[str] = []
 
     def fake_fetch_html(_session, _url: str, **kwargs) -> str:
         assert kwargs["max_retries_override"] == 0
         assert kwargs["timeout_seconds"] <= 20.0
         raise ProtocolTemporaryError("Failed to perform, curl: (28) Operation timed out")
 
-    def fail_probe(*_args, **_kwargs):
-        raise AssertionError("主页打开超时后不应继续扫公共路径")
+    def fake_probe(_session, start_url: str, *, limit: int) -> list[str]:
+        probed.append(start_url)
+        return ["https://slow.example/contato"]
 
     monkeypatch.setattr(client, "_fetch_html", fake_fetch_html)
-    monkeypatch.setattr(client, "_probe_common_value_urls", fail_probe)
+    monkeypatch.setattr(client, "_probe_common_value_urls", fake_probe)
 
-    with pytest.raises(ProtocolPermanentError, match="site_open_timeout"):
-        client._discover_primary_urls(object(), "https://slow.example", limit=20)
+    urls, homepage_html = client._discover_primary_urls(object(), "https://slow.example", limit=20)
 
+    assert urls == ["https://slow.example/contato"]
+    assert homepage_html == ""
+    assert probed == ["https://slow.example"]
     client.close()
 
 

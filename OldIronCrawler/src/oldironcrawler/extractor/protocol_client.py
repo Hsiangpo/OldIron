@@ -27,7 +27,7 @@ from oldironcrawler.extractor.protocol.errors import (
 )
 from oldironcrawler.extractor.protocol.fallbacks import (
     build_empty_page_batch_error as _build_empty_page_batch_error,
-    build_www_fallback_url as _build_www_fallback_url,
+    build_host_fallback_urls as _build_host_fallback_urls,
     is_supported_response as _is_supported_response,
     replace_https_with_http as _replace_https_with_http,
     should_try_http_fallback as _should_try_http_fallback,
@@ -695,36 +695,35 @@ class SiteProtocolClient:
         *,
         request_deadline_monotonic: float | None = None,
     ) -> str | None:
-        fallback_url = _build_www_fallback_url(url, lowered_error)
-        if not fallback_url:
-            return None
-        response = None
-        try:
-            request_timeout = self._resolve_timeout(deadline_monotonic=request_deadline_monotonic)
-            with request_slot(
-                timeout_seconds=request_timeout,
-                wait_timeout_seconds=self._resolve_request_slot_wait_timeout(
-                    request_timeout,
-                    deadline_monotonic=request_deadline_monotonic,
-                ),
-            ):
-                response = session.get(fallback_url, timeout=request_timeout)
-            if int(response.status_code) != 200:
-                return None
-            content_type = str(response.headers.get("Content-Type", "") or "").lower()
-            if not _is_supported_response(fallback_url, content_type):
-                return None
-            html_text = _truncate_html(_decode_response_text(response), self._config.max_html_chars)
-            _raise_if_challenge_page(fallback_url, html_text)
-            return html_text
-        except Exception:  # noqa: BLE001
-            return None
-        finally:
-            if response is not None:
-                try:
-                    response.close()
-                except Exception:  # noqa: BLE001
-                    pass
+        for fallback_url in _build_host_fallback_urls(url, lowered_error):
+            response = None
+            try:
+                request_timeout = self._resolve_timeout(deadline_monotonic=request_deadline_monotonic)
+                with request_slot(
+                    timeout_seconds=request_timeout,
+                    wait_timeout_seconds=self._resolve_request_slot_wait_timeout(
+                        request_timeout,
+                        deadline_monotonic=request_deadline_monotonic,
+                    ),
+                ):
+                    response = session.get(fallback_url, timeout=request_timeout)
+                if int(response.status_code) != 200:
+                    continue
+                content_type = str(response.headers.get("Content-Type", "") or "").lower()
+                if not _is_supported_response(fallback_url, content_type):
+                    continue
+                html_text = _truncate_html(_decode_response_text(response), self._config.max_html_chars)
+                _raise_if_challenge_page(fallback_url, html_text)
+                return html_text
+            except Exception:  # noqa: BLE001
+                continue
+            finally:
+                if response is not None:
+                    try:
+                        response.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        return None
 
     def _discover_sitemap_urls(self, session: cffi_requests.Session, base_url: str, *, limit: int) -> list[str]:
         return _discover_sitemap_urls(base_url, limit=limit, fetch_text=lambda url: self._fetch_sitemap_text(session, url))
@@ -758,6 +757,9 @@ class SiteProtocolClient:
         except (ProtocolPermanentError, ProtocolTemporaryError) as exc:
             homepage_error = exc
         if homepage_error is not None and _should_abort_common_probe_after_homepage_error(homepage_error):
+            guessed_urls = self._probe_common_value_urls(session, start_url, limit=limit)
+            if guessed_urls:
+                return guessed_urls, ""
             raise _normalize_homepage_open_error(start_url, homepage_error) from homepage_error
         guessed_urls = self._probe_common_value_urls(session, start_url, limit=limit)
         homepage_links = _extract_same_site_links(homepage_html, start_url, limit=limit) if homepage_html else []

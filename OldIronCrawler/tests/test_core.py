@@ -2414,6 +2414,27 @@ def test_email_rules_drop_www_and_placeholder_vendor_noise() -> None:
     assert emails == ["bookings@airportexecutive.com"]
 
 
+def test_email_rules_drop_portuguese_placeholder_examples() -> None:
+    emails, _page_hits = collect_emails_for_pages(
+        "https://metassessoria.com",
+        [
+            (
+                "https://metassessoria.com",
+                """
+                <html>
+                  meta@metassessoria.com
+                  exemplo@dominio.com
+                  exemplo@mail.com
+                  exemplo@exemplo.com.br
+                </html>
+                """,
+            )
+        ],
+    )
+
+    assert emails == ["meta@metassessoria.com"]
+
+
 def test_email_rules_drop_site_typo_domain_and_obfuscated_noise() -> None:
     emails, _page_hits = collect_emails_for_pages(
         "https://fglp.co.uk",

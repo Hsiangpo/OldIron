@@ -122,6 +122,64 @@ def test_protocol_fetch_html_follows_same_site_meta_refresh() -> None:
     client.close()
 
 
+def test_protocol_fetch_html_uses_www_fallback_after_dns_failure() -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+    calls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Type": "text/html"}
+        text = "<html><body>real brazil homepage contato@rcpcontadores.com</body></html>"
+        content = text.encode("utf-8")
+
+        def close(self) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, url, timeout):
+            calls.append(url)
+            if url == "http://rcpcontadores.com":
+                raise RuntimeError("Failed to perform, curl: (6) Could not resolve host")
+            return FakeResponse()
+
+    html = client._fetch_html(FakeSession(), "http://rcpcontadores.com", required=False)
+
+    assert "real brazil homepage" in html
+    assert calls == ["http://rcpcontadores.com", "http://www.rcpcontadores.com"]
+    client.close()
+
+
+def test_protocol_fetch_html_uses_registrable_root_after_subdomain_dns_failure() -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+    calls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Type": "text/html"}
+        text = "<html><body>root homepage contato@altcom.com.br</body></html>"
+        content = text.encode("utf-8")
+
+        def close(self) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, url, timeout):
+            calls.append(url)
+            if "info.altcom.com.br" in url:
+                raise RuntimeError("Failed to perform, curl: (6) Could not resolve host")
+            return FakeResponse()
+
+    html = client._fetch_html(FakeSession(), "http://info.altcom.com.br", required=False)
+
+    assert "root homepage" in html
+    assert calls == [
+        "http://info.altcom.com.br",
+        "http://www.info.altcom.com.br",
+        "http://altcom.com.br",
+    ]
+    client.close()
+
+
 def test_protocol_fetch_html_marks_plain_403_as_blocked(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
 
