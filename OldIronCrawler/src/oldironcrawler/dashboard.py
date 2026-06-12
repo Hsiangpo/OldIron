@@ -61,7 +61,7 @@ def run_dashboard(project_root: Path, initial_key: str) -> int:
 def _main_menu_spec(session: DashboardSession) -> MenuSpec:
     return MenuSpec(
         title=_WORDMARK,
-        subtitle=f"{_SUBTITLE} · v1",
+        subtitle=_SUBTITLE,
         status_block=_main_status_block(session),
         items=[
             MenuItem("start", "开始抓取"),

@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from rich.console import Console, Group, RenderableType
 from rich.padding import Padding
-from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
 from oldironcrawler.ui.theme import DOT, HAIR, UI_THEME
+
+# 内容最大宽度：发丝线/留白不再铺满整个终端，避免宽窗口里换行（会把 Live 帧高算错而堆叠），
+# 也消除大段尾部空格，左对齐更"克制"。
+_MAX_WIDTH = 72
 
 _console: Console | None = None
 
@@ -26,13 +29,17 @@ def get_console() -> Console:
     return _console
 
 
+def content_width() -> int:
+    return max(min(get_console().width - 4, _MAX_WIDTH), 8)
+
+
 def clear_screen() -> None:
     get_console().clear()
 
 
-def hairline() -> Rule:
-    """整行发丝细线。"""
-    return Rule(characters=HAIR, style="hair")
+def hairline() -> Text:
+    """限定宽度的发丝细线（不铺满终端）。"""
+    return Text(HAIR * content_width(), style="hair")
 
 
 def wordmark(title: str, subtitle: str = "") -> Group:
@@ -65,5 +72,5 @@ def inline_stats(pairs: list[tuple[str, str]]) -> Text:
 
 
 def screen(*renderables: RenderableType, pad: tuple[int, int] = (1, 2)) -> Padding:
-    """给整屏内容统一加留白外边距，营造'呼吸感'。"""
-    return Padding(Group(*renderables), (pad[0], pad[1], pad[0], pad[1]))
+    """给整屏内容统一加留白外边距；expand=False 让块只占内容宽度，不铺满终端。"""
+    return Padding(Group(*renderables), (pad[0], pad[1], pad[0], pad[1]), expand=False)

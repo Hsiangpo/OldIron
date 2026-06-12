@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from rich.console import Group, RenderableType
-from rich.live import Live
 from rich.text import Text
 
 from oldironcrawler.ui import key_input as keys
@@ -113,15 +112,17 @@ def render_menu(spec: MenuSpec, index: int) -> RenderableType:
 
 
 def run_menu(spec: MenuSpec, *, reader=None) -> str | None:
-    """全屏渲染菜单并读键，返回选中项的 value（Esc 返回 back_value）。"""
+    """清屏后重画菜单并读键，返回选中项的 value（Esc 返回 back_value）。
+
+    用"每次按键清屏重画"而非 rich.Live：彻底免疫宽窗口换行把 Live 帧高算错导致的堆叠。
+    """
     console = get_console()
     controller = MenuController(spec.items)
-    with Live(console=console, auto_refresh=False, screen=True) as live:
-        while True:
-            live.update(render_menu(spec, controller.index))
-            live.refresh()
-            action, value = controller.on_key(keys.read_key(reader))
-            if action == "choose":
-                return value
-            if action == "back":
-                return spec.back_value
+    while True:
+        console.clear()
+        console.print(render_menu(spec, controller.index))
+        action, value = controller.on_key(keys.read_key(reader))
+        if action == "choose":
+            return value
+        if action == "back":
+            return spec.back_value
