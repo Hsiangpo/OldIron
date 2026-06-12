@@ -122,10 +122,10 @@ def _render_key_banner(notice: str | None = None) -> None:
     from rich.console import Group
     from rich.text import Text
 
-    from oldironcrawler.ui.console import get_console, hairline, screen, wordmark
+    from oldironcrawler.ui.console import clear_screen, get_console, hairline, screen, wordmark
 
     console = get_console()
-    console.clear()
+    clear_screen()
     blocks = [wordmark("OLDIRONCRAWLER", "公司官网采集 · 密钥"), Text(), hairline(), Text()]
     if str(notice or "").strip():
         blocks += [Text(str(notice).strip(), style="fail"), Text()]

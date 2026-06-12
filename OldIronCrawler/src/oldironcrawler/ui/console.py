@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import os
+
 from rich.console import Console, Group, RenderableType
 from rich.padding import Padding
 from rich.table import Table
@@ -34,7 +36,12 @@ def content_width() -> int:
 
 
 def clear_screen() -> None:
-    get_console().clear()
+    """硬清屏：连滚动历史一起清掉。
+
+    rich 的 console.clear()（\x1b[2J）在部分 Windows conhost 上从信息屏切回菜单时
+    擦不干净、会留下上一屏残影；用 cls/clear 与旧版一致地彻底清屏。
+    """
+    os.system("cls" if os.name == "nt" else "clear")
 
 
 def hairline() -> Text:

@@ -12,7 +12,7 @@ from rich.console import Group, RenderableType
 from rich.text import Text
 
 from oldironcrawler.ui import key_input as keys
-from oldironcrawler.ui.console import get_console, hairline, screen, wordmark
+from oldironcrawler.ui.console import clear_screen, get_console, hairline, screen, wordmark
 from oldironcrawler.ui.theme import CURSOR
 
 
@@ -118,8 +118,9 @@ def run_menu(spec: MenuSpec, *, reader=None) -> str | None:
     """
     console = get_console()
     controller = MenuController(spec.items)
+    clear_screen()  # 进入菜单先硬清屏一次：擦掉上一屏（信息屏/抓取屏等）的残影
     while True:
-        console.clear()
+        console.clear()  # 循环内用 rich 轻量清屏原地重画：同高度帧，导航不闪烁
         console.print(render_menu(spec, controller.index))
         action, value = controller.on_key(keys.read_key(reader))
         if action == "choose":

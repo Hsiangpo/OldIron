@@ -13,7 +13,7 @@ from oldironcrawler.config import resolve_websites_dir
 from oldironcrawler.console import prompt_runtime_llm_key, wait_for_enter
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmTemporaryError
 from oldironcrawler.importer import list_input_files
-from oldironcrawler.ui.console import get_console, hairline, inline_stats, kv_block, screen, wordmark
+from oldironcrawler.ui.console import clear_screen, get_console, hairline, inline_stats, kv_block, screen, wordmark
 from oldironcrawler.ui.menu import MenuItem, MenuSpec, run_menu
 
 _BACK = "__back__"
@@ -376,7 +376,7 @@ def _open_folder(path: Path) -> None:
 
 def _render_info(title: str, lines: list) -> None:
     console = get_console()
-    console.clear()
+    clear_screen()
     console.print(screen(wordmark(title, _SUBTITLE), Text(), hairline(), Text(), Group(*lines)))
 
 
