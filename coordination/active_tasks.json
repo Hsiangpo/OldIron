@@ -1,5 +1,27 @@
 {
   "version": 1,
-  "updated_at": "2026-06-12T19:54:09Z",
-  "tasks": []
+  "updated_at": "2026-06-12T23:37:55Z",
+  "tasks": [
+    {
+      "task_id": "oldironcrawler-brazil-failure-recovery-20260613",
+      "status": "in_progress",
+      "machine": "windows",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "OldIronCrawler"
+      ],
+      "planned_files": [
+        "OldIronCrawler/src/oldironcrawler/extractor",
+        "OldIronCrawler/tests"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-06-12T23:37:55Z",
+      "last_heartbeat_at": "2026-06-12T23:37:55Z",
+      "notes": "Optimize OldIronCrawler Brazil website recovery from current failure logs: DNS/root fallback, timeout common probes, placeholder email filtering."
+    }
+  ]
 }
