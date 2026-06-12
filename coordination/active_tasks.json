@@ -1,29 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-06-12T16:41:25Z",
-  "tasks": [
-    {
-      "task_id": "oldironcrawler-value-pages-jp-br-tr-20260613",
-      "status": "in_progress",
-      "machine": "Windows-D",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [
-        "OldIronCrawler/src/oldironcrawler/extractor/value_rules.py",
-        "OldIronCrawler/src/oldironcrawler/extractor/service.py",
-        "OldIronCrawler/tests/test_core.py",
-        "OldIronCrawler/tests/test_value_budgeting.py"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-12T16:41:25Z",
-      "last_heartbeat_at": "2026-06-12T16:41:25Z",
-      "notes": "Optimize OldIronCrawler value-page selection for Japan, Brazil, and Turkey"
-    }
-  ]
+  "updated_at": "2026-06-12T17:23:28Z",
+  "tasks": []
 }
