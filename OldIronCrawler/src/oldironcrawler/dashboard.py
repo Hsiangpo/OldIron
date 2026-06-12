@@ -32,7 +32,7 @@ class DashboardSession:
     last_failed_path: Path | None = None
     llm_base_url: str = ""
     collect_email_enabled: bool = True
-    collect_phone_enabled: bool = True
+    collect_phone_enabled: bool = False
     extract_representative_enabled: bool = False
     search_representative_enabled: bool = False
 

@@ -637,3 +637,11 @@ def test_config_menu_spec_lists_toggles_and_back() -> None:
     labels = [item.label for item in spec.items]
     assert "邮箱（开/关切换）" in labels
     assert not any("AI 邮箱" in label or "规则" in label for label in labels)
+
+
+def test_dashboard_session_defaults_to_email_only() -> None:
+    session = dashboard_module.DashboardSession(project_root=Path("."), current_key="k")
+    assert session.collect_email_enabled is True
+    assert session.collect_phone_enabled is False
+    assert session.extract_representative_enabled is False
+    assert session.search_representative_enabled is False
