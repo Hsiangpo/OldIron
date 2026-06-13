@@ -1,24 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-06-13T13:29:35Z",
-  "tasks": [
-    {
-      "task_id": "oldironcrawler-email-speed-20260613",
-      "status": "in_progress",
-      "machine": "local-windows",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-13T13:29:35Z",
-      "last_heartbeat_at": "2026-06-13T13:29:35Z",
-      "notes": "Optimize OldIronCrawler email-mode speed while keeping AI email extraction enabled"
-    }
-  ]
+  "updated_at": "2026-06-13T14:00:08Z",
+  "tasks": []
 }
