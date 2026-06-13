@@ -1,5 +1,33 @@
 {
   "version": 1,
-  "updated_at": "2026-06-13T05:33:48Z",
-  "tasks": []
+  "updated_at": "2026-06-13T06:12:18Z",
+  "tasks": [
+    {
+      "task_id": "oldironcrawler-company-name-toggle-20260613",
+      "status": "in_progress",
+      "machine": "windows-local",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "OldIronCrawler"
+      ],
+      "planned_files": [
+        "OldIronCrawler/src/oldironcrawler/config.py",
+        "OldIronCrawler/src/oldironcrawler/importer.py",
+        "OldIronCrawler/src/oldironcrawler/app.py",
+        "OldIronCrawler/src/oldironcrawler/dashboard.py",
+        "OldIronCrawler/src/oldironcrawler/extractor/service.py",
+        "OldIronCrawler/src/oldironcrawler/extractor/llm_client.py",
+        "OldIronCrawler/src/oldironcrawler/reporter.py",
+        "OldIronCrawler/tests/test_core.py"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-06-13T06:12:18Z",
+      "last_heartbeat_at": "2026-06-13T06:12:18Z",
+      "notes": "Add default-off company-name collection toggle for OldIronCrawler"
+    }
+  ]
 }
