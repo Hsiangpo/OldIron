@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from oldironcrawler.extractor.email_rules import (
     merge_ai_emails_for_website,
@@ -94,6 +102,37 @@ def test_extract_emails_from_pages_handles_bad_payload(monkeypatch) -> None:
         assert client.extract_emails_from_pages(homepage="x", pages=[]) == []
     finally:
         client.close()
+
+
+def test_pick_email_urls_keeps_only_given_candidates(monkeypatch) -> None:
+    client = _email_client()
+    candidates = [
+        "https://acme.example/central-relacionamento",
+        "https://acme.example/products",
+    ]
+    monkeypatch.setattr(
+        client,
+        "_call_json",
+        lambda prompt, **kwargs: {
+            "selected_urls": [
+                "https://acme.example/central-relacionamento",
+                "https://evil.example/contact",
+                "https://acme.example/made-up",
+                "https://acme.example/central-relacionamento",
+            ]
+        },
+    )
+    try:
+        urls = client.pick_email_urls(
+            homepage="https://acme.example",
+            candidate_urls=candidates,
+            existing_email_urls=[],
+            target_count=3,
+        )
+    finally:
+        client.close()
+
+    assert urls == ["https://acme.example/central-relacionamento"]
 
 
 class _FakeEmailLlm:

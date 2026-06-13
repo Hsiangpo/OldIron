@@ -7,6 +7,7 @@ import time
 from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.company_rules import clean_company_name_candidate, extract_company_name_fallback
 from oldironcrawler.extractor.discovery_fallback import has_non_homepage_email_target, probe_common_email_value_urls
+from oldironcrawler.extractor.email_page_selection import build_email_teacher_pool, pick_email_urls_or_empty
 from oldironcrawler.extractor.email_rules import analyze_email_set, collect_emails_for_pages, join_emails, merge_ai_emails_for_website
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtractionResult, LlmTemporaryError, WebsiteLlmClient
 from oldironcrawler.extractor.page_pool import PageFetchPool
@@ -149,7 +150,9 @@ class SiteProfileService:
             rep_urls = []
             if need_llm_extract:
                 rep_urls = self._resolve_representative_urls(discovery, website, metrics, deadline_monotonic)
-            email_urls = discovery.email_urls if need_contact_extract else []
+            email_urls = []
+            if need_contact_extract:
+                email_urls = self._resolve_email_urls(discovery, website, metrics, deadline_monotonic)
             fetch_plan = _plan_fetch_targets(self._config, website, rep_urls, email_urls)
             metrics.discovered_url_count = len(discovery.urls)
             metrics.rep_url_count = len(fetch_plan["rep_urls"])
@@ -275,6 +278,39 @@ class SiteProfileService:
             ),
         )
         return merge_representative_urls(rep_urls, extra_urls, limit=_get_rep_page_limit(self._config))
+
+    def _resolve_email_urls(
+        self,
+        discovery: DiscoverySnapshot,
+        website: str,
+        metrics: SiteStageMetrics,
+        deadline_monotonic: float | None,
+    ) -> list[str]:
+        email_urls = list(discovery.email_urls)
+        if has_non_homepage_email_target(website, email_urls):
+            return email_urls
+        candidate_urls = build_email_teacher_pool(discovery, website)
+        if not candidate_urls:
+            return email_urls
+        target_count = max(_get_email_page_hard_limit(self._config) - len(email_urls), 1)
+        picked_urls = self._time_call(
+            metrics,
+            "llm_pick_ms",
+            lambda: pick_email_urls_or_empty(
+                self._llm,
+                homepage=website,
+                candidate_urls=candidate_urls,
+                existing_email_urls=email_urls,
+                target_count=target_count,
+                deadline_monotonic=deadline_monotonic,
+            ),
+        )
+        allowed = set(candidate_urls)
+        return _merge_unique_urls(
+            email_urls,
+            [url for url in picked_urls if url in allowed],
+            limit=_get_email_page_hard_limit(self._config),
+        )
 
     def _collect_budgeted_pages(
         self,
@@ -416,7 +452,7 @@ class SiteProfileService:
             return func()
         finally:
             elapsed_ms = int(round((time.monotonic() - started) * 1000))
-            setattr(metrics, field_name, elapsed_ms)
+            setattr(metrics, field_name, int(getattr(metrics, field_name, 0) or 0) + elapsed_ms)
 
 
 def _merge_page_targets(rep_urls: list[str], email_urls: list[str]) -> list[str]:

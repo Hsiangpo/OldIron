@@ -208,6 +208,40 @@ class WebsiteLlmClient:
                 result.append(url)
         return result[: max(int(target_count), 1)]
 
+    def pick_email_urls(
+        self,
+        *,
+        homepage: str,
+        candidate_urls: list[str],
+        existing_email_urls: list[str],
+        target_count: int,
+        deadline_monotonic: float | None = None,
+    ) -> list[str]:
+        prompt = (
+            "你是企业官网邮箱页选择器。\n"
+            "目标：从给定链接里选择最可能包含邮箱、电话、联系表单、客服、招聘联系、隐私/法务联系信息的页面。\n"
+            "优先页面：contact, contato, fale conosco, atendimento, ouvidoria, iletisim, bize ulasin, inquiry, form, privacy, lgpd, kvkk, recruit, careers。\n"
+            "只做选页，不要抽邮箱，不要编造链接。\n"
+            "只能从候选链接里选择，不能返回候选之外的 URL。\n"
+            "如果已有邮箱页只包含首页或明显不足，可以补选更具体的联系页。\n"
+            '返回 JSON：{"selected_urls":["..."]}\n\n'
+            f"首页: {homepage}\n"
+            f"最多返回: {max(int(target_count), 1)}\n"
+            f"已有邮箱页(JSON): {json.dumps(existing_email_urls, ensure_ascii=False)}\n"
+            f"候选链接(JSON): {json.dumps(candidate_urls, ensure_ascii=False)}"
+        )
+        data = self._call_json(prompt, deadline_monotonic=deadline_monotonic)
+        selected = data.get("selected_urls")
+        if not isinstance(selected, list):
+            return []
+        allowed = set(candidate_urls)
+        result: list[str] = []
+        for item in selected:
+            url = str(item or "").strip()
+            if url and url in allowed and url not in result:
+                result.append(url)
+        return result[: max(int(target_count), 1)]
+
     def extract_company_and_representative(
         self,
         *,

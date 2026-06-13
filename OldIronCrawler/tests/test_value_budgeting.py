@@ -10,6 +10,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from oldironcrawler.config import AppConfig
+from oldironcrawler.extractor.email_page_selection import build_email_teacher_pool
 from oldironcrawler.extractor.llm_client import LlmExtractionResult
 from oldironcrawler.extractor.protocol_client import HtmlPage
 from oldironcrawler.extractor.service import DiscoverySnapshot, SiteProfileService
@@ -157,6 +158,25 @@ def test_build_fetch_plan_keeps_selected_homepage_in_primary_phase() -> None:
     assert "https://example.com" not in plan["email_overflow_urls"]
 
 
+def test_build_email_teacher_pool_excludes_homepage_scheme_variants() -> None:
+    website = "http://newton.ag"
+    homepage_variant = "https://newton.ag/"
+    careers_url = "https://newton.ag/carreiras/"
+    candidates = value_rules_module.build_candidates(website, [homepage_variant, careers_url], {}, {})
+
+    pool = build_email_teacher_pool(
+        SimpleNamespace(
+            urls=[website, homepage_variant, careers_url],
+            candidates=candidates,
+            email_urls=[website],
+        ),
+        website,
+    )
+
+    assert homepage_variant not in pool
+    assert careers_url in pool
+
+
 def test_build_fetch_plan_can_include_homepage_even_when_homepage_not_in_rep_or_email_candidates() -> None:
     plan = value_rules_module.build_fetch_plan(
         "https://example.com",
@@ -290,6 +310,83 @@ def test_site_profile_service_fetches_email_overflow_after_primary_phase_when_ne
     assert llm_calls == [[about_url, team_url]]
     assert result.result.representative == "Alice Example"
     assert result.result.emails == "info@acmeholdings.co.uk; privacy@acmeholdings.co.uk"
+    learning_store.close()
+    store.close()
+
+
+def test_site_profile_service_uses_llm_email_picker_when_rules_only_select_homepage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://acmeholdings.co.uk"
+    hidden_contact_url = f"{website}/central-relacionamento"
+    product_url = f"{website}/products"
+    fetch_calls: list[list[str]] = []
+    picker_calls: list[dict[str, object]] = []
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            html_map = {
+                hidden_contact_url: "<html><p>hidden@acmeholdings.co.uk</p></html>",
+                product_url: "<html><p>Products</p></html>",
+            }
+            return [HtmlPage(url=url, html=html_map[url]) for url in urls if url in html_map]
+
+        def close(self) -> None:
+            return None
+
+    class FakeLlmClient:
+        def pick_email_urls(self, **kwargs):
+            picker_calls.append(kwargs)
+            return [hidden_contact_url]
+
+        def pick_representative_urls(self, **_kwargs):
+            return []
+
+        def extract_company_and_representative(self, **_kwargs):
+            raise AssertionError("代表人 LLM 不应在该用例里运行")
+
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+    candidates = value_rules_module.build_candidates(
+        website,
+        [hidden_contact_url, product_url],
+        {},
+        {},
+    )
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(
+        service_module,
+        "_discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=[website, hidden_contact_url, product_url],
+            candidates=candidates,
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=[website],
+            homepage_html="<html><p>Home</p></html>",
+        ),
+    )
+    monkeypatch.setattr(service_module, "replace_shell_pages_with_evidence", lambda *_args, **_kwargs: 0)
+
+    config = _build_service_config()
+    config.extract_representative_enabled = False
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+
+    result = service.process(task.id, task.website, input_company_name="Acme Holdings")
+
+    assert picker_calls
+    assert hidden_contact_url in picker_calls[0]["candidate_urls"]
+    assert fetch_calls == [[hidden_contact_url]]
+    assert result.result.emails == "hidden@acmeholdings.co.uk"
     learning_store.close()
     store.close()
 
