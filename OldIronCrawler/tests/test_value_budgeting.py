@@ -28,6 +28,8 @@ def test_app_config_loads_value_budget_defaults(tmp_path: Path, monkeypatch) -> 
         "EMAIL_PAGE_HARD_LIMIT",
         "PAGE_TOTAL_HARD_LIMIT",
         "EMAIL_STOP_SAME_DOMAIN_COUNT",
+        "AI_EMAIL_CONCURRENCY",
+        "DISCOVERY_BUDGET_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -38,6 +40,8 @@ def test_app_config_loads_value_budget_defaults(tmp_path: Path, monkeypatch) -> 
     assert config.email_page_hard_limit == 16
     assert config.page_total_hard_limit == 20
     assert config.email_stop_same_domain_count == 2
+    assert config.ai_email_concurrency == 8
+    assert config.discovery_budget_seconds == 45.0
 
 
 def test_app_config_supports_value_budget_dotenv_override(tmp_path: Path) -> None:
@@ -49,6 +53,8 @@ def test_app_config_supports_value_budget_dotenv_override(tmp_path: Path) -> Non
                 "EMAIL_PAGE_HARD_LIMIT=18",
                 "PAGE_TOTAL_HARD_LIMIT=22",
                 "EMAIL_STOP_SAME_DOMAIN_COUNT=3",
+                "AI_EMAIL_CONCURRENCY=5",
+                "DISCOVERY_BUDGET_SECONDS=55",
             ]
         ),
         encoding="utf-8",
@@ -61,6 +67,87 @@ def test_app_config_supports_value_budget_dotenv_override(tmp_path: Path) -> Non
     assert config.email_page_hard_limit == 18
     assert config.page_total_hard_limit == 22
     assert config.email_stop_same_domain_count == 3
+    assert config.ai_email_concurrency == 5
+    assert config.discovery_budget_seconds == 55.0
+
+
+def test_discovery_email_only_stops_after_two_email_families() -> None:
+    website = "https://acme.example"
+
+    class FakeProtocol:
+        def __init__(self) -> None:
+            self.sitemap_calls = 0
+            self.related_calls = 0
+
+        def discover_primary_urls(self, _website: str, *, limit: int):
+            return SimpleNamespace(
+                urls=[f"{website}/contact", f"{website}/privacy"],
+                homepage_html="<html>home</html>",
+            )
+
+        def discover_sitemap_urls(self, _website: str, *, limit: int) -> list[str]:
+            self.sitemap_calls += 1
+            return [f"{website}/legal"]
+
+        def discover_related_subdomain_urls(self, *_args, **_kwargs) -> list[str]:
+            self.related_calls += 1
+            return [f"{website}/support"]
+
+    protocol = FakeProtocol()
+
+    snapshot = service_module._discover_value_snapshot(
+        protocol,
+        website,
+        {},
+        {},
+        rep_target_count=0,
+        contact_target_enabled=True,
+    )
+
+    assert f"{website}/contact" in snapshot.email_urls
+    assert f"{website}/privacy" in snapshot.email_urls
+    assert protocol.sitemap_calls == 0
+    assert protocol.related_calls == 0
+
+
+def test_discovery_budget_skips_extra_stages_after_primary(monkeypatch) -> None:
+    website = "https://acme.example"
+
+    class FakeProtocol:
+        def __init__(self) -> None:
+            self.sitemap_calls = 0
+            self.related_calls = 0
+
+        def discover_primary_urls(self, _website: str, *, limit: int):
+            return SimpleNamespace(
+                urls=[f"{website}/products"],
+                homepage_html="<html>home</html>",
+            )
+
+        def discover_sitemap_urls(self, _website: str, *, limit: int) -> list[str]:
+            self.sitemap_calls += 1
+            return [f"{website}/contact"]
+
+        def discover_related_subdomain_urls(self, *_args, **_kwargs) -> list[str]:
+            self.related_calls += 1
+            return [f"{website}/privacy"]
+
+    monkeypatch.setattr(service_module.time, "monotonic", lambda: 2.0)
+    protocol = FakeProtocol()
+
+    snapshot = service_module._discover_value_snapshot(
+        protocol,
+        website,
+        {},
+        {},
+        rep_target_count=0,
+        contact_target_enabled=True,
+        discovery_deadline_monotonic=1.0,
+    )
+
+    assert snapshot.urls == [f"{website}/products"]
+    assert protocol.sitemap_calls == 0
+    assert protocol.related_calls == 0
 
 
 def test_build_fetch_plan_preserves_rep_pages_and_total_budget() -> None:
@@ -614,7 +701,7 @@ def test_site_profile_service_extracts_emails_from_representative_pages(
     store.close()
 
 
-def test_site_profile_service_fetches_email_overflow_when_primary_email_is_enough_but_representative_is_missing(
+def test_site_profile_service_skips_email_overflow_when_primary_email_is_enough_even_if_representative_is_missing(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -684,12 +771,70 @@ def test_site_profile_service_fetches_email_overflow_when_primary_email_is_enoug
 
     result = service.process(task.id, task.website)
 
-    assert events == ["fetch_primary", "extract_representative", "fetch_overflow"]
-    assert fetch_calls == [
-        [about_url, team_url, website, contact_url],
-        [privacy_url],
-    ]
-    assert result.result.emails == "info@acmeholdings.co.uk; support@acmeholdings.co.uk; privacy@acmeholdings.co.uk"
+    assert events == ["fetch_primary", "extract_representative"]
+    assert fetch_calls == [[about_url, team_url, website, contact_url]]
+    assert result.result.emails == "info@acmeholdings.co.uk; support@acmeholdings.co.uk"
+    assert result.stage_metrics.ai_email_ms >= 0
+    learning_store.close()
+    store.close()
+
+
+def test_site_profile_service_records_ai_email_timing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://acmeholdings.co.uk"
+    contact_url = f"{website}/contact"
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            return [
+                HtmlPage(
+                    url=contact_url,
+                    html="<html>info@acmeholdings.co.uk ai [at] acmeholdings [dot] co [dot] uk</html>",
+                )
+            ]
+
+        def close(self) -> None:
+            return None
+
+    class FakeLlmClient:
+        def pick_email_urls(self, **_kwargs):
+            return []
+
+        def extract_emails_from_pages(self, **_kwargs):
+            return ["ai@acmeholdings.co.uk"]
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(
+        service_module,
+        "_discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=[contact_url],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=[contact_url],
+        ),
+    )
+
+    config = _build_service_config()
+    config.extract_representative_enabled = False
+    config.collect_company_name_enabled = False
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+
+    result = service.process(task.id, task.website)
+
+    assert result.result.emails == "info@acmeholdings.co.uk; ai@acmeholdings.co.uk"
+    assert result.stage_metrics.ai_email_ms >= 0
+    loaded = store.load_stage_metrics(task.id)
+    assert loaded.ai_email_ms == result.stage_metrics.ai_email_ms
     learning_store.close()
     store.close()
 
@@ -787,6 +932,8 @@ def _build_service_config() -> SimpleNamespace:
         email_page_hard_limit=2,
         page_total_hard_limit=5,
         email_stop_same_domain_count=2,
+        ai_email_concurrency=8,
+        discovery_budget_seconds=45.0,
     )
 
 

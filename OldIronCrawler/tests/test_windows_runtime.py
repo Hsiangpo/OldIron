@@ -121,6 +121,7 @@ def test_derive_runtime_concurrency_budget_applies_user_concurrency_to_all_limit
 
     assert budget.site_concurrency == 64
     assert budget.llm_concurrency == 64
+    assert budget.ai_email_concurrency == 8
     assert budget.page_concurrency == 64
     assert budget.page_worker_count == 64
     assert budget.page_host_limit == 64
@@ -147,6 +148,7 @@ def test_apply_runtime_preferences_uses_same_concurrency_for_all_limits() -> Non
         page_concurrency=1,
         page_worker_count=1,
         page_host_limit=1,
+        ai_email_concurrency=8,
         total_wait_seconds=180.0,
     )
 
@@ -154,6 +156,7 @@ def test_apply_runtime_preferences_uses_same_concurrency_for_all_limits() -> Non
 
     assert config.site_concurrency == 64
     assert config.llm_concurrency == 64
+    assert config.ai_email_concurrency == 8
     assert config.page_worker_count == 64
     assert config.page_concurrency == 64
     assert config.page_host_limit == 64

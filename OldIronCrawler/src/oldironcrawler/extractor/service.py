@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
+import threading
 import time
 
 from oldironcrawler.config import AppConfig
@@ -37,6 +38,11 @@ _DISCOVERY_SITEMAP_LIMIT = 80
 _DISCOVERY_RELATED_LIMIT = 40
 _DISCOVERY_FINAL_LIMIT = 160
 _DISCOVERY_EMAIL_FAMILY_TARGET = 6
+_DISCOVERY_EMAIL_ONLY_FAMILY_TARGET = 2
+_DEFAULT_AI_EMAIL_CONCURRENCY = 8
+_AI_EMAIL_SEMAPHORE_LOCK = threading.Lock()
+_AI_EMAIL_SEMAPHORE: threading.Semaphore | None = None
+_AI_EMAIL_SEMAPHORE_LIMIT = 0
 _DISCOVERY_REP_STRONG_TOKENS = {
     "board",
     "chair",
@@ -62,15 +68,11 @@ _DISCOVERY_REP_STRONG_TOKENS = {
     "uber",
     "ueber",
 }
-
-
 @dataclass
 class SiteProcessingResult:
     result: SiteResult
     learning_feedback: "LearningFeedback"
     stage_metrics: SiteStageMetrics
-
-
 @dataclass
 class DiscoverySnapshot:
     urls: list[str]
@@ -79,16 +81,12 @@ class DiscoverySnapshot:
     teacher_pool: list[str]
     email_urls: list[str]
     homepage_html: str = ""
-
-
 @dataclass
 class LearningFeedback:
     rep_positive_tokens: list[str]
     rep_negative_tokens: list[str]
     email_positive_tokens: list[str]
     email_negative_tokens: list[str]
-
-
 class SiteProfileService:
     def __init__(
         self,
@@ -135,6 +133,7 @@ class SiteProfileService:
         )
         rep_learned = self._learning_store.load_scores("representative")
         email_learned = self._learning_store.load_scores("email")
+        discovery_deadline_monotonic = _resolve_discovery_deadline(self._config, deadline_monotonic)
         protocol = SiteProtocolClient(_build_site_protocol_config(self._config, deadline_monotonic))
         try:
             discovery = self._time_call(
@@ -147,6 +146,7 @@ class SiteProfileService:
                     email_learned,
                     rep_target_count=rep_target_count,
                     contact_target_enabled=need_contact_extract,
+                    discovery_deadline_monotonic=discovery_deadline_monotonic,
                 ),
             )
             rep_urls = []
@@ -210,7 +210,7 @@ class SiteProfileService:
                 )
                 if collect_email_enabled:
                     emails = self._merge_ai_emails(
-                        website, emails, email_rule_pages, deadline_monotonic
+                        website, emails, email_rule_pages, metrics, deadline_monotonic
                     )
                 else:
                     emails = []
@@ -373,7 +373,6 @@ class SiteProfileService:
                 website,
                 fetch_plan,
                 page_map,
-                llm_result,
             )
             _merge_pages_into_map(page_map, overflow_pages)
             if overflow_pages:
@@ -412,16 +411,22 @@ class SiteProfileService:
         website: str,
         rule_emails: list[str],
         email_rule_pages: list[tuple[str, str]],
+        metrics: SiteStageMetrics,
         deadline_monotonic: float | None,
     ) -> list[str]:
         # AI 邮箱强制常开：始终在规则结果上并集补全混淆/拆分邮箱，规则是保底地板。
         if not email_rule_pages:
             return rule_emails
-        ai_emails = _extract_ai_emails_or_empty(
-            llm_client=self._llm,
-            homepage=website,
-            email_rule_pages=email_rule_pages,
-            deadline_monotonic=deadline_monotonic,
+        ai_emails = self._time_call(
+            metrics,
+            "ai_email_ms",
+            lambda: _extract_ai_emails_or_empty(
+                llm_client=self._llm,
+                homepage=website,
+                email_rule_pages=email_rule_pages,
+                deadline_monotonic=deadline_monotonic,
+                ai_email_concurrency=getattr(self._config, "ai_email_concurrency", _DEFAULT_AI_EMAIL_CONCURRENCY),
+            ),
         )
         if not ai_emails:
             return rule_emails
@@ -433,11 +438,9 @@ class SiteProfileService:
         website: str,
         fetch_plan: dict[str, list[str]],
         page_map: dict[str, object],
-        llm_result: LlmExtractionResult,
     ) -> tuple[list, int]:
         if not _should_fetch_email_overflow_after_primary_fetch(
             website,
-            llm_result,
             _collect_primary_email_rule_pages(page_map, fetch_plan),
             fetch_plan["email_overflow_urls"],
             email_stop_same_domain_count=_get_email_stop_same_domain_count(self._config),
@@ -516,14 +519,18 @@ def _finish_active_representative_search(
     finally:
         if future is not None:
             metrics.search_rep_ms = int(round((time.monotonic() - started_monotonic) * 1000))
-
-
 def _remaining_deadline_seconds(deadline_monotonic: float | None) -> float | None:
     if deadline_monotonic is None:
         return None
     return max(deadline_monotonic - time.monotonic(), 0.0)
-
-
+def _resolve_discovery_deadline(config: AppConfig, site_deadline_monotonic: float | None) -> float:
+    budget_seconds = min(max(float(getattr(config, "discovery_budget_seconds", 45.0) or 45.0), 30.0), 60.0)
+    budget_deadline = time.monotonic() + budget_seconds
+    if site_deadline_monotonic is None:
+        return budget_deadline
+    return min(budget_deadline, site_deadline_monotonic)
+def _discovery_budget_exceeded(deadline_monotonic: float | None) -> bool:
+    return deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
 def _collect_contact_details(
     website: str,
     email_rule_pages: list[tuple[str, str]],
@@ -531,18 +538,25 @@ def _collect_contact_details(
     emails, email_sources = collect_emails_for_pages(website, email_rule_pages)
     phones, phone_sources = collect_phones_for_pages(email_rule_pages)
     return emails, email_sources, phones, phone_sources
-
-
 def _extract_ai_emails_or_empty(
     *,
     llm_client: WebsiteLlmClient,
     homepage: str,
     email_rule_pages: list[tuple[str, str]],
     deadline_monotonic: float | None,
+    ai_email_concurrency: int = _DEFAULT_AI_EMAIL_CONCURRENCY,
 ) -> list[str]:
     if not email_rule_pages:
         return []
+    semaphore = _get_ai_email_semaphore(ai_email_concurrency)
+    timeout = _remaining_deadline_seconds(deadline_monotonic)
+    if timeout is not None and timeout <= 0:
+        return []
+    acquired = False
     try:
+        acquired = semaphore.acquire(timeout=timeout)
+        if not acquired:
+            return []
         return llm_client.extract_emails_from_pages(
             homepage=homepage,
             pages=[{"url": url, "html": html_text} for url, html_text in email_rule_pages],
@@ -554,8 +568,17 @@ def _extract_ai_emails_or_empty(
     except Exception:  # noqa: BLE001
         # AI 邮箱只是增量，解析异常等就退回规则结果，别因此拖垮整站。
         return []
-
-
+    finally:
+        if acquired:
+            semaphore.release()
+def _get_ai_email_semaphore(limit: int) -> threading.Semaphore:
+    global _AI_EMAIL_SEMAPHORE, _AI_EMAIL_SEMAPHORE_LIMIT
+    normalized_limit = min(max(int(limit or _DEFAULT_AI_EMAIL_CONCURRENCY), 1), 16)
+    with _AI_EMAIL_SEMAPHORE_LOCK:
+        if _AI_EMAIL_SEMAPHORE is None or _AI_EMAIL_SEMAPHORE_LIMIT != normalized_limit:
+            _AI_EMAIL_SEMAPHORE = threading.Semaphore(normalized_limit)
+            _AI_EMAIL_SEMAPHORE_LIMIT = normalized_limit
+        return _AI_EMAIL_SEMAPHORE
 def _build_site_protocol_config(config: AppConfig, deadline_monotonic: float | None) -> SiteProtocolConfig:
     page_concurrency = max(int(getattr(config, "page_concurrency", 1) or 1), 1)
     page_worker_count = max(int(getattr(config, "page_worker_count", page_concurrency) or page_concurrency), 1)
@@ -596,6 +619,7 @@ def _discover_value_snapshot(
     *,
     rep_target_count: int = 5,
     contact_target_enabled: bool = True,
+    discovery_deadline_monotonic: float | None = None,
 ) -> DiscoverySnapshot:
     primary = protocol.discover_primary_urls(website, limit=_DISCOVERY_PRIMARY_LIMIT)
     snapshot = _build_discovery_snapshot(
@@ -608,6 +632,8 @@ def _discover_value_snapshot(
     )
     if _has_enough_discovery_coverage(snapshot, rep_target_count=rep_target_count):
         return snapshot
+    if _discovery_budget_exceeded(discovery_deadline_monotonic):
+        return snapshot
     sitemap_urls = protocol.discover_sitemap_urls(website, limit=_DISCOVERY_SITEMAP_LIMIT)
     merged = _merge_unique_urls(snapshot.urls, sitemap_urls, limit=_DISCOVERY_FINAL_LIMIT)
     snapshot = _build_discovery_snapshot(
@@ -619,6 +645,8 @@ def _discover_value_snapshot(
         homepage_html=primary.homepage_html,
     )
     if _has_enough_discovery_coverage(snapshot, rep_target_count=rep_target_count):
+        return snapshot
+    if _discovery_budget_exceeded(discovery_deadline_monotonic):
         return snapshot
     related_urls = protocol.discover_related_subdomain_urls(
         website,
@@ -635,6 +663,8 @@ def _discover_value_snapshot(
         rep_target_count=rep_target_count,
         homepage_html=primary.homepage_html,
     )
+    if _discovery_budget_exceeded(discovery_deadline_monotonic):
+        return snapshot
     if contact_target_enabled and not has_non_homepage_email_target(website, snapshot.email_urls):
         fallback_urls = probe_common_email_value_urls(protocol, website, snapshot)
         if fallback_urls:
@@ -678,9 +708,15 @@ def _has_enough_discovery_coverage(snapshot: DiscoverySnapshot, *, rep_target_co
             return False
         if not _has_high_confidence_representative_coverage(snapshot):
             return False
-    if count_selected_families(snapshot.candidates, snapshot.email_urls) < _DISCOVERY_EMAIL_FAMILY_TARGET:
+    if count_selected_families(snapshot.candidates, snapshot.email_urls) < _discovery_email_family_target(rep_target_count):
         return False
     return True
+
+
+def _discovery_email_family_target(rep_target_count: int) -> int:
+    if rep_target_count <= 0:
+        return _DISCOVERY_EMAIL_ONLY_FAMILY_TARGET
+    return _DISCOVERY_EMAIL_FAMILY_TARGET
 
 
 def _has_high_confidence_representative_coverage(snapshot: DiscoverySnapshot) -> bool:
@@ -744,7 +780,6 @@ def _fetch_email_overflow_pages(
 
 def _should_fetch_email_overflow_after_primary_fetch(
     website: str,
-    llm_result: LlmExtractionResult,
     primary_email_rule_pages: list[tuple[str, str]],
     email_overflow_urls: list[str],
     *,
@@ -752,8 +787,6 @@ def _should_fetch_email_overflow_after_primary_fetch(
 ) -> bool:
     if not email_overflow_urls:
         return False
-    if not str(llm_result.representative or "").strip():
-        return True
     emails, _page_hits = collect_emails_for_pages(website, primary_email_rule_pages)
     same_domain_count = len(analyze_email_set(website, emails).same_domain_emails)
     return same_domain_count < email_stop_same_domain_count

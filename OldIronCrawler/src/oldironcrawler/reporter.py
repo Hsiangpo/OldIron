@@ -213,6 +213,7 @@ def _format_stage_timing(metrics: SiteStageMetrics) -> str:
             f"LLM选页 {metrics.llm_pick_ms / 1000:.1f}s",
             f"抓页 {metrics.fetch_pages_ms / 1000:.1f}s",
             f"LLM抽取 {metrics.llm_extract_ms / 1000:.1f}s",
+            f"AI邮箱 {metrics.ai_email_ms / 1000:.1f}s",
             f"AI搜索 {metrics.search_rep_ms / 1000:.1f}s",
             f"联系方式规则 {metrics.email_rule_ms / 1000:.1f}s",
             f"公司规则 {metrics.company_rule_ms / 1000:.1f}s",

@@ -38,6 +38,7 @@ class SiteStageMetrics:
     llm_pick_ms: int = 0
     fetch_pages_ms: int = 0
     llm_extract_ms: int = 0
+    ai_email_ms: int = 0
     search_rep_ms: int = 0
     email_rule_ms: int = 0
     company_rule_ms: int = 0
@@ -120,6 +121,7 @@ class RuntimeStore:
                     llm_pick_ms INTEGER NOT NULL DEFAULT 0,
                     fetch_pages_ms INTEGER NOT NULL DEFAULT 0,
                     llm_extract_ms INTEGER NOT NULL DEFAULT 0,
+                    ai_email_ms INTEGER NOT NULL DEFAULT 0,
                     search_rep_ms INTEGER NOT NULL DEFAULT 0,
                     email_rule_ms INTEGER NOT NULL DEFAULT 0,
                     company_rule_ms INTEGER NOT NULL DEFAULT 0,
@@ -225,6 +227,7 @@ class RuntimeStore:
                     llm_pick_ms = 0,
                     fetch_pages_ms = 0,
                     llm_extract_ms = 0,
+                    ai_email_ms = 0,
                     search_rep_ms = 0,
                     email_rule_ms = 0,
                     company_rule_ms = 0,
@@ -269,6 +272,7 @@ class RuntimeStore:
                     llm_pick_ms = 0,
                     fetch_pages_ms = 0,
                     llm_extract_ms = 0,
+                    ai_email_ms = 0,
                     search_rep_ms = 0,
                     email_rule_ms = 0,
                     company_rule_ms = 0,
@@ -307,6 +311,7 @@ class RuntimeStore:
                     llm_pick_ms = 0,
                     fetch_pages_ms = 0,
                     llm_extract_ms = 0,
+                    ai_email_ms = 0,
                     search_rep_ms = 0,
                     email_rule_ms = 0,
                     company_rule_ms = 0,
@@ -373,6 +378,7 @@ class RuntimeStore:
                     llm_pick_ms = ?,
                     fetch_pages_ms = ?,
                     llm_extract_ms = ?,
+                    ai_email_ms = ?,
                     search_rep_ms = ?,
                     email_rule_ms = ?,
                     company_rule_ms = ?,

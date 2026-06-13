@@ -169,6 +169,7 @@ class AppConfig:
     llm_reasoning_effort: str
     llm_api_style: str
     llm_concurrency: int
+    ai_email_concurrency: int
     capsolver_api_key: str
     capsolver_api_base_url: str
     capsolver_proxy: str
@@ -185,6 +186,7 @@ class AppConfig:
     email_page_hard_limit: int
     page_total_hard_limit: int
     email_stop_same_domain_count: int
+    discovery_budget_seconds: float
     collect_company_name_enabled: bool
     collect_email_enabled: bool
     collect_phone_enabled: bool
@@ -215,6 +217,7 @@ class AppConfig:
             llm_reasoning_effort=_config_str(values, "LLM_REASONING_EFFORT", "low"),
             llm_api_style=_config_str(values, "LLM_API_STYLE", "responses").lower(),
             llm_concurrency=max(_config_int(values, "LLM_CONCURRENCY", 32), 1),
+            ai_email_concurrency=min(max(_config_int(values, "AI_EMAIL_CONCURRENCY", 8), 1), 16),
             capsolver_api_key=_config_str(values, "CAPSOLVER_API_KEY"),
             capsolver_api_base_url=_config_str(values, "CAPSOLVER_API_BASE_URL", "https://api.capsolver.com"),
             capsolver_proxy=_config_str(values, "CAPSOLVER_PROXY"),
@@ -231,6 +234,7 @@ class AppConfig:
             email_page_hard_limit=max(_config_int(values, "EMAIL_PAGE_HARD_LIMIT", 16), 0),
             page_total_hard_limit=max(_config_int(values, "PAGE_TOTAL_HARD_LIMIT", 20), 1),
             email_stop_same_domain_count=max(_config_int(values, "EMAIL_STOP_SAME_DOMAIN_COUNT", 2), 1),
+            discovery_budget_seconds=min(max(_config_float(values, "DISCOVERY_BUDGET_SECONDS", 45.0), 30.0), 60.0),
             collect_company_name_enabled=_config_bool(values, "COLLECT_COMPANY_NAME_ENABLED", False),
             collect_email_enabled=_config_bool(values, "COLLECT_EMAIL_ENABLED", True),
             collect_phone_enabled=_config_bool(values, "COLLECT_PHONE_ENABLED", True),

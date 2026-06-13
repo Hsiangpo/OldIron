@@ -32,6 +32,7 @@ class CrawlRunResult:
 class RuntimeConcurrencyBudget:
     site_concurrency: int
     llm_concurrency: int
+    ai_email_concurrency: int
     page_concurrency: int
     page_worker_count: int
     page_host_limit: int
@@ -341,6 +342,7 @@ def _apply_runtime_preferences(
     budget = _derive_runtime_concurrency_budget(concurrency)
     bounded_timeout = min(max(int(site_timeout_seconds), 60), 600)
     config.llm_concurrency = budget.llm_concurrency
+    config.ai_email_concurrency = max(int(getattr(config, "ai_email_concurrency", budget.ai_email_concurrency) or 1), 1)
     config.site_concurrency = budget.site_concurrency
     config.page_concurrency = budget.page_concurrency
     config.page_worker_count = budget.page_worker_count
@@ -369,6 +371,7 @@ def _derive_runtime_concurrency_budget(concurrency: int) -> RuntimeConcurrencyBu
         # 大模型并发按站点并发放大 3 倍（每家约调 3 次大模型），上限 64；
         # 否则 AI 搜法人的大模型调用会排在站点抽取后面、排队超时被丢弃。
         llm_concurrency=min(runtime_concurrency * 3, 64),
+        ai_email_concurrency=8,
         page_concurrency=runtime_concurrency,
         page_worker_count=runtime_concurrency,
         page_host_limit=runtime_concurrency,
@@ -380,6 +383,7 @@ def _format_runtime_budget(config: AppConfig) -> str:
         "运行预算："
         f"站点并发={config.site_concurrency}，"
         f"LLM并发={config.llm_concurrency}，"
+        f"AI邮箱并发={config.ai_email_concurrency}，"
         f"公共探测批量={config.page_concurrency}，"
         f"全局抓页线程={config.page_worker_count}，"
         f"同主机抓页上限={config.page_host_limit}，"

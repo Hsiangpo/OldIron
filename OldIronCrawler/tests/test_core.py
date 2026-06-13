@@ -39,7 +39,7 @@ from oldironcrawler.importer import ImportedWebsite, choose_input_file, compute_
 from oldironcrawler.runtime.global_learning import GlobalLearningStore
 from oldironcrawler import runner as runner_module
 from oldironcrawler.runner import _describe_error_reason, _describe_missing_reason, _looks_temporary_error
-from oldironcrawler.reporter import write_delivery_reports
+from oldironcrawler.reporter import _format_stage_timing, write_delivery_reports
 from oldironcrawler.runtime.store import RuntimeStore, SiteResult, SiteStageMetrics
 
 
@@ -802,6 +802,7 @@ def test_runtime_store_updates_and_loads_stage_metrics(tmp_path: Path) -> None:
             llm_pick_ms=300,
             fetch_pages_ms=4500,
             llm_extract_ms=900,
+            ai_email_ms=700,
             email_rule_ms=100,
             company_rule_ms=50,
             discovered_url_count=18,
@@ -817,8 +818,25 @@ def test_runtime_store_updates_and_loads_stage_metrics(tmp_path: Path) -> None:
     assert loaded.discover_ms == 1200
     assert loaded.llm_pick_ms == 300
     assert loaded.fetch_pages_ms == 4500
+    assert loaded.ai_email_ms == 700
     assert loaded.discovered_url_count == 18
     assert loaded.fetched_page_count == 6
+
+
+def test_stage_timing_formats_ai_email_separately() -> None:
+    text = _format_stage_timing(
+        SiteStageMetrics(
+            discover_ms=1000,
+            fetch_pages_ms=2000,
+            llm_extract_ms=3000,
+            ai_email_ms=4000,
+            email_rule_ms=5000,
+        )
+    )
+
+    assert "LLM抽取 3.0s" in text
+    assert "AI邮箱 4.0s" in text
+    assert "联系方式规则 5.0s" in text
 
 
 def test_raise_nofile_soft_limit_raises_soft_limit(monkeypatch) -> None:

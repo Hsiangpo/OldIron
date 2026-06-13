@@ -14,6 +14,7 @@ from oldironcrawler.extractor.email_rules import (
     merge_ai_emails_for_website,
     select_emails_present_in_pages,
 )
+from oldironcrawler.extractor import service as service_module
 from oldironcrawler.extractor.llm_client import LlmTemporaryError, WebsiteLlmClient
 from oldironcrawler.extractor.service import _extract_ai_emails_or_empty
 
@@ -161,6 +162,35 @@ def test_extract_ai_emails_or_empty_builds_pages_and_returns() -> None:
     assert llm.calls[0][1] == [
         {"url": "https://acme.example/contact", "html": "<html>info@acme.example</html>"}
     ]
+
+
+def test_extract_ai_emails_or_empty_uses_dedicated_concurrency_limit(monkeypatch) -> None:
+    llm = _FakeEmailLlm(result=["info@acme.example"])
+    seen_limits: list[int] = []
+
+    class FakeSemaphore:
+        def acquire(self, timeout=None):
+            return True
+
+        def release(self):
+            return None
+
+    def fake_get_ai_email_semaphore(limit: int):
+        seen_limits.append(limit)
+        return FakeSemaphore()
+
+    monkeypatch.setattr(service_module, "_get_ai_email_semaphore", fake_get_ai_email_semaphore)
+
+    out = _extract_ai_emails_or_empty(
+        llm_client=llm,
+        homepage="https://acme.example",
+        email_rule_pages=[("https://acme.example/contact", "<html>info@acme.example</html>")],
+        deadline_monotonic=None,
+        ai_email_concurrency=5,
+    )
+
+    assert out == ["info@acme.example"]
+    assert seen_limits == [5]
 
 
 def test_extract_ai_emails_or_empty_skips_llm_when_no_pages() -> None:
