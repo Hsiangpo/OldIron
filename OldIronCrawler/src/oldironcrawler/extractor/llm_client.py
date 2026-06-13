@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
 from openai import OpenAI
 
+from oldironcrawler.extractor.email_page_selection import prepare_email_pages_for_llm
 from oldironcrawler.llm_errors import LlmIntervention, classify_llm_exception
 
 
@@ -322,7 +323,9 @@ class WebsiteLlmClient:
         pages: list[dict[str, str]],
         deadline_monotonic: float | None = None,
     ) -> list[str]:
-        safe_pages = self._convert_pages_to_markdown(pages)
+        safe_pages = prepare_email_pages_for_llm(
+            self._convert_pages_to_markdown(pages, truncate_long_pages=False)
+        )
         prompt = (
             "你是企业官网邮箱抽取器。\n"
             "目标：把给定网页内容里出现的所有真实邮箱地址全部找出来。\n\n"
@@ -401,7 +404,12 @@ class WebsiteLlmClient:
             "evidence_url": str(data.get("evidence_url", "") or "").strip(),
         }
 
-    def _convert_pages_to_markdown(self, pages: list[dict[str, str]]) -> list[dict[str, str]]:
+    def _convert_pages_to_markdown(
+        self,
+        pages: list[dict[str, str]],
+        *,
+        truncate_long_pages: bool = True,
+    ) -> list[dict[str, str]]:
         remove_tags = ["script", "style", "img", "svg", "video", "audio", "canvas", "iframe", "noscript"]
         result: list[dict[str, str]] = []
         for page in pages:
@@ -418,7 +426,7 @@ class WebsiteLlmClient:
             content = re.sub(r"\n{3,}", "\n\n", content).strip()
             if head_signals:
                 content = "\n".join(["--- 页面头部信号 ---", *head_signals, "", content]).strip()
-            if len(content) > self._MAX_PAGE_CHARS:
+            if truncate_long_pages and len(content) > self._MAX_PAGE_CHARS:
                 half = self._MAX_PAGE_CHARS // 2
                 content = content[:half] + "\n\n...（内容过长已截断）...\n\n" + content[-half:]
             result.append({"url": url, "content": content})

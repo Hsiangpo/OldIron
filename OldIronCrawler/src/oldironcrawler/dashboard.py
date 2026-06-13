@@ -236,9 +236,9 @@ def _handle_system_config(session: DashboardSession) -> str | None:
                 title="并发设置",
                 current_value=session.concurrency,
                 min_value=1,
-                max_value=64,
+                max_value=32,
                 apply_value=lambda value: setattr(session, "concurrency", value),
-                description="请输入新的并发值，范围 1-64。",
+                description="请输入新的并发值，范围 1-32。",
             )
         elif choice == "timeout":
             _handle_numeric_setting(

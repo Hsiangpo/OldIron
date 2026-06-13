@@ -217,7 +217,7 @@ class AppConfig:
             llm_reasoning_effort=_config_str(values, "LLM_REASONING_EFFORT", "low"),
             llm_api_style=_config_str(values, "LLM_API_STYLE", "responses").lower(),
             llm_concurrency=max(_config_int(values, "LLM_CONCURRENCY", 32), 1),
-            ai_email_concurrency=min(max(_config_int(values, "AI_EMAIL_CONCURRENCY", 8), 1), 16),
+            ai_email_concurrency=32,
             capsolver_api_key=_config_str(values, "CAPSOLVER_API_KEY"),
             capsolver_api_base_url=_config_str(values, "CAPSOLVER_API_BASE_URL", "https://api.capsolver.com"),
             capsolver_proxy=_config_str(values, "CAPSOLVER_PROXY"),

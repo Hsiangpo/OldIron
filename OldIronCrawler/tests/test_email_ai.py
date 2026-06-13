@@ -96,6 +96,38 @@ def test_extract_emails_from_pages_parses_and_dedupes(monkeypatch) -> None:
     assert emails == ["info@acme.example", "sales@acme.example"]  # 小写 + 去重
 
 
+def test_extract_emails_from_pages_sends_compact_contact_context(monkeypatch) -> None:
+    client = _email_client()
+    seen_prompts: list[str] = []
+    noisy_html = "\n".join(
+        [
+            "<html><body>",
+            *[f"<p>product catalog filler {index}</p>" for index in range(2500)],
+            "<section>Contact: sales [at] acme [dot] example</section>",
+            *[f"<p>news archive filler {index}</p>" for index in range(2500)],
+            "</body></html>",
+        ]
+    )
+
+    def fake_call_json(prompt, **kwargs):
+        seen_prompts.append(prompt)
+        return {"emails": ["sales@acme.example"]}
+
+    monkeypatch.setattr(client, "_call_json", fake_call_json)
+    try:
+        emails = client.extract_emails_from_pages(
+            homepage="https://acme.example",
+            pages=[{"url": "https://acme.example/contact", "html": noisy_html}],
+        )
+    finally:
+        client.close()
+
+    assert emails == ["sales@acme.example"]
+    assert seen_prompts
+    assert "sales [at] acme [dot] example" in seen_prompts[0]
+    assert len(seen_prompts[0]) < 30_000
+
+
 def test_extract_emails_from_pages_handles_bad_payload(monkeypatch) -> None:
     client = _email_client()
     monkeypatch.setattr(client, "_call_json", lambda prompt, **kwargs: {"oops": 1})
@@ -164,7 +196,7 @@ def test_extract_ai_emails_or_empty_builds_pages_and_returns() -> None:
     ]
 
 
-def test_extract_ai_emails_or_empty_uses_dedicated_concurrency_limit(monkeypatch) -> None:
+def test_extract_ai_emails_or_empty_uses_runtime_concurrency_limit(monkeypatch) -> None:
     llm = _FakeEmailLlm(result=["info@acme.example"])
     seen_limits: list[int] = []
 
@@ -186,11 +218,11 @@ def test_extract_ai_emails_or_empty_uses_dedicated_concurrency_limit(monkeypatch
         homepage="https://acme.example",
         email_rule_pages=[("https://acme.example/contact", "<html>info@acme.example</html>")],
         deadline_monotonic=None,
-        ai_email_concurrency=5,
+        ai_email_concurrency=32,
     )
 
     assert out == ["info@acme.example"]
-    assert seen_limits == [5]
+    assert seen_limits == [32]
 
 
 def test_extract_ai_emails_or_empty_skips_llm_when_no_pages() -> None:

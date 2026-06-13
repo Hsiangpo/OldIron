@@ -39,7 +39,7 @@ _DISCOVERY_RELATED_LIMIT = 40
 _DISCOVERY_FINAL_LIMIT = 160
 _DISCOVERY_EMAIL_FAMILY_TARGET = 6
 _DISCOVERY_EMAIL_ONLY_FAMILY_TARGET = 2
-_DEFAULT_AI_EMAIL_CONCURRENCY = 8
+_DEFAULT_AI_EMAIL_CONCURRENCY = 32
 _AI_EMAIL_SEMAPHORE_LOCK = threading.Lock()
 _AI_EMAIL_SEMAPHORE: threading.Semaphore | None = None
 _AI_EMAIL_SEMAPHORE_LIMIT = 0
@@ -573,7 +573,7 @@ def _extract_ai_emails_or_empty(
             semaphore.release()
 def _get_ai_email_semaphore(limit: int) -> threading.Semaphore:
     global _AI_EMAIL_SEMAPHORE, _AI_EMAIL_SEMAPHORE_LIMIT
-    normalized_limit = min(max(int(limit or _DEFAULT_AI_EMAIL_CONCURRENCY), 1), 16)
+    normalized_limit = min(max(int(limit or _DEFAULT_AI_EMAIL_CONCURRENCY), 1), 32)
     with _AI_EMAIL_SEMAPHORE_LOCK:
         if _AI_EMAIL_SEMAPHORE is None or _AI_EMAIL_SEMAPHORE_LIMIT != normalized_limit:
             _AI_EMAIL_SEMAPHORE = threading.Semaphore(normalized_limit)

@@ -28,7 +28,6 @@ def test_app_config_loads_value_budget_defaults(tmp_path: Path, monkeypatch) -> 
         "EMAIL_PAGE_HARD_LIMIT",
         "PAGE_TOTAL_HARD_LIMIT",
         "EMAIL_STOP_SAME_DOMAIN_COUNT",
-        "AI_EMAIL_CONCURRENCY",
         "DISCOVERY_BUDGET_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -40,7 +39,7 @@ def test_app_config_loads_value_budget_defaults(tmp_path: Path, monkeypatch) -> 
     assert config.email_page_hard_limit == 16
     assert config.page_total_hard_limit == 20
     assert config.email_stop_same_domain_count == 2
-    assert config.ai_email_concurrency == 8
+    assert config.ai_email_concurrency == 32
     assert config.discovery_budget_seconds == 45.0
 
 
@@ -53,7 +52,6 @@ def test_app_config_supports_value_budget_dotenv_override(tmp_path: Path) -> Non
                 "EMAIL_PAGE_HARD_LIMIT=18",
                 "PAGE_TOTAL_HARD_LIMIT=22",
                 "EMAIL_STOP_SAME_DOMAIN_COUNT=3",
-                "AI_EMAIL_CONCURRENCY=5",
                 "DISCOVERY_BUDGET_SECONDS=55",
             ]
         ),
@@ -67,7 +65,7 @@ def test_app_config_supports_value_budget_dotenv_override(tmp_path: Path) -> Non
     assert config.email_page_hard_limit == 18
     assert config.page_total_hard_limit == 22
     assert config.email_stop_same_domain_count == 3
-    assert config.ai_email_concurrency == 5
+    assert config.ai_email_concurrency == 32
     assert config.discovery_budget_seconds == 55.0
 
 

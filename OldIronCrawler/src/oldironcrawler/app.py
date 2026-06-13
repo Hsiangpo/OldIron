@@ -15,7 +15,8 @@ from oldironcrawler.runner import run_crawl_session
 from oldironcrawler.runtime.store import RuntimeStore
 
 
-DEFAULT_SITE_CONCURRENCY = 64
+DEFAULT_SITE_CONCURRENCY = 32
+MAX_SITE_CONCURRENCY = 32
 DEFAULT_SITE_TIMEOUT_SECONDS = 180
 
 
@@ -342,7 +343,7 @@ def _apply_runtime_preferences(
     budget = _derive_runtime_concurrency_budget(concurrency)
     bounded_timeout = min(max(int(site_timeout_seconds), 60), 600)
     config.llm_concurrency = budget.llm_concurrency
-    config.ai_email_concurrency = max(int(getattr(config, "ai_email_concurrency", budget.ai_email_concurrency) or 1), 1)
+    config.ai_email_concurrency = budget.ai_email_concurrency
     config.site_concurrency = budget.site_concurrency
     config.page_concurrency = budget.page_concurrency
     config.page_worker_count = budget.page_worker_count
@@ -365,13 +366,13 @@ def _apply_runtime_preferences(
 
 
 def _derive_runtime_concurrency_budget(concurrency: int) -> RuntimeConcurrencyBudget:
-    runtime_concurrency = min(max(int(concurrency), 1), 64)
+    runtime_concurrency = int(concurrency)
+    if runtime_concurrency < 1 or runtime_concurrency > MAX_SITE_CONCURRENCY:
+        raise ValueError(f"并发必须在 1-{MAX_SITE_CONCURRENCY} 之间")
     return RuntimeConcurrencyBudget(
         site_concurrency=runtime_concurrency,
-        # 大模型并发按站点并发放大 3 倍（每家约调 3 次大模型），上限 64；
-        # 否则 AI 搜法人的大模型调用会排在站点抽取后面、排队超时被丢弃。
-        llm_concurrency=min(runtime_concurrency * 3, 64),
-        ai_email_concurrency=8,
+        llm_concurrency=runtime_concurrency,
+        ai_email_concurrency=runtime_concurrency,
         page_concurrency=runtime_concurrency,
         page_worker_count=runtime_concurrency,
         page_host_limit=runtime_concurrency,
@@ -383,7 +384,6 @@ def _format_runtime_budget(config: AppConfig) -> str:
         "运行预算："
         f"站点并发={config.site_concurrency}，"
         f"LLM并发={config.llm_concurrency}，"
-        f"AI邮箱并发={config.ai_email_concurrency}，"
         f"公共探测批量={config.page_concurrency}，"
         f"全局抓页线程={config.page_worker_count}，"
         f"同主机抓页上限={config.page_host_limit}，"

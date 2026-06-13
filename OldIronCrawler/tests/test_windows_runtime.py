@@ -25,6 +25,7 @@ from oldironcrawler.app import (
     _apply_runtime_preferences,
     _build_artifact_stem,
     _derive_runtime_concurrency_budget,
+    _format_runtime_budget,
 )
 import oldironcrawler.package_layout as package_layout
 
@@ -82,6 +83,7 @@ def test_packaging_targets_portable_folder_layout(tmp_path: Path) -> None:
                 "CAPSOLVER_PROXY=http://secret-proxy.local:9000",
                 "CLOUDFLARE_PROXY_URL=http://cloudflare-proxy.local:7000",
                 "LLM_CONCURRENCY=4",
+                "AI_EMAIL_CONCURRENCY=8",
             ]
         )
         + "\n",
@@ -107,6 +109,7 @@ def test_packaging_targets_portable_folder_layout(tmp_path: Path) -> None:
     assert "secret-proxy.local" not in packaged_env
     assert "cloudflare-proxy.local" not in packaged_env
     assert "LLM_CONCURRENCY=4" in packaged_env
+    assert "AI_EMAIL_CONCURRENCY" not in packaged_env
     assert "PAGE_CONCURRENCY=32" not in packaged_env
     assert "PAGE_WORKER_COUNT=32" not in packaged_env
     assert "PAGE_HOST_LIMIT=32" not in packaged_env
@@ -117,28 +120,42 @@ def test_packaging_targets_portable_folder_layout(tmp_path: Path) -> None:
 
 
 def test_derive_runtime_concurrency_budget_applies_user_concurrency_to_all_limits() -> None:
-    budget = _derive_runtime_concurrency_budget(64)
+    budget = _derive_runtime_concurrency_budget(32)
 
-    assert budget.site_concurrency == 64
-    assert budget.llm_concurrency == 64
-    assert budget.ai_email_concurrency == 8
-    assert budget.page_concurrency == 64
-    assert budget.page_worker_count == 64
-    assert budget.page_host_limit == 64
+    assert budget.site_concurrency == 32
+    assert budget.llm_concurrency == 32
+    assert budget.ai_email_concurrency == 32
+    assert budget.page_concurrency == 32
+    assert budget.page_worker_count == 32
+    assert budget.page_host_limit == 32
 
 
-def test_interactive_defaults_use_64_site_concurrency() -> None:
+def test_derive_runtime_concurrency_budget_rejects_values_above_32() -> None:
+    with pytest.raises(ValueError, match="并发.*32"):
+        _derive_runtime_concurrency_budget(33)
+
+
+def test_interactive_defaults_use_32_site_concurrency() -> None:
     import oldironcrawler.app as app_module
     from oldironcrawler.dashboard import DashboardSession
 
     signature = inspect.signature(app_module.run_selected_input)
     session = DashboardSession(project_root=PROJECT_ROOT, current_key="key")
 
-    assert DEFAULT_SITE_CONCURRENCY == 64
+    assert DEFAULT_SITE_CONCURRENCY == 32
     assert signature.parameters["concurrency"].default == DEFAULT_SITE_CONCURRENCY
     assert signature.parameters["collect_company_name_enabled"].default is False
     assert session.concurrency == DEFAULT_SITE_CONCURRENCY
     assert session.collect_company_name_enabled is False
+
+
+def test_dashboard_concurrency_setting_caps_at_32() -> None:
+    import oldironcrawler.dashboard as dashboard_module
+
+    source = inspect.getsource(dashboard_module._handle_system_config)
+
+    assert "max_value=32" in source
+    assert "范围 1-32" in source
 
 
 def test_apply_runtime_preferences_uses_same_concurrency_for_all_limits() -> None:
@@ -148,18 +165,36 @@ def test_apply_runtime_preferences_uses_same_concurrency_for_all_limits() -> Non
         page_concurrency=1,
         page_worker_count=1,
         page_host_limit=1,
-        ai_email_concurrency=8,
+        ai_email_concurrency=1,
         total_wait_seconds=180.0,
     )
 
-    _apply_runtime_preferences(config, concurrency=64, site_timeout_seconds=180)
+    _apply_runtime_preferences(config, concurrency=32, site_timeout_seconds=180)
 
-    assert config.site_concurrency == 64
-    assert config.llm_concurrency == 64
-    assert config.ai_email_concurrency == 8
-    assert config.page_worker_count == 64
-    assert config.page_concurrency == 64
-    assert config.page_host_limit == 64
+    assert config.site_concurrency == 32
+    assert config.llm_concurrency == 32
+    assert config.ai_email_concurrency == 32
+    assert config.page_worker_count == 32
+    assert config.page_concurrency == 32
+    assert config.page_host_limit == 32
+
+
+def test_format_runtime_budget_does_not_show_separate_ai_email_limit() -> None:
+    config = SimpleNamespace(
+        site_concurrency=32,
+        llm_concurrency=32,
+        ai_email_concurrency=32,
+        page_concurrency=32,
+        page_worker_count=32,
+        page_host_limit=32,
+        total_wait_seconds=180.0,
+    )
+
+    text = _format_runtime_budget(config)
+
+    assert "AI邮箱并发" not in text
+    assert "站点并发=32" in text
+    assert "LLM并发=32" in text
 
 
 def test_packaging_raises_when_existing_directory_is_not_writable(tmp_path: Path, monkeypatch) -> None:
