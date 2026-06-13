@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+import traceback
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Group
@@ -162,7 +164,9 @@ def _handle_start_crawl(session: DashboardSession) -> None:
             search_representative_enabled=session.search_representative_enabled,
         )
     except Exception as exc:  # noqa: BLE001
-        _notice(f"抓取过程中出现未处理错误：{exc}")
+        log_path = _write_app_error_log(session, selected, exc)
+        suffix = f"\n错误日志：{log_path}" if log_path is not None else ""
+        _notice(f"抓取过程中出现未处理错误：{exc}{suffix}")
         return
     session.current_key = result.effective_key
     session.llm_base_url = result.llm_base_url or session.llm_base_url
@@ -379,6 +383,32 @@ def _open_folder(path: Path) -> None:
             subprocess.Popen(["xdg-open", str(path)])
     except Exception:
         return
+
+
+def _write_app_error_log(session: DashboardSession, selected: Path, exc: Exception) -> Path | None:
+    try:
+        log_dir = session.project_root / "output" / "runtime"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "app_error.log"
+        timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        stack = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        text = "\n".join(
+            [
+                "=" * 80,
+                f"time: {timestamp}",
+                f"input: {selected.name}",
+                f"path: {selected}",
+                f"error: {type(exc).__name__}: {exc}",
+                "traceback:",
+                stack.rstrip(),
+                "",
+            ]
+        )
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(text)
+        return log_path
+    except Exception:
+        return None
 
 
 def _render_info(title: str, lines: list) -> None:

@@ -606,6 +606,28 @@ def test_run_dashboard_start_crawl_runs_selected_file(tmp_path: Path, monkeypatc
     assert event_log == ["run:sites.xlsx:company=False"]
 
 
+def test_dashboard_start_crawl_writes_error_log(tmp_path: Path, monkeypatch) -> None:
+    websites_dir = tmp_path / "websites"
+    websites_dir.mkdir(parents=True)
+    selected_file = websites_dir / "sites.xlsx"
+    selected_file.write_text("", encoding="utf-8")
+    session = dashboard_module.DashboardSession(project_root=tmp_path, current_key="good-key")
+
+    def fail_run_selected_input(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app_module, "run_selected_input", fail_run_selected_input)
+    monkeypatch.setattr(dashboard_module, "run_menu", lambda spec, **kwargs: "0")
+    monkeypatch.setattr(dashboard_module, "wait_for_enter", lambda *args, **kwargs: None)
+
+    dashboard_module._handle_start_crawl(session)
+
+    error_log = tmp_path / "output" / "runtime" / "app_error.log"
+    log_text = error_log.read_text(encoding="utf-8")
+    assert "sites.xlsx" in log_text
+    assert "RuntimeError: boom" in log_text
+
+
 def test_run_dashboard_delete_key_exits_system(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".env").write_text(
         "\n".join(
