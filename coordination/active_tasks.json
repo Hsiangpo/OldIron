@@ -1,24 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-06-13T15:15:47Z",
-  "tasks": [
-    {
-      "task_id": "oldironcrawler-concurrency-32-20260613",
-      "status": "in_progress",
-      "machine": "local-windows",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-13T15:15:47Z",
-      "last_heartbeat_at": "2026-06-13T15:15:47Z",
-      "notes": "Align OldIronCrawler concurrency defaults and AI email concurrency to user-requested max 32"
-    }
-  ]
+  "updated_at": "2026-06-13T15:42:30Z",
+  "tasks": []
 }
