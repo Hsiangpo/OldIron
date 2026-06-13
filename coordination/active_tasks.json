@@ -1,5 +1,27 @@
 {
   "version": 1,
-  "updated_at": "2026-06-13T00:01:55Z",
-  "tasks": []
+  "updated_at": "2026-06-13T05:08:54Z",
+  "tasks": [
+    {
+      "task_id": "oldironcrawler-llm-email-page-pick-20260613",
+      "status": "in_progress",
+      "machine": "windows",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "OldIronCrawler"
+      ],
+      "planned_files": [
+        "OldIronCrawler/src/oldironcrawler/extractor",
+        "OldIronCrawler/tests"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-06-13T05:08:54Z",
+      "last_heartbeat_at": "2026-06-13T05:08:54Z",
+      "notes": "Add conservative LLM fallback for email page selection while keeping email extraction rule/evidence based."
+    }
+  ]
 }
