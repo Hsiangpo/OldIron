@@ -27,6 +27,7 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
     # 一进来（含断点续跑）就先广播一次进度：底部计数器立刻显示真实的已完成/待处理，而非从 0 起跳。
     _emit_progress_snapshot(store, total)
     heartbeat_seconds = 10.0
+    show_company = bool(getattr(config, "collect_company_name_enabled", True))
     show_email = bool(getattr(config, "collect_email_enabled", True))
     show_phone = bool(getattr(config, "collect_phone_enabled", True))
     show_rep = bool(getattr(config, "extract_representative_enabled", True))
@@ -34,6 +35,7 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
     delivery_writer = _DeliverySnapshotWriter(
         Path(delivery_path),
         store,
+        include_company_name=show_company,
         include_email=show_email,
         include_phone=show_phone,
         include_representative=show_rep,
@@ -94,6 +96,7 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                 store=store,
                 learning_store=learning_store,
                 delivery_writer=delivery_writer,
+                show_company_name=show_company,
                 show_email=show_email,
                 show_phone=show_phone,
                 show_representative=show_rep,
@@ -109,6 +112,7 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                     store=store,
                     learning_store=learning_store,
                     delivery_writer=delivery_writer,
+                    show_company_name=show_company,
                     show_email=show_email,
                     show_phone=show_phone,
                     show_representative=show_rep,
@@ -217,6 +221,7 @@ def _process_done_futures(
     store: RuntimeStore,
     learning_store: GlobalLearningStore,
     delivery_writer,
+    show_company_name: bool = True,
     show_email: bool = True,
     show_phone: bool = True,
     show_representative: bool = True,
@@ -236,6 +241,7 @@ def _process_done_futures(
                 store,
                 learning_store,
                 delivery_writer,
+                show_company_name=show_company_name,
                 show_email=show_email,
                 show_phone=show_phone,
                 show_representative=show_representative,
@@ -316,6 +322,7 @@ def _handle_future(
     show_phone: bool = True,
     show_representative: bool = True,
     show_searched_representative: bool = True,
+    show_company_name: bool = True,
 ) -> int:
     try:
         processed = future.result()
@@ -338,6 +345,7 @@ def _handle_future(
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
+                show_company_name=show_company_name,
                 show_emails=show_email,
                 show_phones=show_phone,
                 show_representative=show_representative,
@@ -365,6 +373,7 @@ def _handle_future(
             phones="",
             reason=_describe_error_reason(str(exc)),
             stage_metrics=stage_metrics,
+            show_company_name=show_company_name,
             show_emails=show_email,
             show_phones=show_phone,
             show_representative=show_representative,
@@ -388,6 +397,7 @@ def _handle_future(
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
+                show_company_name=show_company_name,
                 show_emails=show_email,
                 show_phones=show_phone,
                 show_representative=show_representative,
@@ -411,6 +421,7 @@ def _handle_future(
                 phones="",
                 reason=_describe_error_reason(str(exc)),
                 stage_metrics=stage_metrics,
+                show_company_name=show_company_name,
                 show_emails=show_email,
                 show_phones=show_phone,
                 show_representative=show_representative,
@@ -434,9 +445,11 @@ def _handle_future(
             processed.result,
             include_email=show_email,
             include_phone=show_phone,
+            include_company_name=show_company_name,
             include_representative=show_representative,
         ),
         stage_metrics=processed.stage_metrics,
+        show_company_name=show_company_name,
         show_emails=show_email,
         show_phones=show_phone,
         show_representative=show_representative,
@@ -451,6 +464,7 @@ class _DeliverySnapshotWriter:
         delivery_path: Path,
         store: RuntimeStore,
         *,
+        include_company_name: bool = True,
         include_email: bool = True,
         include_phone: bool = True,
         include_representative: bool = True,
@@ -458,6 +472,7 @@ class _DeliverySnapshotWriter:
     ) -> None:
         self._delivery_path = delivery_path
         self._store = store
+        self._include_company_name = include_company_name
         self._include_email = include_email
         self._include_phone = include_phone
         self._include_representative = include_representative
@@ -490,6 +505,7 @@ class _DeliverySnapshotWriter:
         if not _flush_delivery_snapshot(
             self._delivery_path,
             self._store,
+            include_company_name=self._include_company_name,
             include_email=self._include_email,
             include_phone=self._include_phone,
             include_representative=self._include_representative,
@@ -505,6 +521,7 @@ def _flush_delivery_snapshot(
     delivery_path,
     store: RuntimeStore,
     *,
+    include_company_name: bool = True,
     include_email: bool = True,
     include_phone: bool = True,
     include_representative: bool = True,
@@ -514,6 +531,7 @@ def _flush_delivery_snapshot(
         write_delivery_csv(
             delivery_path,
             store.delivery_rows(),
+            include_company_name=include_company_name,
             include_email=include_email,
             include_phone=include_phone,
             include_representative=include_representative,
@@ -577,12 +595,13 @@ def _should_retry_protocol_deadline(error: Exception, stage_metrics) -> bool:
 def _describe_missing_reason(
     result,
     *,
+    include_company_name: bool = True,
     include_email: bool = True,
     include_phone: bool = True,
     include_representative: bool = True,
 ) -> str:
     reasons: list[str] = []
-    if not str(result.company_name or "").strip():
+    if include_company_name and not str(result.company_name or "").strip():
         reasons.append("官网页面里未识别到明确公司名")
     if include_representative and not str(result.representative or "").strip():
         reasons.append("官网页面里未识别到负责人姓名")

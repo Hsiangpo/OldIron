@@ -122,6 +122,50 @@ def test_xlsx_loader_rejects_social_column_even_if_picker_selects_it(tmp_path: P
     assert [row.website for row in rows] == ["https://acme.com", "https://beta.co.uk/about"]
 
 
+def test_xlsx_loader_ignores_company_column_when_company_collection_disabled(tmp_path: Path) -> None:
+    path = tmp_path / "companies.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Company Name", "Company Website"])
+    ws.append(["Acme Ltd", "https://acme.com"])
+    ws.append(["Beta Ltd", "https://beta.co.uk"])
+    wb.save(path)
+
+    rows = load_websites(path, collect_company_name_enabled=False)
+
+    assert [(row.company_name, row.website) for row in rows] == [
+        ("", "https://acme.com"),
+        ("", "https://beta.co.uk"),
+    ]
+
+
+def test_xlsx_loader_uses_llm_company_column_when_company_collection_enabled(tmp_path: Path) -> None:
+    path = tmp_path / "companies.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Business", "Homepage"])
+    ws.append(["Acme Ltd", "https://acme.com"])
+    ws.append(["Beta Ltd", "https://beta.co.uk"])
+    wb.save(path)
+
+    def fake_company_picker(*, source_name: str, columns: list[dict[str, object]], website_column_index: int):
+        assert source_name.startswith("companies.xlsx")
+        assert website_column_index == 1
+        assert any(str(column.get("header") or "") == "Business" for column in columns)
+        return {"selected_index": 0, "confidence": "high", "reason": "company names"}
+
+    rows = load_websites(
+        path,
+        collect_company_name_enabled=True,
+        company_column_picker=fake_company_picker,
+    )
+
+    assert [(row.company_name, row.website) for row in rows] == [
+        ("Acme Ltd", "https://acme.com"),
+        ("Beta Ltd", "https://beta.co.uk"),
+    ]
+
+
 def test_xlsx_loader_keeps_first_data_row_when_sheet_has_no_header(tmp_path: Path) -> None:
     path = tmp_path / "headerless.xlsx"
     wb = Workbook()
@@ -478,6 +522,43 @@ def test_write_delivery_reports_splits_rows_by_selected_fields(tmp_path: Path) -
     store.close()
 
 
+def test_write_delivery_reports_does_not_require_company_when_disabled(tmp_path: Path) -> None:
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    rows = [
+        ImportedWebsite(input_index=1, raw_website="a.com", website="https://a.com", dedupe_key="a.com"),
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    task = store.claim_next_site()
+
+    assert task is not None
+    store.mark_done(
+        task.id,
+        SiteResult(company_name="", representative="", emails="a@a.com", website="https://a.com", phones=""),
+    )
+
+    success_path = tmp_path / "success.csv"
+    failed_path = tmp_path / "failed.csv"
+    write_delivery_reports(
+        store=store,
+        success_path=success_path,
+        failed_path=failed_path,
+        include_company_name=False,
+        include_email=True,
+        include_phone=False,
+        include_representative=False,
+        include_searched_representative=False,
+    )
+
+    with success_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        success_rows = list(csv.DictReader(handle))
+    with failed_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        failed_rows = list(csv.DictReader(handle))
+
+    assert success_rows == [{"emails": "a@a.com", "website": "https://a.com"}]
+    assert failed_rows == []
+    store.close()
+
+
 def test_site_profile_email_only_skips_representative_pages_when_company_name_given(
     tmp_path: Path,
     monkeypatch,
@@ -565,6 +646,107 @@ def test_site_profile_email_only_skips_representative_pages_when_company_name_gi
     assert result.result.emails == "info@acme.com"
     assert "https://acme.com/contact" in fetched_urls
     assert "https://acme.com/team" not in fetched_urls
+    store.close()
+
+
+def test_site_profile_service_skips_company_name_when_collection_disabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    rows = [
+        ImportedWebsite(
+            input_index=1,
+            raw_website="acme.com",
+            website="https://acme.com",
+            dedupe_key="acme.com",
+            company_name="Input Acme Ltd",
+        )
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    task = store.claim_next_site()
+
+    class FakeProtocol:
+        def close(self) -> None:
+            return None
+
+    class FakeLlm:
+        def extract_company_and_representative(self, **_kwargs):
+            raise AssertionError("company LLM should not run when company collection is disabled")
+
+    assert task is not None
+    monkeypatch.setattr("oldironcrawler.extractor.service.SiteProtocolClient", lambda _config: FakeProtocol())
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=[],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=[],
+            homepage_html="",
+        ),
+    )
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._plan_fetch_targets",
+        lambda *_args, **_kwargs: {
+            "rep_urls": [],
+            "homepage_primary_urls": [],
+            "email_primary_urls": [],
+            "email_overflow_urls": [],
+            "all_primary_urls": [],
+        },
+    )
+
+    service = SiteProfileService(
+        SimpleNamespace(
+            request_timeout_seconds=10.0,
+            proxy_url="",
+            capsolver_api_key="",
+            capsolver_api_base_url="",
+            capsolver_proxy="",
+            capsolver_poll_seconds=1.0,
+            capsolver_max_wait_seconds=5.0,
+            cloudflare_proxy_url="",
+            page_worker_count=1,
+            page_host_limit=1,
+            page_concurrency=1,
+            total_wait_seconds=180.0,
+            rep_page_limit=5,
+            email_page_soft_limit=8,
+            email_page_hard_limit=16,
+            page_total_hard_limit=20,
+            email_stop_same_domain_count=2,
+            collect_company_name_enabled=False,
+            collect_email_enabled=False,
+            collect_phone_enabled=False,
+            extract_representative_enabled=False,
+            search_representative_enabled=False,
+        ),
+        store,
+        GlobalLearningStore(tmp_path / "learning.sqlite3"),
+        FakeLlm(),
+        page_pool=None,
+    )
+    monkeypatch.setattr(
+        service,
+        "_collect_budgeted_pages",
+        lambda *args, **kwargs: (
+            {},
+            [],
+            LlmExtractionResult(
+                company_name="Website Acme Ltd",
+                representative="",
+                evidence_url="",
+                evidence_quote="",
+            ),
+        ),
+    )
+
+    result = service.process(task.id, task.website, input_company_name=task.company_name)
+
+    assert result.result.company_name == ""
+    assert result.result.emails == ""
     store.close()
 
 

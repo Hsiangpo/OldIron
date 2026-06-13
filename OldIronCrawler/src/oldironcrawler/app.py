@@ -57,6 +57,7 @@ def run_selected_input(
     llm_base_url: str = "",
     collect_email_enabled: bool = True,
     collect_phone_enabled: bool = True,
+    collect_company_name_enabled: bool = False,
     extract_representative_enabled: bool = False,
     search_representative_enabled: bool = False,
 ) -> CrawlRunResult:
@@ -69,6 +70,7 @@ def run_selected_input(
         llm_base_url=llm_base_url,
         collect_email_enabled=collect_email_enabled,
         collect_phone_enabled=collect_phone_enabled,
+        collect_company_name_enabled=collect_company_name_enabled,
         extract_representative_enabled=extract_representative_enabled,
         search_representative_enabled=search_representative_enabled,
     )
@@ -90,6 +92,7 @@ def run_selected_input(
             site_timeout_seconds=site_timeout_seconds,
             collect_email_enabled=collect_email_enabled,
             collect_phone_enabled=collect_phone_enabled,
+            collect_company_name_enabled=collect_company_name_enabled,
             extract_representative_enabled=extract_representative_enabled,
             search_representative_enabled=search_representative_enabled,
         )
@@ -99,6 +102,7 @@ def run_selected_input(
             store=store,
             success_path=success_path,
             failed_path=failed_path,
+            include_company_name=collect_company_name_enabled,
             include_email=collect_email_enabled,
             include_phone=collect_phone_enabled,
             include_representative=extract_representative_enabled,
@@ -165,6 +169,7 @@ def _load_rows_with_llm_recovery(
     llm_base_url: str = "",
     collect_email_enabled: bool = True,
     collect_phone_enabled: bool = True,
+    collect_company_name_enabled: bool = False,
     extract_representative_enabled: bool = False,
     search_representative_enabled: bool = False,
 ) -> tuple[AppConfig, list, str]:
@@ -177,6 +182,7 @@ def _load_rows_with_llm_recovery(
             site_timeout_seconds=site_timeout_seconds,
             collect_email_enabled=collect_email_enabled,
             collect_phone_enabled=collect_phone_enabled,
+            collect_company_name_enabled=collect_company_name_enabled,
             extract_representative_enabled=extract_representative_enabled,
             search_representative_enabled=search_representative_enabled,
         )
@@ -201,6 +207,7 @@ def _run_session_with_llm_recovery(
     site_timeout_seconds: int,
     collect_email_enabled: bool = True,
     collect_phone_enabled: bool = True,
+    collect_company_name_enabled: bool = False,
     extract_representative_enabled: bool = False,
     search_representative_enabled: bool = False,
 ) -> tuple[int, str]:
@@ -216,6 +223,7 @@ def _run_session_with_llm_recovery(
             site_timeout_seconds=site_timeout_seconds,
             collect_email_enabled=collect_email_enabled,
             collect_phone_enabled=collect_phone_enabled,
+            collect_company_name_enabled=collect_company_name_enabled,
             extract_representative_enabled=extract_representative_enabled,
             search_representative_enabled=search_representative_enabled,
         )
@@ -326,6 +334,7 @@ def _apply_runtime_preferences(
     site_timeout_seconds: int,
     collect_email_enabled: bool | None = None,
     collect_phone_enabled: bool | None = None,
+    collect_company_name_enabled: bool | None = None,
     extract_representative_enabled: bool | None = None,
     search_representative_enabled: bool | None = None,
 ) -> None:
@@ -345,6 +354,8 @@ def _apply_runtime_preferences(
         config.collect_email_enabled = bool(collect_email_enabled)
     if collect_phone_enabled is not None:
         config.collect_phone_enabled = bool(collect_phone_enabled)
+    if collect_company_name_enabled is not None:
+        config.collect_company_name_enabled = bool(collect_company_name_enabled)
     if extract_representative_enabled is not None:
         config.extract_representative_enabled = bool(extract_representative_enabled)
     if search_representative_enabled is not None:
@@ -378,10 +389,19 @@ def _format_runtime_budget(config: AppConfig) -> str:
 
 def _load_input_rows(config: AppConfig, input_path: Path):
     if input_path.suffix.lower() not in {".csv", ".xlsx"}:
-        return load_websites(input_path)
+        return load_websites(
+            input_path,
+            collect_company_name_enabled=bool(getattr(config, "collect_company_name_enabled", False)),
+        )
     llm = _build_llm_client(config)
     try:
-        return load_websites(input_path, website_column_picker=llm.pick_website_column)
+        collect_company = bool(getattr(config, "collect_company_name_enabled", False))
+        return load_websites(
+            input_path,
+            website_column_picker=llm.pick_website_column,
+            collect_company_name_enabled=collect_company,
+            company_column_picker=llm.pick_company_name_column if collect_company else None,
+        )
     finally:
         llm.close()
 

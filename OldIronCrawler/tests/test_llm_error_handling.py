@@ -174,6 +174,7 @@ def test_run_selected_input_uses_selected_ingress_for_rows_and_crawl(tmp_path: P
         seen.append(
             "run:"
             f"{config.llm_base_url}:"
+            f"company={config.collect_company_name_enabled}:"
             f"email={config.collect_email_enabled}:"
             f"phone={config.collect_phone_enabled}:"
             f"snapshot={Path(_delivery_path).name}"
@@ -199,11 +200,12 @@ def test_run_selected_input_uses_selected_ingress_for_rows_and_crawl(tmp_path: P
     assert result.failed_path.name == "sites-xlsx_failed.csv"
     assert seen == [
         "load:https://fast.example/v1",
-        "run:https://fast.example/v1:email=True:phone=False:snapshot=sites-xlsx.snapshot.csv",
+        "run:https://fast.example/v1:company=False:email=True:phone=False:snapshot=sites-xlsx.snapshot.csv",
     ]
     assert len(report_calls) == 1
     assert report_calls[0]["success_path"].name == "sites-xlsx_success.csv"
     assert report_calls[0]["failed_path"].name == "sites-xlsx_failed.csv"
+    assert report_calls[0]["include_company_name"] is False
     assert report_calls[0]["include_email"] is True
     assert report_calls[0]["include_phone"] is False
 
@@ -585,7 +587,9 @@ def test_run_dashboard_start_crawl_runs_selected_file(tmp_path: Path, monkeypatc
     monkeypatch.setattr(
         app_module,
         "run_selected_input",
-        lambda project_root, current_key, input_path, **kwargs: event_log.append(f"run:{input_path.name}") or app_module.CrawlRunResult(
+        lambda project_root, current_key, input_path, **kwargs: event_log.append(
+            f"run:{input_path.name}:company={kwargs['collect_company_name_enabled']}"
+        ) or app_module.CrawlRunResult(
             exit_code=0,
             delivery_path=tmp_path / "output" / "sites.csv",
             failed_path=tmp_path / "output" / "sites_failed.csv",
@@ -599,7 +603,7 @@ def test_run_dashboard_start_crawl_runs_selected_file(tmp_path: Path, monkeypatc
     result = dashboard_module.run_dashboard(tmp_path, "good-key")
 
     assert result == 0
-    assert event_log == ["run:sites.xlsx"]
+    assert event_log == ["run:sites.xlsx:company=False"]
 
 
 def test_run_dashboard_delete_key_exits_system(tmp_path: Path, monkeypatch) -> None:
@@ -633,7 +637,7 @@ def test_config_menu_spec_lists_toggles_and_back() -> None:
     session = dashboard_module.DashboardSession(project_root=Path("."), current_key="k")
     spec = dashboard_module._config_menu_spec(session)
     values = [item.value for item in spec.items]
-    assert values == ["key", "concurrency", "timeout", "email", "phone", "rep", "search", "back"]
+    assert values == ["key", "concurrency", "timeout", "company", "email", "phone", "rep", "search", "back"]
     labels = [item.label for item in spec.items]
     assert "邮箱（开/关切换）" in labels
     assert not any("AI 邮箱" in label or "规则" in label for label in labels)
@@ -641,6 +645,7 @@ def test_config_menu_spec_lists_toggles_and_back() -> None:
 
 def test_dashboard_session_defaults_to_email_only() -> None:
     session = dashboard_module.DashboardSession(project_root=Path("."), current_key="k")
+    assert session.collect_company_name_enabled is False
     assert session.collect_email_enabled is True
     assert session.collect_phone_enabled is False
     assert session.extract_representative_enabled is False

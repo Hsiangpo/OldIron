@@ -19,6 +19,7 @@ def print_site_result(
     phones: str = "",
     reason: str = "",
     stage_metrics: SiteStageMetrics | None = None,
+    show_company_name: bool = True,
     show_emails: bool = True,
     show_phones: bool = True,
     show_representative: bool = True,
@@ -37,6 +38,7 @@ def print_site_result(
         reason=reason,
         stage_timing=_format_stage_timing(stage_metrics) if stage_metrics is not None else "",
         stage_counts=_format_stage_counts(stage_metrics) if stage_metrics is not None else "",
+        show_company_name=show_company_name,
         show_emails=show_emails,
         show_phones=show_phones,
         show_representative=show_representative,
@@ -52,13 +54,16 @@ def write_delivery_csv(
     path: Path,
     rows: list[dict[str, str]],
     *,
+    include_company_name: bool = True,
     include_email: bool = True,
     include_phone: bool = True,
     include_representative: bool = True,
     include_searched_representative: bool = True,
 ) -> None:
     # 交付列随开关动态裁剪：关掉的字段那一列直接不出现在 CSV 里。
-    fieldnames = ["company_name"]
+    fieldnames = []
+    if include_company_name:
+        fieldnames.append("company_name")
     if include_representative:
         fieldnames.append("representative")
     if include_email:
@@ -76,6 +81,7 @@ def write_delivery_reports(
     store,
     success_path: Path,
     failed_path: Path,
+    include_company_name: bool = True,
     include_email: bool = True,
     include_phone: bool = True,
     include_representative: bool = True,
@@ -84,6 +90,7 @@ def write_delivery_reports(
     success_rows: list[dict[str, str]] = []
     failed_rows: list[dict[str, str]] = []
     success_fieldnames = _build_success_fieldnames(
+        include_company_name=include_company_name,
         include_email=include_email,
         include_phone=include_phone,
         include_representative=include_representative,
@@ -91,9 +98,10 @@ def write_delivery_reports(
     )
     failed_fieldnames = _build_failed_fieldnames(success_fieldnames)
     for row in store.delivery_report_rows():
-        normalized = _normalize_report_row(row)
+        normalized = _normalize_report_row(row, include_company_name=include_company_name)
         missing_fields = _missing_selected_fields(
             normalized,
+            include_company_name=include_company_name,
             include_email=include_email,
             include_phone=include_phone,
             include_representative=include_representative,
@@ -120,12 +128,15 @@ def _write_csv_atomic(path: Path, fieldnames: list[str], rows: list[dict[str, st
 
 def _build_success_fieldnames(
     *,
+    include_company_name: bool,
     include_email: bool,
     include_phone: bool,
     include_representative: bool,
     include_searched_representative: bool,
 ) -> list[str]:
-    fieldnames = ["company_name"]
+    fieldnames = []
+    if include_company_name:
+        fieldnames.append("company_name")
     if include_representative:
         fieldnames.append("representative")
     if include_email:
@@ -140,12 +151,15 @@ def _build_success_fieldnames(
 
 def _build_failed_fieldnames(success_fieldnames: list[str]) -> list[str]:
     selected_fields = [field for field in success_fieldnames if field not in {"company_name", "website"}]
-    return ["company_name", "website", "missing_fields", "status", "failure_reason", *selected_fields]
+    fieldnames = []
+    if "company_name" in success_fieldnames:
+        fieldnames.append("company_name")
+    return [*fieldnames, "website", "missing_fields", "status", "failure_reason", *selected_fields]
 
 
-def _normalize_report_row(row: dict[str, str]) -> dict[str, str]:
+def _normalize_report_row(row: dict[str, str], *, include_company_name: bool = True) -> dict[str, str]:
     normalized = {key: str(value or "").strip() for key, value in row.items()}
-    if not normalized.get("company_name"):
+    if include_company_name and not normalized.get("company_name"):
         normalized["company_name"] = normalized.get("input_company_name", "")
     return normalized
 
@@ -153,12 +167,13 @@ def _normalize_report_row(row: dict[str, str]) -> dict[str, str]:
 def _missing_selected_fields(
     row: dict[str, str],
     *,
+    include_company_name: bool,
     include_email: bool,
     include_phone: bool,
     include_representative: bool,
     include_searched_representative: bool,
 ) -> list[str]:
-    required = ["company_name"]
+    required = ["company_name"] if include_company_name else []
     if include_representative:
         required.append("representative")
     if include_email:

@@ -282,6 +282,7 @@ def _patch_service_for_fast_profile(monkeypatch, service: SiteProfileService) ->
 def _build_profile_service(tmp_path: Path, searcher) -> SiteProfileService:
     config = AppConfig.load(tmp_path, llm_key_override="key")
     # 这几个用例专门验证「提取代表人 + 搜索现役」开启时的行为，显式打开两个开关。
+    config.collect_company_name_enabled = True
     config.extract_representative_enabled = True
     config.search_representative_enabled = True
     return SiteProfileService(

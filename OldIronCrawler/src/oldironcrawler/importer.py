@@ -74,6 +74,7 @@ _COMPANY_HEADER_HINTS = {
 
 
 WebsiteColumnPicker = Callable[..., dict[str, object]]
+CompanyColumnPicker = Callable[..., dict[str, object]]
 
 
 @dataclass
@@ -186,14 +187,26 @@ def load_websites(
     path: Path,
     *,
     website_column_picker: WebsiteColumnPicker | None = None,
+    collect_company_name_enabled: bool = True,
+    company_column_picker: CompanyColumnPicker | None = None,
 ) -> list[ImportedWebsite]:
     suffix = path.suffix.lower()
     if suffix == ".txt":
         rows = _load_from_txt(path)
     elif suffix == ".csv":
-        rows = _load_from_csv(path, website_column_picker=website_column_picker)
+        rows = _load_from_csv(
+            path,
+            website_column_picker=website_column_picker,
+            collect_company_name_enabled=collect_company_name_enabled,
+            company_column_picker=company_column_picker,
+        )
     elif suffix == ".xlsx":
-        rows = _load_from_xlsx(path, website_column_picker=website_column_picker)
+        rows = _load_from_xlsx(
+            path,
+            website_column_picker=website_column_picker,
+            collect_company_name_enabled=collect_company_name_enabled,
+            company_column_picker=company_column_picker,
+        )
     else:
         raise RuntimeError(f"不支持的文件类型: {path.suffix}")
     return _dedupe_websites(rows)
@@ -212,17 +225,27 @@ def _load_from_csv(
     path: Path,
     *,
     website_column_picker: WebsiteColumnPicker | None = None,
+    collect_company_name_enabled: bool = True,
+    company_column_picker: CompanyColumnPicker | None = None,
 ) -> list[_ImportedRawRow]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle)
         rows = list(reader)
-    return _load_from_matrix(rows, source_name=path.name, website_column_picker=website_column_picker)
+    return _load_from_matrix(
+        rows,
+        source_name=path.name,
+        website_column_picker=website_column_picker,
+        collect_company_name_enabled=collect_company_name_enabled,
+        company_column_picker=company_column_picker,
+    )
 
 
 def _load_from_xlsx(
     path: Path,
     *,
     website_column_picker: WebsiteColumnPicker | None = None,
+    collect_company_name_enabled: bool = True,
+    company_column_picker: CompanyColumnPicker | None = None,
 ) -> list[_ImportedRawRow]:
     workbook = load_workbook(filename=path, read_only=True, data_only=True)
     try:
@@ -236,6 +259,8 @@ def _load_from_xlsx(
                     matrix,
                     source_name=f"{path.name} | {sheet.title}",
                     website_column_picker=website_column_picker,
+                    collect_company_name_enabled=collect_company_name_enabled,
+                    company_column_picker=company_column_picker,
                 )
             )
     finally:
@@ -248,6 +273,8 @@ def _load_from_matrix(
     *,
     source_name: str = "",
     website_column_picker: WebsiteColumnPicker | None = None,
+    collect_company_name_enabled: bool = True,
+    company_column_picker: CompanyColumnPicker | None = None,
 ) -> list[_ImportedRawRow]:
     if not rows:
         return []
@@ -255,11 +282,25 @@ def _load_from_matrix(
     if selection is not None:
         _print_selected_website_column(selection)
         data_rows = rows[1:] if selection.skip_header else rows
-        company_index = _find_company_header_index(rows[0], website_column=selection.column_index) if selection.skip_header else None
+        company_index = _resolve_company_column(
+            rows,
+            source_name=source_name,
+            website_column=selection.column_index,
+            skip_header=selection.skip_header,
+            collect_company_name_enabled=collect_company_name_enabled,
+            company_column_picker=company_column_picker,
+        )
         return _load_from_column(data_rows, selection.column_index, company_column=company_index)
     header_index = _find_header_index(rows[0])
     if header_index is not None:
-        company_index = _find_company_header_index(rows[0], website_column=header_index)
+        company_index = _resolve_company_column(
+            rows,
+            source_name=source_name,
+            website_column=header_index,
+            skip_header=True,
+            collect_company_name_enabled=collect_company_name_enabled,
+            company_column_picker=company_column_picker,
+        )
         return _load_from_column(rows[1:], header_index, company_column=company_index)
     guess_index = _find_first_website_like_column(rows)
     if guess_index is None:
@@ -283,6 +324,88 @@ def _find_company_header_index(first_row: list[object], *, website_column: int) 
         if lowered in _COMPANY_HEADER_HINTS:
             return index
     return None
+
+
+def _resolve_company_column(
+    rows: list[list[object]],
+    *,
+    source_name: str,
+    website_column: int,
+    skip_header: bool,
+    collect_company_name_enabled: bool,
+    company_column_picker: CompanyColumnPicker | None,
+) -> int | None:
+    if not collect_company_name_enabled or not skip_header:
+        return None
+    company_index = _find_company_header_index(rows[0], website_column=website_column)
+    if company_index is not None:
+        return company_index
+    return _pick_company_column(
+        rows,
+        source_name=source_name,
+        website_column=website_column,
+        company_column_picker=company_column_picker,
+    )
+
+
+def _pick_company_column(
+    rows: list[list[object]],
+    *,
+    source_name: str,
+    website_column: int,
+    company_column_picker: CompanyColumnPicker | None,
+) -> int | None:
+    summaries, has_header = _summarize_columns(rows)
+    if not has_header or not summaries:
+        return None
+    llm_result = _call_company_column_picker(
+        source_name=source_name,
+        summaries=summaries,
+        website_column=website_column,
+        company_column_picker=company_column_picker,
+    )
+    selected_index = _coerce_int(llm_result.get("selected_index"))
+    confidence = str(llm_result.get("confidence", "") or "").strip().lower()
+    if selected_index is None or selected_index == website_column or confidence not in {"high", "medium"}:
+        return None
+    selected = next((summary for summary in summaries if summary.index == selected_index), None)
+    if selected is None or not _looks_like_company_column(selected):
+        return None
+    return selected.index
+
+
+def _call_company_column_picker(
+    *,
+    source_name: str,
+    summaries: list[WebsiteColumnSummary],
+    website_column: int,
+    company_column_picker: CompanyColumnPicker | None,
+) -> dict[str, object]:
+    if company_column_picker is None or len(summaries) < 2:
+        return {}
+    columns: list[dict[str, object]] = []
+    for summary in summaries:
+        payload = summary.to_llm_payload()
+        payload["is_selected_website_column"] = summary.index == website_column
+        columns.append(payload)
+    try:
+        result = company_column_picker(
+            source_name=source_name,
+            columns=columns,
+            website_column_index=website_column,
+        )
+    except Exception:
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _looks_like_company_column(summary: WebsiteColumnSummary) -> bool:
+    if summary.non_empty_count <= 0:
+        return False
+    if summary.website_count > 0 or summary.social_count > 0 or summary.email_count > 0:
+        return False
+    lowered = str(summary.header or "").strip().lower()
+    return not any(hint in lowered for hint in ("website", "url", "domain", "email", "phone", "address"))
 
 
 def _find_first_website_like_column(rows: list[list[object]]) -> int | None:

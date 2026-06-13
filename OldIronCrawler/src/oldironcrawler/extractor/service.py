@@ -117,17 +117,19 @@ class SiteProfileService:
         metrics = SiteStageMetrics()
         collect_email_enabled = bool(getattr(self._config, "collect_email_enabled", True))
         collect_phone_enabled = bool(getattr(self._config, "collect_phone_enabled", True))
+        collect_company_name_enabled = bool(getattr(self._config, "collect_company_name_enabled", True))
         extract_rep_enabled = bool(getattr(self._config, "extract_representative_enabled", True))
-        has_input_company = bool(str(input_company_name or "").strip())
+        input_company = str(input_company_name or "").strip()
+        has_input_company = collect_company_name_enabled and bool(input_company)
         # AI 网页提取只在「需要补公司名」或「要提代表人」时才跑；
         # 表里已带公司名且关闭提取代表人时，这段 LLM 整体跳过。
-        need_llm_extract = extract_rep_enabled or not has_input_company
+        need_llm_extract = extract_rep_enabled or (collect_company_name_enabled and not has_input_company)
         need_contact_extract = collect_email_enabled or collect_phone_enabled
         rep_target_count = _get_rep_page_limit(self._config) if need_llm_extract else 0
         search_started = time.monotonic()
         search_future = _start_active_representative_search(
             self._representative_searcher,
-            company_name=input_company_name,
+            company_name=input_company if collect_company_name_enabled else "",
             website=website,
             deadline_monotonic=deadline_monotonic,
         )
@@ -172,9 +174,11 @@ class SiteProfileService:
             metrics.fetched_page_count = len(page_map)
             self._store.update_stage_metrics(site_id, metrics)
             fetched_pages = list(page_map.values())
-            if has_input_company:
+            if not collect_company_name_enabled:
+                company_name = ""
+            elif has_input_company:
                 # 表里已经给了公司名，直接采用，不再让 AI 提取公司名。
-                company_name = str(input_company_name or "").strip()
+                company_name = input_company
             else:
                 company_name = clean_company_name_candidate(str(llm_result.company_name or "").strip())
                 if not company_name:
@@ -186,7 +190,7 @@ class SiteProfileService:
                             [(page.url, page.html) for page in fetched_pages],
                         ),
                     ))
-            if search_future is None and not str(input_company_name or "").strip() and company_name:
+            if search_future is None and collect_company_name_enabled and not has_input_company and company_name:
                 search_started = time.monotonic()
                 search_future = _start_active_representative_search(
                     self._representative_searcher,

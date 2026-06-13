@@ -31,6 +31,7 @@ class DashboardSession:
     last_delivery_path: Path | None = None
     last_failed_path: Path | None = None
     llm_base_url: str = ""
+    collect_company_name_enabled: bool = False
     collect_email_enabled: bool = True
     collect_phone_enabled: bool = False
     extract_representative_enabled: bool = False
@@ -96,6 +97,7 @@ def _main_status_block(session: DashboardSession) -> Group:
 
 def _toggles_line(session: DashboardSession) -> Text:
     toggles = [
+        ("公司名", session.collect_company_name_enabled),
         ("邮箱", session.collect_email_enabled),
         ("电话", session.collect_phone_enabled),
         ("代表人", session.extract_representative_enabled),
@@ -155,6 +157,7 @@ def _handle_start_crawl(session: DashboardSession) -> None:
             llm_base_url=session.llm_base_url,
             collect_email_enabled=session.collect_email_enabled,
             collect_phone_enabled=session.collect_phone_enabled,
+            collect_company_name_enabled=session.collect_company_name_enabled,
             extract_representative_enabled=session.extract_representative_enabled,
             search_representative_enabled=session.search_representative_enabled,
         )
@@ -242,6 +245,9 @@ def _handle_system_config(session: DashboardSession) -> str | None:
                 apply_value=lambda value: setattr(session, "site_timeout_seconds", value),
                 description="请输入新的秒数，范围 60-600。",
             )
+        elif choice == "company":
+            session.collect_company_name_enabled = not session.collect_company_name_enabled
+            _notice(f"公司名已{'开启' if session.collect_company_name_enabled else '关闭'}。")
         elif choice == "email":
             session.collect_email_enabled = not session.collect_email_enabled
             _notice(f"邮箱已{'开启' if session.collect_email_enabled else '关闭'}。")
@@ -275,6 +281,7 @@ def _config_menu_spec(session: DashboardSession) -> MenuSpec:
             MenuItem("key", "Key 设置"),
             MenuItem("concurrency", "并发设置"),
             MenuItem("timeout", "单站等待上限"),
+            MenuItem("company", "公司名（开/关切换）"),
             MenuItem("email", "邮箱（开/关切换）"),
             MenuItem("phone", "电话（开/关切换）"),
             MenuItem("rep", "提取代表人（开/关切换）"),

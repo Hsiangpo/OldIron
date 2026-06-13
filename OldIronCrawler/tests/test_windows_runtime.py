@@ -135,7 +135,9 @@ def test_interactive_defaults_use_64_site_concurrency() -> None:
 
     assert DEFAULT_SITE_CONCURRENCY == 64
     assert signature.parameters["concurrency"].default == DEFAULT_SITE_CONCURRENCY
+    assert signature.parameters["collect_company_name_enabled"].default is False
     assert session.concurrency == DEFAULT_SITE_CONCURRENCY
+    assert session.collect_company_name_enabled is False
 
 
 def test_apply_runtime_preferences_uses_same_concurrency_for_all_limits() -> None:
@@ -312,6 +314,7 @@ def test_app_config_does_not_auto_enable_local_proxy_when_proxy_url_is_missing(t
     config = AppConfig.load(tmp_path)
 
     assert config.proxy_url == ""
+    assert config.collect_company_name_enabled is False
 
 
 def test_app_config_keeps_explicit_proxy_url_when_local_proxy_is_ready(tmp_path: Path, monkeypatch) -> None:

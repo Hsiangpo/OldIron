@@ -174,6 +174,30 @@ class WebsiteLlmClient:
         )
         return self._call_json(prompt, deadline_monotonic=deadline_monotonic)
 
+    def pick_company_name_column(
+        self,
+        *,
+        source_name: str,
+        columns: list[dict[str, Any]],
+        website_column_index: int,
+        deadline_monotonic: float | None = None,
+    ) -> dict[str, Any]:
+        prompt = (
+            "你是表格公司名列识别器。\n"
+            "目标：在一个网站导入表里，找出公司名称、品牌名称或法定主体名称所在的列。\n"
+            "强规则：\n"
+            "1. 只能选择一个列 index。\n"
+            "2. 优先 company name、business name、organization、name、会社名、企業名、公司名、公司名称这类列。\n"
+            "3. 明确排除官网列、URL/domain/homepage 列、社媒列、email、phone、address、联系人、职位、备注列。\n"
+            "4. 不要选择已经被标记为网站列的列。\n"
+            "5. 如果没有可信公司名列，返回 selected_index 为 -1，confidence 为 low。\n"
+            '返回 JSON：{"selected_index":0,"confidence":"high|medium|low","reason":""}\n\n'
+            f"文件名: {source_name}\n"
+            f"已选网站列 index: {website_column_index}\n"
+            f"列摘要(JSON): {json.dumps(columns, ensure_ascii=False)}"
+        )
+        return self._call_json(prompt, deadline_monotonic=deadline_monotonic)
+
     def pick_representative_urls(
         self,
         *,

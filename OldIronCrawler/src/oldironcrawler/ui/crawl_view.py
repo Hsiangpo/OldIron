@@ -34,6 +34,7 @@ class SiteResultEvent:
     reason: str = ""
     stage_timing: str = ""
     stage_counts: str = ""
+    show_company_name: bool = True
     show_emails: bool = True
     show_phones: bool = True
     show_representative: bool = True
@@ -87,15 +88,18 @@ def _display(value: str) -> str:
 
 
 def build_card(event: SiteResultEvent) -> RenderableType:
-    found = bool(str(event.company_name or "").strip())
+    found = bool(str(event.company_name or "").strip()) if event.show_company_name else not bool(str(event.reason or "").strip())
     glyph = Text(f"{CHECK} " if found else f"{CROSS} ", style="ready" if found else "fail")
-    title = Text(str(event.company_name or "").strip() or event.website, style="value.strong")
+    title_value = str(event.company_name or "").strip() if event.show_company_name else ""
+    title = Text(title_value or event.website, style="value.strong")
     index = Text(f"{event.completed_index}/{event.total}", style="hint")
     # 序号靠右对齐到内容宽度（手算间距），避免 grid expand 在宽终端里把序号推到极右、留大空隙。
     gap = max(content_width() - glyph.cell_len - title.cell_len - index.cell_len, 1)
     header = Text.assemble(glyph, title, " " * gap, index)
 
-    rows: list[RenderableType] = [header, Text(f"   {event.website}", style="label")]
+    rows: list[RenderableType] = [header]
+    if event.show_company_name:
+        rows.append(Text(f"   {event.website}", style="label"))
     detail = Table.grid(padding=(0, 2))
     detail.add_column(style="label", justify="left", no_wrap=True)
     detail.add_column(style="value", overflow="fold")
@@ -225,7 +229,8 @@ def emit_log(message: str) -> None:
 # —— 非 TTY / 无活跃视图时的纯文本降级（与旧版输出保持一致）——
 def _plain_site_result(event: SiteResultEvent) -> None:
     print(f"[{event.completed_index}/{event.total}] {event.website}", flush=True)
-    print(f"  公司名: {_display(event.company_name)}", flush=True)
+    if event.show_company_name:
+        print(f"  公司名: {_display(event.company_name)}", flush=True)
     if event.show_representative:
         print(f"  代表人: {_display(event.representative)}", flush=True)
     if event.show_emails:
