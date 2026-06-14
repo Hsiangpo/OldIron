@@ -423,6 +423,51 @@ def test_fetch_page_optional_disables_slow_fallbacks_for_budgeted_targets(monkey
     client.close()
 
 
+def test_fetch_html_recomputes_timeout_after_request_slot_wait(monkeypatch) -> None:
+    current_time = [100.0]
+    captured_timeouts: list[float] = []
+    client = SiteProtocolClient(SiteProtocolConfig(timeout_seconds=10.0))
+
+    class FakeSlot:
+        def __enter__(self):
+            current_time[0] = 104.5
+            return None
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Type": "text/html"}
+        content = b"<html>ok</html>"
+        text = "<html>ok</html>"
+
+        def close(self) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, _url: str, timeout: float):
+            captured_timeouts.append(float(timeout))
+            return FakeResponse()
+
+    monkeypatch.setattr(protocol_module.time, "monotonic", lambda: current_time[0])
+    monkeypatch.setattr(protocol_module, "request_slot", lambda **_kwargs: FakeSlot())
+
+    html = client._fetch_html(
+        FakeSession(),
+        "https://example.com",
+        required=True,
+        timeout_seconds=5.0,
+        max_retries_override=0,
+        request_deadline_monotonic=105.0,
+    )
+
+    assert html == "<html>ok</html>"
+    assert captured_timeouts
+    assert 0.0 < captured_timeouts[0] <= 0.6
+    client.close()
+
+
 def test_fetch_html_allows_fast_tls_fallback_without_slow_target_fallbacks(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
 

@@ -540,26 +540,12 @@ class SiteProfileService:
             email_stop_same_domain_count=_get_email_stop_same_domain_count(self._config),
         ):
             return [], 0
-        collected_pages: list = []
-        elapsed_ms = 0
-        for url in remaining_urls:
-            if not _should_fetch_email_overflow_after_primary_fetch(
-                website,
-                _collect_primary_email_rule_pages(page_map, fetch_plan),
-                [url],
-                email_stop_same_domain_count=_get_email_stop_same_domain_count(self._config),
-            ):
-                break
-            pages, fetch_ms = _fetch_primary_pages(
-                protocol,
-                [url],
-                page_concurrency=1,
-                page_pool=self._page_pool,
-            )
-            elapsed_ms += fetch_ms
-            _merge_pages_into_map(page_map, pages)
-            collected_pages.extend(pages)
-        return collected_pages, elapsed_ms
+        return _fetch_primary_pages(
+            protocol,
+            remaining_urls,
+            page_concurrency=self._config.page_concurrency,
+            page_pool=self._page_pool,
+        )
 
     def _time_call(self, metrics: SiteStageMetrics, field_name: str, func):
         started = time.monotonic()

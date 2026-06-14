@@ -48,7 +48,6 @@ from oldironcrawler.extractor.protocol_discovery import (
 )
 from oldironcrawler.extractor.protocol_runtime import configure_protocol_runtime, get_probe_executor, request_slot
 
-
 class SiteProtocolClient:
     def __init__(self, config: SiteProtocolConfig) -> None:
         self._config = config
@@ -230,10 +229,7 @@ class SiteProtocolClient:
         for _ in range(attempts):
             response = None
             try:
-                request_timeout = self._resolve_timeout(
-                    timeout_seconds,
-                    deadline_monotonic=request_deadline_monotonic,
-                )
+                request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
                 if use_request_slot:
                     with request_slot(
                         timeout_seconds=request_timeout,
@@ -243,6 +239,7 @@ class SiteProtocolClient:
                             deadline_monotonic=request_deadline_monotonic,
                         ),
                     ):
+                        request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
                         response = session.get(url, timeout=request_timeout)
                 else:
                     response = session.get(url, timeout=request_timeout)
@@ -391,6 +388,8 @@ class SiteProtocolClient:
         if remaining <= 0:
             raise ProtocolTemporaryError("site_deadline_exceeded")
         return max(min(base_timeout, remaining), 0.05)
+    def _request_timeout(self, timeout_seconds: float | None = None, deadline_monotonic: float | None = None) -> float:
+        return self._resolve_timeout(timeout_seconds, deadline_monotonic=deadline_monotonic)
     def _remaining_deadline_seconds(self, *, deadline_monotonic: float | None = None) -> float | None:
         if deadline_monotonic is not None:
             return deadline_monotonic - time.monotonic()
@@ -404,10 +403,7 @@ class SiteProtocolClient:
         deadline_monotonic: float | None = None,
     ) -> float:
         base_timeout = max(float(request_timeout_seconds or self._config.timeout_seconds or 0.0), 0.05)
-        wait_timeout = min(
-            max(base_timeout * _REQUEST_SLOT_WAIT_MULTIPLIER, _REQUEST_SLOT_WAIT_FLOOR_SECONDS),
-            _REQUEST_SLOT_WAIT_CAP_SECONDS,
-        )
+        wait_timeout = min(max(base_timeout * _REQUEST_SLOT_WAIT_MULTIPLIER, _REQUEST_SLOT_WAIT_FLOOR_SECONDS), _REQUEST_SLOT_WAIT_CAP_SECONDS)
         remaining = self._remaining_deadline_seconds(deadline_monotonic=deadline_monotonic)
         if remaining is None:
             return wait_timeout
@@ -506,6 +502,7 @@ class SiteProtocolClient:
                 timeout_seconds=request_timeout,
                 wait_timeout_seconds=self._resolve_request_slot_wait_timeout(request_timeout),
             ):
+                request_timeout = self._resolve_timeout(timeout_seconds)
                 response = session.get(url, timeout=request_timeout)
             if int(response.status_code) != 200:
                 return ""
@@ -569,10 +566,7 @@ class SiteProtocolClient:
         request_slot_wait_seconds: float | None = None,
         request_deadline_monotonic: float | None = None,
     ) -> str | None:
-        request_timeout = self._resolve_timeout(
-            timeout_seconds,
-            deadline_monotonic=request_deadline_monotonic,
-        )
+        request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
         last_challenge_html = ""
         for _attempt in range(2):
             status, content_type, response_text = self._fetch_httpx_snapshot(
@@ -617,7 +611,8 @@ class SiteProtocolClient:
                         deadline_monotonic=request_deadline_monotonic,
                     ),
                 ):
-                    response = client.get(url, timeout=timeout_seconds)
+                    request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
+                    response = client.get(url, timeout=request_timeout)
                 return (
                     int(response.status_code),
                     str(response.headers.get("Content-Type", "") or "").lower(),
@@ -631,7 +626,8 @@ class SiteProtocolClient:
                 deadline_monotonic=request_deadline_monotonic,
             ),
         ):
-            response = self._http_client.get(url, timeout=timeout_seconds)
+            request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
+            response = self._http_client.get(url, timeout=request_timeout)
         return (
             int(response.status_code),
             str(response.headers.get("Content-Type", "") or "").lower(),
@@ -647,7 +643,7 @@ class SiteProtocolClient:
     ) -> str | None:
         if not _should_try_http_fallback(url, lowered_error):
             return None
-        request_timeout = self._resolve_timeout(deadline_monotonic=request_deadline_monotonic)
+        request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
         client_kwargs: dict[str, object] = {
             "follow_redirects": True,
             "headers": dict(self._config.default_headers),
@@ -666,6 +662,7 @@ class SiteProtocolClient:
                         deadline_monotonic=request_deadline_monotonic,
                     ),
                 ):
+                    request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
                     response = client.get(url, timeout=request_timeout)
                 if int(response.status_code) != 200:
                     return None
@@ -691,7 +688,7 @@ class SiteProtocolClient:
         fallback_url = _replace_https_with_http(url)
         response = None
         try:
-            request_timeout = self._resolve_timeout(deadline_monotonic=request_deadline_monotonic)
+            request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
             with request_slot(
                 timeout_seconds=request_timeout,
                 wait_timeout_seconds=self._resolve_request_slot_wait_timeout(
@@ -699,6 +696,7 @@ class SiteProtocolClient:
                     deadline_monotonic=request_deadline_monotonic,
                 ),
             ):
+                request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
                 response = session.get(fallback_url, timeout=request_timeout)
             if int(response.status_code) != 200:
                 return None
@@ -728,7 +726,7 @@ class SiteProtocolClient:
         for fallback_url in _build_host_fallback_urls(url, lowered_error):
             response = None
             try:
-                request_timeout = self._resolve_timeout(deadline_monotonic=request_deadline_monotonic)
+                request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
                 with request_slot(
                     timeout_seconds=request_timeout,
                     wait_timeout_seconds=self._resolve_request_slot_wait_timeout(
@@ -736,6 +734,7 @@ class SiteProtocolClient:
                         deadline_monotonic=request_deadline_monotonic,
                     ),
                 ):
+                    request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
                     response = session.get(fallback_url, timeout=request_timeout)
                 if int(response.status_code) != 200:
                     continue
@@ -981,11 +980,12 @@ class SiteProtocolClient:
 
     def _fetch_sitemap_text(self, session: cffi_requests.Session, url: str) -> str:
         try:
-            request_timeout = self._resolve_timeout()
+            request_timeout = self._request_timeout()
             with request_slot(
                 timeout_seconds=request_timeout,
                 wait_timeout_seconds=self._resolve_request_slot_wait_timeout(request_timeout),
             ):
+                request_timeout = self._request_timeout()
                 response = session.get(url, timeout=request_timeout)
             if int(response.status_code) != 200:
                 return ""

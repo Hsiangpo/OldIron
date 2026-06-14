@@ -108,6 +108,44 @@ def test_discovery_email_only_stops_after_two_email_families() -> None:
     assert protocol.related_calls == 0
 
 
+def test_discovery_email_only_stops_after_primary_contact_page() -> None:
+    website = "https://acme.example"
+
+    class FakeProtocol:
+        def __init__(self) -> None:
+            self.sitemap_calls = 0
+            self.related_calls = 0
+
+        def discover_primary_urls(self, _website: str, *, limit: int):
+            return SimpleNamespace(
+                urls=[f"{website}/fale-conosco"],
+                homepage_html="<html>home</html>",
+            )
+
+        def discover_sitemap_urls(self, _website: str, *, limit: int) -> list[str]:
+            self.sitemap_calls += 1
+            return [f"{website}/privacidade"]
+
+        def discover_related_subdomain_urls(self, *_args, **_kwargs) -> list[str]:
+            self.related_calls += 1
+            return [f"{website}/atendimento"]
+
+    protocol = FakeProtocol()
+
+    snapshot = service_module._discover_value_snapshot(
+        protocol,
+        website,
+        {},
+        {},
+        rep_target_count=0,
+        contact_target_enabled=True,
+    )
+
+    assert f"{website}/fale-conosco" in snapshot.email_urls
+    assert protocol.sitemap_calls == 0
+    assert protocol.related_calls == 0
+
+
 def test_discovery_budget_skips_extra_stages_after_primary(monkeypatch) -> None:
     website = "https://acme.example"
 
@@ -1085,7 +1123,7 @@ def test_site_profile_service_fetches_remaining_primary_email_pages_after_fast_m
 
     result = service.process(task.id, task.website)
 
-    assert fetch_calls == [[website, contact_url], [support_url], [legal_url], [privacy_url]]
+    assert fetch_calls == [[website, contact_url], [support_url, legal_url, privacy_url]]
     assert result.result.emails == "privacy@acmeholdings.co.uk"
     learning_store.close()
     store.close()
