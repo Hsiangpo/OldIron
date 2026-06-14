@@ -11,7 +11,6 @@ from oldironcrawler.extractor.discovery_fallback import has_non_homepage_email_t
 from oldironcrawler.extractor.email_page_selection import build_email_teacher_pool, pick_email_urls_or_empty
 from oldironcrawler.extractor.email_rules import (
     collect_emails_for_pages,
-    has_email_evidence_hint,
     join_emails,
     merge_ai_emails_for_website,
 )
@@ -19,6 +18,7 @@ from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtrac
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_phones
 from oldironcrawler.extractor.protocol_client import SiteProtocolClient, SiteProtocolConfig
+from oldironcrawler.extractor.protocol_runtime import DaemonProbeExecutor
 from oldironcrawler.extractor.representative_search import ActiveRepresentativeSearchResult
 from oldironcrawler.extractor.service_discovery import (
     DiscoverySnapshot,
@@ -63,6 +63,9 @@ _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS = 16.0
 _AI_EMAIL_SEMAPHORE_LOCK = threading.Lock()
 _AI_EMAIL_SEMAPHORE: threading.Semaphore | None = None
 _AI_EMAIL_SEMAPHORE_LIMIT = 0
+_AI_EMAIL_EXECUTOR_LOCK = threading.Lock()
+_AI_EMAIL_EXECUTOR: DaemonProbeExecutor | None = None
+_AI_EMAIL_EXECUTOR_LIMIT = 0
 @dataclass
 class SiteProcessingResult:
     result: SiteResult
@@ -74,6 +77,14 @@ class LearningFeedback:
     rep_negative_tokens: list[str]
     email_positive_tokens: list[str]
     email_negative_tokens: list[str]
+
+
+@dataclass
+class AiEmailFuture:
+    future: Future
+    started_monotonic: float
+
+
 class SiteProfileService:
     def __init__(
         self,
@@ -195,6 +206,20 @@ class SiteProfileService:
                     deadline_monotonic=deadline_monotonic,
                 )
             email_rule_pages = _collect_email_rule_pages(page_map, fetch_plan) if need_contact_extract else []
+            ai_email_future = None
+            if need_contact_extract and collect_email_enabled:
+                ai_email_future = _start_ai_email_future(
+                    llm_client=self._llm,
+                    homepage=website,
+                    email_rule_pages=email_rule_pages,
+                    deadline_monotonic=deadline_monotonic,
+                    ai_email_concurrency=getattr(self._config, "ai_email_concurrency", _DEFAULT_AI_EMAIL_CONCURRENCY),
+                    ai_email_timeout_seconds=getattr(
+                        self._config,
+                        "ai_email_timeout_seconds",
+                        _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS,
+                    ),
+                )
             emails: list[str] = []
             email_sources: dict[str, list[str]] = {}
             phones: list[str] = []
@@ -210,8 +235,13 @@ class SiteProfileService:
                     ),
                 )
                 if collect_email_enabled:
-                    emails = self._merge_ai_emails(
-                        website, emails, email_rule_pages, metrics, deadline_monotonic
+                    emails = _merge_ai_email_future(
+                        website=website,
+                        rule_emails=emails,
+                        email_rule_pages=email_rule_pages,
+                        ai_email_future=ai_email_future,
+                        metrics=metrics,
+                        deadline_monotonic=deadline_monotonic,
                     )
                 else:
                     emails = []
@@ -628,8 +658,6 @@ def _extract_ai_emails_or_empty(
 ) -> list[str]:
     if not email_rule_pages:
         return []
-    if not any(has_email_evidence_hint(html_text) for _url, html_text in email_rule_pages):
-        return []
     semaphore = _get_ai_email_semaphore(ai_email_concurrency)
     effective_deadline = _resolve_ai_email_deadline(
         deadline_monotonic,
@@ -660,6 +688,70 @@ def _extract_ai_emails_or_empty(
     finally:
         if acquired:
             semaphore.release()
+
+
+def _start_ai_email_future(
+    *,
+    llm_client: WebsiteLlmClient,
+    homepage: str,
+    email_rule_pages: list[tuple[str, str]],
+    deadline_monotonic: float | None,
+    ai_email_concurrency: int = _DEFAULT_AI_EMAIL_CONCURRENCY,
+    ai_email_timeout_seconds: float = _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS,
+) -> AiEmailFuture | None:
+    if not email_rule_pages:
+        return None
+    executor = _get_ai_email_executor(ai_email_concurrency)
+    started = time.monotonic()
+    try:
+        future = executor.submit(
+            _extract_ai_emails_or_empty,
+            llm_client=llm_client,
+            homepage=homepage,
+            email_rule_pages=email_rule_pages,
+            deadline_monotonic=deadline_monotonic,
+            ai_email_concurrency=ai_email_concurrency,
+            ai_email_timeout_seconds=ai_email_timeout_seconds,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return AiEmailFuture(future=future, started_monotonic=started)
+
+
+def _merge_ai_email_future(
+    *,
+    website: str,
+    rule_emails: list[str],
+    email_rule_pages: list[tuple[str, str]],
+    ai_email_future: AiEmailFuture | None,
+    metrics: SiteStageMetrics,
+    deadline_monotonic: float | None,
+) -> list[str]:
+    if rule_emails:
+        return rule_emails
+    if ai_email_future is None:
+        return rule_emails
+    wait_started = time.monotonic()
+    try:
+        timeout = _remaining_deadline_seconds(deadline_monotonic)
+        if timeout is not None and timeout <= 0:
+            ai_email_future.future.cancel()
+            return rule_emails
+        ai_emails = ai_email_future.future.result(timeout=timeout)
+    except FutureTimeoutError:
+        ai_email_future.future.cancel()
+        return rule_emails
+    except LlmConfigurationError:
+        raise
+    except Exception:  # noqa: BLE001
+        return rule_emails
+    finally:
+        metrics.ai_email_ms += int(round((time.monotonic() - wait_started) * 1000))
+    if not ai_emails:
+        return rule_emails
+    return merge_ai_emails_for_website(website, rule_emails, ai_emails, email_rule_pages)
+
+
 def _get_ai_email_semaphore(limit: int) -> threading.Semaphore:
     global _AI_EMAIL_SEMAPHORE, _AI_EMAIL_SEMAPHORE_LIMIT
     normalized_limit = min(max(int(limit or _DEFAULT_AI_EMAIL_CONCURRENCY), 1), 32)
@@ -668,6 +760,22 @@ def _get_ai_email_semaphore(limit: int) -> threading.Semaphore:
             _AI_EMAIL_SEMAPHORE = threading.Semaphore(normalized_limit)
             _AI_EMAIL_SEMAPHORE_LIMIT = normalized_limit
         return _AI_EMAIL_SEMAPHORE
+
+
+def _get_ai_email_executor(limit: int) -> DaemonProbeExecutor:
+    global _AI_EMAIL_EXECUTOR, _AI_EMAIL_EXECUTOR_LIMIT
+    normalized_limit = min(max(int(limit or _DEFAULT_AI_EMAIL_CONCURRENCY), 1), 32)
+    old_executor: DaemonProbeExecutor | None = None
+    with _AI_EMAIL_EXECUTOR_LOCK:
+        if _AI_EMAIL_EXECUTOR is not None and _AI_EMAIL_EXECUTOR_LIMIT == normalized_limit:
+            return _AI_EMAIL_EXECUTOR
+        old_executor = _AI_EMAIL_EXECUTOR
+        _AI_EMAIL_EXECUTOR = DaemonProbeExecutor(max_workers=normalized_limit)
+        _AI_EMAIL_EXECUTOR_LIMIT = normalized_limit
+        executor = _AI_EMAIL_EXECUTOR
+    if old_executor is not None:
+        old_executor.shutdown(wait=False, cancel_futures=False)
+    return executor
 
 
 def _resolve_ai_email_deadline(

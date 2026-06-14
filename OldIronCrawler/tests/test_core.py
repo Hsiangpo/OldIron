@@ -24,6 +24,7 @@ from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_
 from oldironcrawler.extractor import llm_client as llm_module
 from oldironcrawler.extractor import protocol_client as protocol_module
 from oldironcrawler.extractor import protocol_runtime as protocol_runtime_module
+from oldironcrawler.extractor import service as service_module
 from oldironcrawler.extractor import shell_page as shell_page_module
 from oldironcrawler.challenge_solver import CloudflareFallbackResult, CapSolverResult
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtractionResult, LlmTemporaryError, WebsiteLlmClient
@@ -727,6 +728,104 @@ def test_site_profile_email_only_skips_representative_pages_when_company_name_gi
     assert result.result.emails == "info@acme.com"
     assert "https://acme.com/contact" in fetched_urls
     assert "https://acme.com/team" not in fetched_urls
+    store.close()
+
+
+def test_site_profile_starts_ai_email_before_rule_extraction(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    rows = [
+        ImportedWebsite(
+            input_index=1,
+            raw_website="acme.com",
+            website="https://acme.com",
+            dedupe_key="acme.com",
+            company_name="Acme Ltd",
+        )
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    task = store.claim_next_site()
+    events: list[str] = []
+
+    class FakeProtocol:
+        def close(self) -> None:
+            return None
+
+    class FakeLlm:
+        def extract_company_and_representative(self, **_kwargs):
+            raise AssertionError("representative LLM should not run")
+
+    assert task is not None
+    monkeypatch.setattr("oldironcrawler.extractor.service.SiteProtocolClient", lambda _config: FakeProtocol())
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=["https://acme.com", "https://acme.com/contact"],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=["https://acme.com/contact"],
+            homepage_html="<html>Home</html>",
+        ),
+    )
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._fetch_primary_pages",
+        lambda _protocol, urls, **_kwargs: (
+            [HtmlPage(url=url, html="<html>Contact page</html>") for url in urls],
+            1,
+        ),
+    )
+    monkeypatch.setattr("oldironcrawler.extractor.service.replace_shell_pages_with_evidence", lambda *_args, **_kwargs: 0)
+
+    def fake_start_ai_email_future(**_kwargs):
+        events.append("ai-start")
+        return service_module.AiEmailFuture(future=Future(), started_monotonic=time.monotonic())
+
+    def fake_collect_contact_details(*_args, **_kwargs):
+        events.append("rules")
+        assert events == ["ai-start", "rules"]
+        return ["info@acme.com"], {"https://acme.com/contact": ["info@acme.com"]}, [], {}
+
+    monkeypatch.setattr("oldironcrawler.extractor.service._start_ai_email_future", fake_start_ai_email_future)
+    monkeypatch.setattr("oldironcrawler.extractor.service._collect_contact_details", fake_collect_contact_details)
+
+    service = SiteProfileService(
+        SimpleNamespace(
+            request_timeout_seconds=10.0,
+            proxy_url="",
+            capsolver_api_key="",
+            capsolver_api_base_url="",
+            capsolver_proxy="",
+            capsolver_poll_seconds=1.0,
+            capsolver_max_wait_seconds=5.0,
+            cloudflare_proxy_url="",
+            page_worker_count=1,
+            page_host_limit=1,
+            page_concurrency=1,
+            total_wait_seconds=180.0,
+            rep_page_limit=5,
+            email_page_soft_limit=8,
+            email_page_hard_limit=16,
+            page_total_hard_limit=20,
+            email_stop_same_domain_count=2,
+            collect_email_enabled=True,
+            collect_phone_enabled=False,
+            collect_company_name_enabled=False,
+            extract_representative_enabled=False,
+            search_representative_enabled=False,
+        ),
+        store,
+        GlobalLearningStore(tmp_path / "learning.sqlite3"),
+        FakeLlm(),
+        page_pool=None,
+    )
+
+    result = service.process(task.id, task.website, input_company_name=task.company_name)
+
+    assert events == ["ai-start", "rules"]
+    assert result.result.emails == "info@acme.com"
     store.close()
 
 

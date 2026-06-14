@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -288,7 +290,7 @@ def test_extract_ai_emails_or_empty_skips_llm_when_no_pages() -> None:
     assert llm.calls == []  # 没页面就不调 LLM，省一次调用
 
 
-def test_extract_ai_emails_or_empty_skips_llm_without_email_evidence() -> None:
+def test_extract_ai_emails_or_empty_runs_even_without_email_evidence() -> None:
     llm = _FakeEmailLlm(result=["info@acme.example"])
 
     out = _extract_ai_emails_or_empty(
@@ -298,8 +300,8 @@ def test_extract_ai_emails_or_empty_skips_llm_without_email_evidence() -> None:
         deadline_monotonic=None,
     )
 
-    assert out == []
-    assert llm.calls == []
+    assert out == ["info@acme.example"]
+    assert llm.calls
 
 
 def test_extract_ai_emails_or_empty_runs_with_obfuscated_email_evidence() -> None:
@@ -334,6 +336,50 @@ def test_extract_ai_emails_or_empty_swallows_llm_temporary_error() -> None:
         email_rule_pages=[("u", "Contact: info@acme.example")],
         deadline_monotonic=None,
     ) == []
+
+
+def test_ai_email_future_starts_but_rule_hit_returns_without_waiting() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class SlowLlm:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def extract_emails_from_pages(self, **_kwargs):
+            self.calls += 1
+            started.set()
+            release.wait(timeout=2.0)
+            return ["ai@acme.example"]
+
+    llm = SlowLlm()
+    future = service_module._start_ai_email_future(
+        llm_client=llm,
+        homepage="https://acme.example",
+        email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+        deadline_monotonic=time.monotonic() + 10,
+        ai_email_concurrency=1,
+        ai_email_timeout_seconds=5.0,
+    )
+    assert future is not None
+    assert started.wait(timeout=1.0)
+
+    begin = time.monotonic()
+    try:
+        emails = service_module._merge_ai_email_future(
+            website="https://acme.example",
+            rule_emails=["info@acme.example"],
+            email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+            ai_email_future=future,
+            metrics=service_module.SiteStageMetrics(),
+            deadline_monotonic=time.monotonic() + 10,
+        )
+    finally:
+        release.set()
+
+    assert emails == ["info@acme.example"]
+    assert time.monotonic() - begin < 0.2
+    assert llm.calls == 1
 
 
 def test_collect_emails_skips_embedded_scan_after_direct_same_domain_hit(monkeypatch) -> None:
