@@ -409,7 +409,7 @@ def test_completed_job_can_be_reset_for_rerun(tmp_path: Path) -> None:
     assert progress["dropped"] == 0
 
 
-def test_reset_completed_job_backfills_terminal_result_cache(tmp_path: Path) -> None:
+def test_reset_completed_job_clears_terminal_result_cache_for_fresh_rerun(tmp_path: Path) -> None:
     db_path = tmp_path / "runtime.sqlite3"
     store = RuntimeStore(db_path)
     rows = [
@@ -433,17 +433,13 @@ def test_reset_completed_job_backfills_terminal_result_cache(tmp_path: Path) -> 
     )
     store.mark_dropped(second.id, "http_403")
 
-    assert store.reset_completed_job_for_rerun() is True
-    cached_done = store.load_cached_outcome("a.com")
-    cached_drop = store.load_cached_outcome("b.com")
+    assert store.load_cached_outcome("a.com") is not None
+    assert store.load_cached_outcome("b.com") is not None
 
-    assert cached_done is not None
-    assert cached_done.status == "done"
-    assert cached_done.result.emails == "a@a.com"
-    assert cached_done.result.phones == "+49301234567"
-    assert cached_drop is not None
-    assert cached_drop.status == "dropped"
-    assert cached_drop.last_error == "http_403"
+    assert store.reset_completed_job_for_rerun() is True
+
+    assert store.load_cached_outcome("a.com") is None
+    assert store.load_cached_outcome("b.com") is None
 
 
 def test_runtime_store_delivery_rows_include_phones(tmp_path: Path) -> None:
@@ -2138,7 +2134,7 @@ def test_run_crawl_session_resume_keeps_completed_display_index(tmp_path: Path, 
     assert displayed_indexes == [75]
 
 
-def test_run_crawl_session_reuses_cached_terminal_outcomes_without_crawling(
+def test_run_crawl_session_ignores_cached_terminal_outcomes_for_fresh_processing(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2158,10 +2154,30 @@ def test_run_crawl_session_reuses_cached_terminal_outcomes_without_crawling(
     store.mark_dropped(second.id, "http_403")
     assert store.reset_completed_job_for_rerun() is True
 
+    crawled_websites: list[str] = []
+
+    def fake_run_single_site(_config, _store, _learning_store, _llm_client, _page_pool, task, *_args):
+        crawled_websites.append(task.website)
+        return SimpleNamespace(
+            result=SiteResult(
+                company_name=f"Fresh {task.input_index}",
+                representative="",
+                emails=f"fresh{task.input_index}@example.com",
+                website=task.website,
+            ),
+            learning_feedback=SimpleNamespace(
+                rep_positive_tokens=[],
+                rep_negative_tokens=[],
+                email_positive_tokens=[],
+                email_negative_tokens=[],
+            ),
+            stage_metrics=SiteStageMetrics(discover_ms=1, fetched_page_count=1),
+        )
+
     monkeypatch.setattr(
         runner_module,
         "_run_single_site",
-        lambda *_args, **_kwargs: pytest.fail("cached rows should not crawl again"),
+        fake_run_single_site,
     )
     monkeypatch.setattr(runner_module, "print_site_result", lambda **_kwargs: None)
     monkeypatch.setattr(runner_module, "print_progress_heartbeat", lambda **_kwargs: None)
@@ -2209,10 +2225,11 @@ def test_run_crawl_session_reuses_cached_terminal_outcomes_without_crawling(
 
     runner_module.run_crawl_session(config, store, tmp_path / "delivery.csv")
 
-    assert store.progress()["done"] == 1
-    assert store.progress()["dropped"] == 1
-    assert snapshots[-1][0]["emails"] == "a@a.com"
-    assert snapshots[-1][1]["website"] == "https://b.com"
+    assert crawled_websites == ["https://a.com", "https://b.com"]
+    assert store.progress()["done"] == 2
+    assert store.progress()["dropped"] == 0
+    assert snapshots[-1][0]["emails"] == "fresh1@example.com"
+    assert snapshots[-1][1]["emails"] == "fresh2@example.com"
 
 
 def test_run_crawl_session_retries_temporary_llm_error_without_restarting_whole_job(tmp_path: Path, monkeypatch) -> None:

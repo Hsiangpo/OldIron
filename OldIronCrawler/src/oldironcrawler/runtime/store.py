@@ -278,7 +278,7 @@ class RuntimeStore:
                 return False
             if counts["pending"] > 0 or counts["running"] > 0 or counts["failed_temp"] > 0:
                 return False
-            self._backfill_result_cache(conn)
+            self._clear_result_cache_for_current_job(conn)
             conn.execute(
                 """
                 UPDATE sites
@@ -312,6 +312,18 @@ class RuntimeStore:
                 """
             )
             return True
+
+    def _clear_result_cache_for_current_job(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            DELETE FROM site_result_cache
+            WHERE dedupe_key IN (
+                SELECT dedupe_key
+                FROM sites
+                WHERE dedupe_key != ''
+            )
+            """
+        )
 
     def load_cached_outcome(self, dedupe_key: str) -> CachedSiteOutcome | None:
         key = str(dedupe_key or "").strip()

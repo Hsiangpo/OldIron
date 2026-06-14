@@ -13,7 +13,7 @@ from oldironcrawler.extractor.representative_search import ActiveRepresentativeS
 from oldironcrawler.extractor.service import SiteProfileService
 from oldironcrawler.reporter import print_progress_heartbeat, print_site_result, write_delivery_csv
 from oldironcrawler.runtime.global_learning import GlobalLearningStore
-from oldironcrawler.runtime.store import CachedSiteOutcome, RuntimeStore, SiteStageMetrics, SiteTask
+from oldironcrawler.runtime.store import RuntimeStore, SiteStageMetrics, SiteTask
 from oldironcrawler.ui import crawl_view
 
 _DELIVERY_FLUSH_EVERY_SITES = 25
@@ -68,27 +68,6 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                 task = store.claim_next_site()
                 if task is None:
                     break
-                load_cached_outcome = getattr(store, "load_cached_outcome", None)
-                cached_outcome = (
-                    load_cached_outcome(task.dedupe_key)
-                    if callable(load_cached_outcome)
-                    else None
-                )
-                if cached_outcome is not None:
-                    completed_count = _handle_cached_outcome(
-                        cached_outcome,
-                        task,
-                        total,
-                        completed_count,
-                        store,
-                        delivery_writer,
-                        show_company_name=show_company,
-                        show_email=show_email,
-                        show_phone=show_phone,
-                        show_representative=show_rep,
-                        show_searched_representative=show_search,
-                    )
-                    continue
                 futures[
                     _submit_single_site(
                         executor,
@@ -328,73 +307,6 @@ def _run_single_site(
         if not _looks_temporary_error(exc):
             raise
         raise ProtocolTemporaryError(str(exc)) from exc
-
-
-def _handle_cached_outcome(
-    cached_outcome: CachedSiteOutcome,
-    task: SiteTask,
-    total: int,
-    completed_count: int,
-    store: RuntimeStore,
-    delivery_writer,
-    *,
-    show_email: bool = True,
-    show_phone: bool = True,
-    show_representative: bool = True,
-    show_searched_representative: bool = True,
-    show_company_name: bool = True,
-) -> int:
-    stage_metrics = SiteStageMetrics()
-    if cached_outcome.status == "dropped":
-        store.mark_dropped(task.id, cached_outcome.last_error)
-        completed_count += 1
-        delivery_writer.note_completion()
-        print_site_result(
-            completed_index=completed_count,
-            total=total,
-            website=task.website,
-            company_name=getattr(task, "company_name", ""),
-            representative="",
-            emails="",
-            searched_representative="",
-            phones="",
-            reason=_describe_error_reason(cached_outcome.last_error),
-            stage_metrics=stage_metrics,
-            show_company_name=show_company_name,
-            show_emails=show_email,
-            show_phones=show_phone,
-            show_representative=show_representative,
-            show_searched_representative=show_searched_representative,
-        )
-        return completed_count
-    store.mark_done(task.id, cached_outcome.result)
-    completed_count += 1
-    delivery_writer.note_completion()
-    print_site_result(
-        completed_index=completed_count,
-        total=total,
-        website=task.website,
-        company_name=cached_outcome.result.company_name,
-        representative=cached_outcome.result.representative,
-        emails=cached_outcome.result.emails,
-        searched_representative=cached_outcome.result.searched_representative,
-        phones=cached_outcome.result.phones,
-        reason=_describe_missing_reason(
-            cached_outcome.result,
-            include_email=show_email,
-            include_phone=show_phone,
-            include_company_name=show_company_name,
-            include_representative=show_representative,
-        ),
-        stage_metrics=stage_metrics,
-        show_company_name=show_company_name,
-        show_emails=show_email,
-        show_phones=show_phone,
-        show_representative=show_representative,
-        show_searched_representative=show_searched_representative,
-    )
-    return completed_count
-
 
 def _handle_future(
     future: Future,
