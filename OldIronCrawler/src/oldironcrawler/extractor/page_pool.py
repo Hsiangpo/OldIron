@@ -3,9 +3,11 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
+
+from oldironcrawler.extractor.protocol_runtime import DaemonProbeExecutor
 
 _DISPATCH_QUANTUM_SECONDS = 0.01
 
@@ -32,7 +34,7 @@ class _FetchBatch:
 class PageFetchPool:
     def __init__(self, config: PageFetchPoolConfig) -> None:
         self._config = config
-        self._executor = ThreadPoolExecutor(max_workers=max(config.worker_count, 1))
+        self._executor = DaemonProbeExecutor(max_workers=max(config.worker_count, 1))
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._host_limits: dict[str, threading.BoundedSemaphore] = {}

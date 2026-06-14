@@ -87,6 +87,8 @@ def _should_try_host_fallback(lowered_error: str) -> bool:
             "nodename nor servname",
             "connection reset",
             "recv failure",
+            "no alternative certificate subject name matches",
+            "certificate subject name",
         )
     )
 

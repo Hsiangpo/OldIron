@@ -10,7 +10,9 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from oldironcrawler.extractor import email_rules as email_rules_module
 from oldironcrawler.extractor.email_rules import (
+    collect_emails_for_pages,
     merge_ai_emails_for_website,
     select_emails_present_in_pages,
 )
@@ -77,6 +79,14 @@ def _email_client() -> WebsiteLlmClient:
     )
 
 
+def test_llm_client_disables_sdk_internal_retries() -> None:
+    client = _email_client()
+    try:
+        assert getattr(client._client, "max_retries", None) == 0
+    finally:
+        client.close()
+
+
 def test_extract_emails_from_pages_parses_and_dedupes(monkeypatch) -> None:
     client = _email_client()
     monkeypatch.setattr(
@@ -137,6 +147,27 @@ def test_extract_emails_from_pages_handles_bad_payload(monkeypatch) -> None:
         client.close()
 
 
+def test_extract_emails_from_pages_uses_single_fast_attempt(monkeypatch) -> None:
+    client = _email_client()
+    captured_kwargs: list[dict] = []
+
+    def fake_call_json(_prompt, **kwargs):
+        captured_kwargs.append(kwargs)
+        return {"emails": []}
+
+    monkeypatch.setattr(client, "_call_json", fake_call_json)
+    try:
+        emails = client.extract_emails_from_pages(
+            homepage="https://acme.example",
+            pages=[{"url": "https://acme.example/contact", "html": "<html>contact</html>"}],
+        )
+    finally:
+        client.close()
+
+    assert emails == []
+    assert captured_kwargs[0]["max_retries"] == 1
+
+
 def test_pick_email_urls_keeps_only_given_candidates(monkeypatch) -> None:
     client = _email_client()
     candidates = [
@@ -166,6 +197,30 @@ def test_pick_email_urls_keeps_only_given_candidates(monkeypatch) -> None:
         client.close()
 
     assert urls == ["https://acme.example/central-relacionamento"]
+
+
+def test_pick_email_urls_uses_single_fast_attempt(monkeypatch) -> None:
+    client = _email_client()
+    candidates = ["https://acme.example/contact"]
+    captured_kwargs: list[dict] = []
+
+    def fake_call_json(_prompt, **kwargs):
+        captured_kwargs.append(kwargs)
+        return {"selected_urls": candidates}
+
+    monkeypatch.setattr(client, "_call_json", fake_call_json)
+    try:
+        urls = client.pick_email_urls(
+            homepage="https://acme.example",
+            candidate_urls=candidates,
+            existing_email_urls=[],
+            target_count=1,
+        )
+    finally:
+        client.close()
+
+    assert urls == candidates
+    assert captured_kwargs[0]["max_retries"] == 1
 
 
 class _FakeEmailLlm:
@@ -233,16 +288,68 @@ def test_extract_ai_emails_or_empty_skips_llm_when_no_pages() -> None:
     assert llm.calls == []  # 没页面就不调 LLM，省一次调用
 
 
+def test_extract_ai_emails_or_empty_skips_llm_without_email_evidence() -> None:
+    llm = _FakeEmailLlm(result=["info@acme.example"])
+
+    out = _extract_ai_emails_or_empty(
+        llm_client=llm,
+        homepage="https://acme.example",
+        email_rule_pages=[("https://acme.example/contact", "<form><label>E-mail</label><input></form>")],
+        deadline_monotonic=None,
+    )
+
+    assert out == []
+    assert llm.calls == []
+
+
+def test_extract_ai_emails_or_empty_runs_with_obfuscated_email_evidence() -> None:
+    llm = _FakeEmailLlm(result=["sales@acme.example"])
+
+    out = _extract_ai_emails_or_empty(
+        llm_client=llm,
+        homepage="https://acme.example",
+        email_rule_pages=[("https://acme.example/contact", "Sales: sales (at) acme (dot) example")],
+        deadline_monotonic=None,
+    )
+
+    assert out == ["sales@acme.example"]
+    assert llm.calls
+
+
 def test_extract_ai_emails_or_empty_swallows_generic_error() -> None:
     llm = _FakeEmailLlm(exc=ValueError("boom"))
     assert _extract_ai_emails_or_empty(
-        llm_client=llm, homepage="x", email_rule_pages=[("u", "h")], deadline_monotonic=None
+        llm_client=llm,
+        homepage="x",
+        email_rule_pages=[("u", "Contact: info@acme.example")],
+        deadline_monotonic=None,
     ) == []
 
 
-def test_extract_ai_emails_or_empty_propagates_llm_temporary_error() -> None:
+def test_extract_ai_emails_or_empty_swallows_llm_temporary_error() -> None:
     llm = _FakeEmailLlm(exc=LlmTemporaryError("429"))
-    with pytest.raises(LlmTemporaryError):
-        _extract_ai_emails_or_empty(
-            llm_client=llm, homepage="x", email_rule_pages=[("u", "h")], deadline_monotonic=None
-        )
+    assert _extract_ai_emails_or_empty(
+        llm_client=llm,
+        homepage="x",
+        email_rule_pages=[("u", "Contact: info@acme.example")],
+        deadline_monotonic=None,
+    ) == []
+
+
+def test_collect_emails_skips_embedded_scan_after_direct_same_domain_hit(monkeypatch) -> None:
+    def fail_embedded_scan(*_args, **_kwargs):
+        raise AssertionError("direct same-domain hit should avoid the second full-page scan")
+
+    monkeypatch.setattr(
+        email_rules_module,
+        "extract_same_domain_emails_from_embedded_content",
+        fail_embedded_scan,
+    )
+
+    emails, page_hits = collect_emails_for_pages(
+        "https://acme.example",
+        [("https://acme.example/contact", "<html>info@acme.example</html>")],
+    )
+
+    assert emails == ["info@acme.example"]
+    assert page_hits == {"https://acme.example/contact": ["info@acme.example"]}

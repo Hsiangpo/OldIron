@@ -33,6 +33,13 @@ class SiteResult:
 
 
 @dataclass
+class CachedSiteOutcome:
+    status: str
+    result: SiteResult
+    last_error: str = ""
+
+
+@dataclass
 class SiteStageMetrics:
     discover_ms: int = 0
     llm_pick_ms: int = 0
@@ -144,11 +151,29 @@ class RuntimeStore:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY(kind, token)
                 );
+
+                CREATE TABLE IF NOT EXISTS site_result_cache (
+                    dedupe_key TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    company_name TEXT NOT NULL DEFAULT '',
+                    representative TEXT NOT NULL DEFAULT '',
+                    emails TEXT NOT NULL DEFAULT '',
+                    website TEXT NOT NULL DEFAULT '',
+                    phones TEXT NOT NULL DEFAULT '',
+                    searched_representative TEXT NOT NULL DEFAULT '',
+                    searched_representative_evidence_url TEXT NOT NULL DEFAULT '',
+                    searched_representative_confidence TEXT NOT NULL DEFAULT '',
+                    evidence_url TEXT NOT NULL DEFAULT '',
+                    evidence_quote TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
             self._ensure_site_text_columns(conn)
             self._ensure_site_search_columns(conn)
             self._ensure_site_metrics_columns(conn)
+            self._backfill_result_cache(conn)
 
     def _ensure_site_text_columns(self, conn: sqlite3.Connection) -> None:
         existing = {
@@ -253,6 +278,7 @@ class RuntimeStore:
                 return False
             if counts["pending"] > 0 or counts["running"] > 0 or counts["failed_temp"] > 0:
                 return False
+            self._backfill_result_cache(conn)
             conn.execute(
                 """
                 UPDATE sites
@@ -286,6 +312,52 @@ class RuntimeStore:
                 """
             )
             return True
+
+    def load_cached_outcome(self, dedupe_key: str) -> CachedSiteOutcome | None:
+        key = str(dedupe_key or "").strip()
+        if not key:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT status,
+                       last_error,
+                       company_name,
+                       representative,
+                       emails,
+                       website,
+                       phones,
+                       searched_representative,
+                       searched_representative_evidence_url,
+                       searched_representative_confidence,
+                       evidence_url,
+                       evidence_quote
+                FROM site_result_cache
+                WHERE dedupe_key = ?
+                """,
+                (key,),
+            ).fetchone()
+        if row is None:
+            return None
+        status = str(row["status"] or "").strip()
+        if status not in {"done", "dropped"}:
+            return None
+        return CachedSiteOutcome(
+            status=status,
+            last_error=str(row["last_error"] or ""),
+            result=SiteResult(
+                company_name=str(row["company_name"] or ""),
+                representative=str(row["representative"] or ""),
+                emails=str(row["emails"] or ""),
+                website=str(row["website"] or ""),
+                phones=str(row["phones"] or ""),
+                searched_representative=str(row["searched_representative"] or ""),
+                searched_representative_evidence_url=str(row["searched_representative_evidence_url"] or ""),
+                searched_representative_confidence=str(row["searched_representative_confidence"] or ""),
+                evidence_url=str(row["evidence_url"] or ""),
+                evidence_quote=str(row["evidence_quote"] or ""),
+            ),
+        )
 
     def claim_next_site(self) -> SiteTask | None:
         with self._write_lock, self._connect() as conn:
@@ -367,6 +439,7 @@ class RuntimeStore:
                     site_id,
                 ),
             )
+            self._cache_terminal_site(conn, site_id)
 
     def update_stage_metrics(self, site_id: int, metrics: SiteStageMetrics) -> None:
         values = tuple(int(getattr(metrics, name) or 0) for name in _METRIC_COLUMNS)
@@ -431,6 +504,7 @@ class RuntimeStore:
                 """,
                 (error_text, site_id),
             )
+            self._cache_terminal_site(conn, site_id)
             return "dropped"
 
     def mark_dropped(self, site_id: int, error_text: str) -> None:
@@ -445,6 +519,7 @@ class RuntimeStore:
                 """,
                 (error_text, site_id),
             )
+            self._cache_terminal_site(conn, site_id)
 
     def progress(self) -> dict[str, int]:
         with self._connect() as conn:
@@ -536,6 +611,108 @@ class RuntimeStore:
                     """,
                     (kind, token),
                 )
+
+    def _cache_terminal_site(self, conn: sqlite3.Connection, site_id: int) -> None:
+        row = conn.execute(
+            """
+            SELECT dedupe_key,
+                   status,
+                   last_error,
+                   company_name,
+                   representative,
+                   emails,
+                   website,
+                   phones,
+                   searched_representative,
+                   searched_representative_evidence_url,
+                   searched_representative_confidence,
+                   evidence_url,
+                   evidence_quote
+            FROM sites
+            WHERE id = ? AND status IN ('done', 'dropped')
+            """,
+            (site_id,),
+        ).fetchone()
+        if row is not None:
+            self._upsert_result_cache_row(conn, row)
+
+    def _backfill_result_cache(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT dedupe_key,
+                   status,
+                   last_error,
+                   company_name,
+                   representative,
+                   emails,
+                   website,
+                   phones,
+                   searched_representative,
+                   searched_representative_evidence_url,
+                   searched_representative_confidence,
+                   evidence_url,
+                   evidence_quote
+            FROM sites
+            WHERE status IN ('done', 'dropped') AND dedupe_key != ''
+            """
+        ).fetchall()
+        for row in rows:
+            self._upsert_result_cache_row(conn, row)
+
+    def _upsert_result_cache_row(self, conn: sqlite3.Connection, row: sqlite3.Row) -> None:
+        dedupe_key = str(row["dedupe_key"] or "").strip()
+        status = str(row["status"] or "").strip()
+        if not dedupe_key or status not in {"done", "dropped"}:
+            return
+        conn.execute(
+            """
+            INSERT INTO site_result_cache(
+                dedupe_key,
+                status,
+                last_error,
+                company_name,
+                representative,
+                emails,
+                website,
+                phones,
+                searched_representative,
+                searched_representative_evidence_url,
+                searched_representative_confidence,
+                evidence_url,
+                evidence_quote
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(dedupe_key) DO UPDATE SET
+                status = excluded.status,
+                last_error = excluded.last_error,
+                company_name = excluded.company_name,
+                representative = excluded.representative,
+                emails = excluded.emails,
+                website = excluded.website,
+                phones = excluded.phones,
+                searched_representative = excluded.searched_representative,
+                searched_representative_evidence_url = excluded.searched_representative_evidence_url,
+                searched_representative_confidence = excluded.searched_representative_confidence,
+                evidence_url = excluded.evidence_url,
+                evidence_quote = excluded.evidence_quote,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                dedupe_key,
+                status,
+                str(row["last_error"] or ""),
+                str(row["company_name"] or ""),
+                str(row["representative"] or ""),
+                str(row["emails"] or ""),
+                str(row["website"] or ""),
+                str(row["phones"] or ""),
+                str(row["searched_representative"] or ""),
+                str(row["searched_representative_evidence_url"] or ""),
+                str(row["searched_representative_confidence"] or ""),
+                str(row["evidence_url"] or ""),
+                str(row["evidence_quote"] or ""),
+            ),
+        )
 
 
 def _connection_is_alive(conn: sqlite3.Connection) -> bool:

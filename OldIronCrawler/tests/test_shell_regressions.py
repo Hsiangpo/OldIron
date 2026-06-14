@@ -93,7 +93,15 @@ def test_shell_asset_fetch_respects_deadline_and_stops_extra_requests(monkeypatc
         def __init__(self, url: str) -> None:
             self.url = url
             self.headers = {"Content-Type": "application/javascript"}
-            self.text = 'console.log("ok")'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def iter_bytes(self):
+            yield b'console.log("ok")'
 
     class FakeClient:
         def __enter__(self):
@@ -102,7 +110,7 @@ def test_shell_asset_fetch_respects_deadline_and_stops_extra_requests(monkeypatc
         def __exit__(self, exc_type, exc, tb) -> None:
             return None
 
-        def get(self, url: str, timeout=None):
+        def stream(self, _method: str, url: str, timeout=None):
             calls.append(url)
             time.sleep(0.03)
             return FakeResponse(url)
@@ -116,8 +124,54 @@ def test_shell_asset_fetch_respects_deadline_and_stops_extra_requests(monkeypatc
         deadline_monotonic=time.monotonic() + 0.01,
     )
 
-    assert list(result.keys()) == ["https://0xam.de/assets/a.js"]
+    assert result == {}
     assert calls == ["https://0xam.de/assets/a.js"]
+
+
+def test_shell_asset_fetch_uses_streaming_instead_of_full_get(monkeypatch) -> None:
+    captured_client_kwargs: dict[str, object] = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Type": "application/javascript"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def iter_bytes(self):
+            yield b'const email = "info@acme.example";'
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def get(self, *_args, **_kwargs):
+            raise AssertionError("shell asset fetch must not read a whole response with get().text")
+
+        def stream(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    def fake_client_factory(**kwargs):
+        captured_client_kwargs.update(kwargs)
+        return FakeClient()
+
+    monkeypatch.setattr(shell_module.httpx, "Client", fake_client_factory)
+
+    result = shell_module.fetch_first_party_asset_texts(
+        ["https://acme.example/assets/app.js"],
+        proxy_url="",
+        timeout_seconds=10.0,
+        deadline_monotonic=time.monotonic() + 10.0,
+    )
+
+    assert result["https://acme.example/assets/app.js"] == 'const email = "info@acme.example";'
+    assert captured_client_kwargs["verify"] is False
 
 
 def test_shell_asset_urls_use_canonical_url_for_relative_assets() -> None:
@@ -167,6 +221,38 @@ def test_shell_replacement_preserves_existing_page_emails(monkeypatch) -> None:
     )
 
     assert emails == ["brand@wppmedia.com"]
+
+
+def test_shell_replacement_stops_after_total_budget(monkeypatch) -> None:
+    shell_html = """
+    <html><head><script src="/assets/app.js"></script></head><body><div id="root"></div></body></html>
+    """
+    page_map = {
+        "https://acme.example/contact": HtmlPage(url="https://acme.example/contact", html=shell_html),
+        "https://acme.example/about": HtmlPage(url="https://acme.example/about", html=shell_html),
+    }
+    calls: list[str] = []
+
+    def slow_enrich(page_url: str, page_html: str, **_kwargs) -> str:
+        calls.append(page_url)
+        time.sleep(0.03)
+        return page_html
+
+    monkeypatch.setattr(shell_module, "_SHELL_REPLACE_BUDGET_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(shell_module, "enrich_shell_page_html", slow_enrich)
+
+    elapsed_start = time.monotonic()
+    shell_module.replace_shell_pages_with_evidence(
+        page_map,
+        ["https://acme.example/contact", "https://acme.example/about"],
+        proxy_url="",
+        timeout_seconds=1.0,
+        deadline_monotonic=None,
+    )
+    elapsed = time.monotonic() - elapsed_start
+
+    assert elapsed < 0.1
+    assert calls == ["https://acme.example/contact"]
 
 
 def test_shell_page_detects_root_container_even_with_cookie_text() -> None:

@@ -101,6 +101,47 @@ def test_xlsx_loader_prefers_llm_selected_company_website_column(tmp_path: Path,
     assert "Company Website" in captured.out
 
 
+def test_xlsx_loader_skips_llm_picker_when_local_website_column_is_clear(tmp_path: Path) -> None:
+    path = tmp_path / "clear.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Company Name", "Email", "Company Website"])
+    ws.append(["Acme Ltd", "info@acme.com", "https://acme.com"])
+    ws.append(["Beta Ltd", "hello@beta.co.uk", "https://beta.co.uk"])
+    wb.save(path)
+    calls = 0
+
+    def fake_picker(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"selected_index": 0, "confidence": "high", "reason": "should not be used"}
+
+    rows = load_websites(path, website_column_picker=fake_picker)
+
+    assert calls == 0
+    assert [row.website for row in rows] == ["https://acme.com", "https://beta.co.uk"]
+
+
+def test_xlsx_loader_skips_llm_picker_for_single_chinese_website_column(tmp_path: Path) -> None:
+    path = tmp_path / "single.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["公司名称", "公司网址"])
+    ws.append(["示例公司", "https://example.com"])
+    wb.save(path)
+    calls = 0
+
+    def fake_picker(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"selected_index": 0, "confidence": "high", "reason": "should not be used"}
+
+    rows = load_websites(path, website_column_picker=fake_picker)
+
+    assert calls == 0
+    assert [row.website for row in rows] == ["https://example.com"]
+
+
 def test_xlsx_loader_rejects_social_column_even_if_picker_selects_it(tmp_path: Path) -> None:
     path = tmp_path / "mixed.xlsx"
     wb = Workbook()
@@ -367,6 +408,43 @@ def test_completed_job_can_be_reset_for_rerun(tmp_path: Path) -> None:
     assert progress["dropped"] == 0
 
 
+def test_reset_completed_job_backfills_terminal_result_cache(tmp_path: Path) -> None:
+    db_path = tmp_path / "runtime.sqlite3"
+    store = RuntimeStore(db_path)
+    rows = [
+        ImportedWebsite(input_index=1, raw_website="a.com", website="https://a.com", dedupe_key="a.com"),
+        ImportedWebsite(input_index=2, raw_website="b.com", website="https://b.com", dedupe_key="b.com"),
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    first = store.claim_next_site()
+    second = store.claim_next_site()
+
+    assert first is not None and second is not None
+    store.mark_done(
+        first.id,
+        SiteResult(
+            company_name="A",
+            representative="Alice Smith",
+            emails="a@a.com",
+            website="https://a.com",
+            phones="+49301234567",
+        ),
+    )
+    store.mark_dropped(second.id, "http_403")
+
+    assert store.reset_completed_job_for_rerun() is True
+    cached_done = store.load_cached_outcome("a.com")
+    cached_drop = store.load_cached_outcome("b.com")
+
+    assert cached_done is not None
+    assert cached_done.status == "done"
+    assert cached_done.result.emails == "a@a.com"
+    assert cached_done.result.phones == "+49301234567"
+    assert cached_drop is not None
+    assert cached_drop.status == "dropped"
+    assert cached_drop.last_error == "http_403"
+
+
 def test_runtime_store_delivery_rows_include_phones(tmp_path: Path) -> None:
     store = RuntimeStore(tmp_path / "runtime.sqlite3")
     rows = [ImportedWebsite(input_index=1, raw_website="a.com", website="https://a.com", dedupe_key="a.com")]
@@ -608,7 +686,10 @@ def test_site_profile_email_only_skips_representative_pages_when_company_name_gi
 
     monkeypatch.setattr("oldironcrawler.extractor.service._fetch_primary_pages", fake_fetch_primary_pages)
     monkeypatch.setattr("oldironcrawler.extractor.service.replace_shell_pages_with_evidence", lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr("oldironcrawler.extractor.service._collect_contact_details", lambda *_args: (["info@acme.com"], {}, [], {}))
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._collect_contact_details",
+        lambda *_args, **_kwargs: (["info@acme.com"], {}, [], {}),
+    )
 
     service = SiteProfileService(
         SimpleNamespace(
@@ -1553,6 +1634,62 @@ def test_fetch_pages_propagates_batch_deadline_into_page_fetch_pool() -> None:
     client.close()
 
 
+def test_fetch_pages_caps_individual_page_timeout_in_page_pool() -> None:
+    class FakePool:
+        def __init__(self) -> None:
+            self.captured_timeouts: list[float | None] = []
+
+        def fetch_pages(self, *, urls: list[str], fetch_one, deadline_monotonic: float) -> list:
+            fetch_one(urls[0])
+            return []
+
+    client = SiteProtocolClient(
+        SiteProtocolConfig(timeout_seconds=30.0, page_batch_timeout_seconds=20.0)
+    )
+    fake_pool = FakePool()
+
+    def fake_fetch_page_optional(
+        _url: str,
+        *,
+        timeout_seconds: float | None = None,
+        request_deadline_monotonic: float | None = None,
+    ):
+        fake_pool.captured_timeouts.append(timeout_seconds)
+        return None
+
+    client._fetch_page_optional = fake_fetch_page_optional
+
+    try:
+        client.fetch_pages(
+            ["https://example.com/about"],
+            max_workers=1,
+            page_pool=fake_pool,
+        )
+    except ProtocolTemporaryError:
+        pass
+
+    assert fake_pool.captured_timeouts
+    assert fake_pool.captured_timeouts[0] <= 8.5
+    client.close()
+
+
+def test_fetch_page_optional_skips_retries_for_budgeted_target_pages(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+    captured_retries: list[int | None] = []
+
+    def fake_fetch_html(*_args, **kwargs):
+        captured_retries.append(kwargs.get("max_retries_override"))
+        return "<html>ok</html>"
+
+    monkeypatch.setattr(client, "_fetch_html", fake_fetch_html)
+
+    page = client._fetch_page_optional("https://example.com/contact")
+
+    assert page is not None
+    assert captured_retries == [0]
+    client.close()
+
+
 def test_protocol_client_default_headers_allow_keepalive() -> None:
     config = SiteProtocolConfig()
 
@@ -1900,6 +2037,83 @@ def test_run_crawl_session_resume_keeps_completed_display_index(tmp_path: Path, 
     runner_module.run_crawl_session(config, ResumeStore(), tmp_path / "resume.csv")
 
     assert displayed_indexes == [75]
+
+
+def test_run_crawl_session_reuses_cached_terminal_outcomes_without_crawling(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    rows = [
+        ImportedWebsite(input_index=1, raw_website="a.com", website="https://a.com", dedupe_key="a.com"),
+        ImportedWebsite(input_index=2, raw_website="b.com", website="https://b.com", dedupe_key="b.com"),
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    first = store.claim_next_site()
+    second = store.claim_next_site()
+    assert first is not None and second is not None
+    store.mark_done(
+        first.id,
+        SiteResult(company_name="Cached A", representative="", emails="a@a.com", website="https://a.com"),
+    )
+    store.mark_dropped(second.id, "http_403")
+    assert store.reset_completed_job_for_rerun() is True
+
+    monkeypatch.setattr(
+        runner_module,
+        "_run_single_site",
+        lambda *_args, **_kwargs: pytest.fail("cached rows should not crawl again"),
+    )
+    monkeypatch.setattr(runner_module, "print_site_result", lambda **_kwargs: None)
+    monkeypatch.setattr(runner_module, "print_progress_heartbeat", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runner_module,
+        "WebsiteLlmClient",
+        lambda **_kwargs: SimpleNamespace(close=lambda: None),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "PageFetchPool",
+        lambda _config: SimpleNamespace(close=lambda: None),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "GlobalLearningStore",
+        lambda _path: SimpleNamespace(
+            close=lambda: None,
+            record_success=lambda *args, **kwargs: None,
+            record_failure=lambda *args, **kwargs: None,
+        ),
+    )
+    snapshots: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(
+        runner_module,
+        "write_delivery_csv",
+        lambda _delivery_path, rows, **_kwargs: snapshots.append(list(rows)),
+    )
+
+    config = SimpleNamespace(
+        llm_key="test-key",
+        llm_base_url="https://example.com/v1",
+        llm_model="gpt-5.4-mini",
+        llm_api_style="responses",
+        llm_reasoning_effort="low",
+        proxy_url="",
+        request_timeout_seconds=10.0,
+        llm_concurrency=1,
+        page_worker_count=1,
+        page_host_limit=1,
+        runtime_dir=tmp_path,
+        site_concurrency=2,
+        total_wait_seconds=180.0,
+    )
+
+    runner_module.run_crawl_session(config, store, tmp_path / "delivery.csv")
+
+    assert store.progress()["done"] == 1
+    assert store.progress()["dropped"] == 1
+    assert snapshots[-1][0]["emails"] == "a@a.com"
+    assert snapshots[-1][1]["website"] == "https://b.com"
 
 
 def test_run_crawl_session_retries_temporary_llm_error_without_restarting_whole_job(tmp_path: Path, monkeypatch) -> None:
@@ -3476,3 +3690,25 @@ def test_request_slot_wait_timeout_can_exceed_http_request_timeout(monkeypatch) 
         assert elapsed >= 0.04
     finally:
         releaser.cancel()
+
+
+def test_probe_executor_workers_do_not_block_process_exit() -> None:
+    protocol_runtime_module.configure_protocol_runtime(probe_workers=1, request_slots=1)
+
+    future = protocol_runtime_module.get_probe_executor().submit(lambda: threading.current_thread().daemon)
+
+    assert future.result(timeout=1) is True
+
+
+def test_page_fetch_pool_workers_do_not_block_process_exit() -> None:
+    pool = PageFetchPool(PageFetchPoolConfig(worker_count=1, per_host_limit=1))
+    try:
+        pages = pool.fetch_pages(
+            urls=["https://example.com/contact"],
+            fetch_one=lambda _url: threading.current_thread().daemon,
+            deadline_monotonic=time.monotonic() + 1,
+        )
+    finally:
+        pool.close()
+
+    assert pages == [True]

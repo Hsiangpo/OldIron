@@ -12,6 +12,14 @@ _EMAIL_RE = re.compile(r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})", re.IGNORECA
 _CFEMAIL_RE = re.compile(r"data-cfemail=[\"']([0-9a-fA-F]+)[\"']", re.IGNORECASE)
 _INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad\u2060]")
 _SCRIPT_BLOCK_RE = re.compile(r"(?is)<(script|style|template)\b[^>]*>.*?</\1>")
+_OBFUSCATED_EMAIL_HINT_RE = re.compile(
+    r"(?is)[a-z0-9._%+\-]{2,}\s*(?:\[at\]|\(at\)|\bat\b|arroba)\s*"
+    r"[a-z0-9.\-\s\[\]\(\)]{2,}(?:\[dot\]|\(dot\)|\bdot\b|\.)\s*[a-z]{2,}"
+)
+_EMAIL_LABEL_DOMAIN_HINT_RE = re.compile(
+    r"(?is)\b(?:e-?mail|mail|e[-\s]?posta|eposta|correo)\b.{0,120}"
+    r"\b[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}\b"
+)
 _MULTI_LABEL_PUBLIC_SUFFIXES = {
     "ac.jp", "co.jp", "go.jp", "ne.jp", "or.jp",
     "ac.uk", "co.uk", "gov.uk", "org.uk",
@@ -198,6 +206,8 @@ def extract_emails_from_html(raw_html: str) -> list[str]:
     html_text = str(raw_html or "")
     if not html_text.strip():
         return []
+    if not has_email_evidence_hint(html_text):
+        return []
     normalized = html.unescape(html_text)
     normalized = _SCRIPT_BLOCK_RE.sub(" ", normalized)
     normalized = normalized.replace("%40", "@").replace("%2E", ".")
@@ -241,6 +251,8 @@ def extract_same_domain_emails_from_embedded_content(website: str, raw_html: str
     html_text = str(raw_html or "")
     if not html_text.strip():
         return []
+    if not has_email_evidence_hint(html_text):
+        return []
     normalized = html.unescape(html_text)
     normalized = normalized.replace("%40", "@").replace("%2E", ".")
     normalized = re.sub(r"(?i)\s*(?:\[at\]|\(at\))\s*|\s+at\s+", "@", normalized)
@@ -261,11 +273,14 @@ def collect_emails_for_pages(website: str, pages: list[tuple[str, str]]) -> tupl
     collected: list[str] = []
     page_hits: dict[str, list[str]] = {}
     for url, html_text in pages:
+        if not has_email_evidence_hint(html_text):
+            continue
         page_emails = extract_emails_from_html(html_text)
-        embedded_same_domain = extract_same_domain_emails_from_embedded_content(website, html_text)
-        for email in embedded_same_domain:
-            if email not in page_emails:
-                page_emails.append(email)
+        if not _has_direct_same_domain_email(website, page_emails):
+            embedded_same_domain = extract_same_domain_emails_from_embedded_content(website, html_text)
+            for email in embedded_same_domain:
+                if email not in page_emails:
+                    page_emails.append(email)
         analysis = analyze_email_set(website, page_emails)
         if analysis.suspicious_directory_like:
             if analysis.same_domain_emails:
@@ -279,6 +294,26 @@ def collect_emails_for_pages(website: str, pages: list[tuple[str, str]]) -> tupl
             if email not in collected:
                 collected.append(email)
     return drop_typo_domains_for_site(website, filter_emails_for_website(website, collected)), page_hits
+def has_email_evidence_hint(raw_html: str) -> bool:
+    text = str(raw_html or "")
+    if not text.strip():
+        return False
+    lowered = text.lower()
+    if any(token in lowered for token in ("@", "%40", "&#64;", "&commat;", "mailto:", "data-cfemail")):
+        return True
+    unescaped = html.unescape(text)
+    return (
+        _OBFUSCATED_EMAIL_HINT_RE.search(unescaped) is not None
+        or _EMAIL_LABEL_DOMAIN_HINT_RE.search(unescaped) is not None
+    )
+
+
+def _has_direct_same_domain_email(website: str, emails: Iterable[str]) -> bool:
+    for raw in emails:
+        email = normalize_email_candidate(raw)
+        if email and email_matches_website(website, email):
+            return True
+    return False
 
 
 def _normalize_text_for_email_evidence(pages: list[tuple[str, str]]) -> str:

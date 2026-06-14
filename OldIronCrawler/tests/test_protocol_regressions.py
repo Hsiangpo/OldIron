@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,8 +14,10 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from oldironcrawler.extractor.protocol_client import ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient, SiteProtocolConfig
+from oldironcrawler.extractor.protocol.fallbacks import build_host_fallback_urls
 from oldironcrawler.extractor.service import _build_site_protocol_config
 from oldironcrawler import challenge_solver as challenge_module
+from oldironcrawler.extractor import protocol_client as protocol_module
 
 
 def test_detect_challenge_kind_supports_sgcaptcha_pages() -> None:
@@ -398,4 +401,140 @@ def test_build_site_protocol_config_caps_page_batch_timeout() -> None:
 
     protocol_config = _build_site_protocol_config(config, None)
 
-    assert protocol_config.page_batch_timeout_seconds == 40.0
+    assert protocol_config.page_batch_timeout_seconds == 20.0
+
+
+def test_fetch_page_optional_disables_slow_fallbacks_for_budgeted_targets(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_fetch_html(*_args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return "<html>ok</html>"
+
+    monkeypatch.setattr(client, "_fetch_html", fake_fetch_html)
+
+    page = client._fetch_page_optional("https://example.com/contact")
+
+    assert page is not None
+    assert captured_kwargs["allow_httpx_fallback"] is False
+    assert captured_kwargs["allow_error_fallbacks"] is False
+    assert captured_kwargs["allow_tls_error_fallback"] is True
+    client.close()
+
+
+def test_fetch_html_allows_fast_tls_fallback_without_slow_target_fallbacks(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+
+    class FakeSession:
+        def get(self, _url, timeout):
+            raise RuntimeError("SSL certificate problem: unable to get local issuer certificate")
+
+    monkeypatch.setattr(
+        client,
+        "_try_insecure_https_fallback",
+        lambda url, lowered_error, **_kwargs: "<html>tls fallback ok</html>",
+    )
+
+    html = client._fetch_html(
+        FakeSession(),
+        "https://example.com/contact",
+        required=False,
+        allow_httpx_fallback=False,
+        allow_error_fallbacks=False,
+        allow_tls_error_fallback=True,
+    )
+
+    assert "tls fallback ok" in html
+    client.close()
+
+
+def test_certificate_subject_error_builds_www_fallback_url() -> None:
+    urls = build_host_fallback_urls(
+        "https://ispak.com/tr-tr",
+        "ssl: no alternative certificate subject name matches target hostname",
+    )
+
+    assert "https://www.ispak.com/tr-tr" in urls
+
+
+def test_fetch_html_tls_fast_path_tries_www_fallback(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+
+    class FakeSession:
+        def get(self, _url, timeout):
+            raise RuntimeError("no alternative certificate subject name matches target hostname")
+
+    monkeypatch.setattr(client, "_try_insecure_https_fallback", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(client, "_try_www_fallback", lambda *_args, **_kwargs: "<html>www fallback ok</html>")
+
+    html = client._fetch_html(
+        FakeSession(),
+        "https://ispak.com/tr-tr",
+        required=False,
+        allow_httpx_fallback=False,
+        allow_error_fallbacks=False,
+        allow_tls_error_fallback=True,
+    )
+
+    assert "www fallback ok" in html
+    client.close()
+
+
+def test_common_probe_scan_stops_after_total_budget(monkeypatch) -> None:
+    client = SiteProtocolClient(
+        SiteProtocolConfig(
+            common_probe_concurrency=1,
+            common_probe_target=10,
+            common_probe_patience_batches=100,
+            common_probe_min_hits_after_patience=100,
+        )
+    )
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        protocol_module,
+        "_build_common_probe_urls",
+        lambda _start_url: [f"https://example.com/path-{index}" for index in range(5)],
+    )
+    monkeypatch.setattr(protocol_module, "_COMMON_PROBE_TOTAL_WAIT_CAP_SECONDS", 0.01, raising=False)
+
+    def slow_batch(batch, *args, **_kwargs):
+        calls.append(list(batch))
+        time.sleep(0.03)
+        return []
+
+    monkeypatch.setattr(client, "_probe_common_value_batch", slow_batch)
+
+    result = client._probe_common_value_urls(object(), "https://example.com", limit=10)
+
+    assert result == []
+    assert calls == [["https://example.com/path-0"]]
+    client.close()
+
+
+def test_common_probe_fetch_does_not_hold_global_request_slot(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Type": "text/html"}
+        text = "<html>ok</html>"
+        content = b"<html>ok</html>"
+
+        def close(self) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, _url, timeout):
+            return FakeResponse()
+
+    monkeypatch.setattr(client, "_get_or_create_session", lambda: FakeSession())
+
+    def fail_request_slot(*_args, **_kwargs):
+        raise AssertionError("common probe should not consume the global page-fetch slot")
+
+    monkeypatch.setattr(protocol_module, "request_slot", fail_request_slot)
+
+    assert client._probe_common_value_url("https://example.com/contact") == "https://example.com/contact"
+    client.close()

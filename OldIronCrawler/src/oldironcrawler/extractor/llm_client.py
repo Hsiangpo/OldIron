@@ -132,6 +132,7 @@ class WebsiteLlmClient:
             api_key=api_key,
             base_url=base_url or None,
             timeout=timeout_seconds,
+            max_retries=0,
             http_client=self._http_client,
         )
         self._api_key = api_key
@@ -255,7 +256,7 @@ class WebsiteLlmClient:
             f"已有邮箱页(JSON): {json.dumps(existing_email_urls, ensure_ascii=False)}\n"
             f"候选链接(JSON): {json.dumps(candidate_urls, ensure_ascii=False)}"
         )
-        data = self._call_json(prompt, deadline_monotonic=deadline_monotonic)
+        data = self._call_json(prompt, deadline_monotonic=deadline_monotonic, max_retries=1)
         selected = data.get("selected_urls")
         if not isinstance(selected, list):
             return []
@@ -339,7 +340,7 @@ class WebsiteLlmClient:
             f"首页: {homepage}\n"
             f"页面(JSON): {json.dumps(safe_pages, ensure_ascii=False)}"
         )
-        data = self._call_json(prompt, deadline_monotonic=deadline_monotonic)
+        data = self._call_json(prompt, deadline_monotonic=deadline_monotonic, max_retries=1)
         raw = data.get("emails")
         if not isinstance(raw, list):
             return []
@@ -432,7 +433,13 @@ class WebsiteLlmClient:
             result.append({"url": url, "content": content})
         return result
 
-    def _call_json(self, prompt: str, *, deadline_monotonic: float | None = None) -> dict[str, Any]:
+    def _call_json(
+        self,
+        prompt: str,
+        *,
+        deadline_monotonic: float | None = None,
+        max_retries: int = 2,
+    ) -> dict[str, Any]:
         text = prompt[: self._MAX_PROMPT_CHARS]
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -448,7 +455,11 @@ class WebsiteLlmClient:
         if not acquired:
             raise TimeoutError("llm_queue_timeout")
         try:
-            output = self._call_with_retry(kwargs, deadline_monotonic=deadline_monotonic)
+            output = self._call_with_retry(
+                kwargs,
+                deadline_monotonic=deadline_monotonic,
+                max_retries=max_retries,
+            )
         finally:
             semaphore.release()
         return _parse_json_text(output)

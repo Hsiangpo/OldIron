@@ -89,7 +89,7 @@ def test_common_probe_scan_stops_after_low_yield_batches(monkeypatch) -> None:
         lambda _start_url: [f"https://example.com/path-{index}" for index in range(20)],
     )
 
-    def fake_probe_common_value_batch(batch: list[str]) -> list[str]:
+    def fake_probe_common_value_batch(batch: list[str], **_kwargs) -> list[str]:
         calls.append(batch)
         return []
 

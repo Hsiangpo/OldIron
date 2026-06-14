@@ -25,6 +25,20 @@ _POSITIVE_HEADER_HINTS = {
     "web": 10,
     "url": 8,
     "site": 6,
+    "公司网址": 65,
+    "公司网站": 65,
+    "官网": 60,
+    "官方网站": 65,
+    "网址": 50,
+    "网站": 45,
+    "網站": 45,
+    "ホームページ": 55,
+    "公式サイト": 60,
+    "会社サイト": 55,
+    "site da empresa": 60,
+    "website da empresa": 60,
+    "web sitesi": 55,
+    "internet sitesi": 55,
 }
 _NEGATIVE_HEADER_HINTS = {
     "linkedin": -120,
@@ -57,6 +71,9 @@ _SOCIAL_HOST_HINTS = (
     "weibo.com",
 )
 _WEBSITE_COLUMN_BONUS = {"high": 90.0, "medium": 60.0, "low": 30.0}
+_LOCAL_CLEAR_MIN_SCORE = 70.0
+_LOCAL_CLEAR_MIN_GAP = 35.0
+_LOCAL_CLEAR_MIN_WEBSITE_RATIO = 0.5
 _COMPANY_HEADER_HINTS = {
     "company",
     "company name",
@@ -453,6 +470,15 @@ def _pick_website_column(
     summaries, has_header = _summarize_columns(rows)
     if not summaries:
         return None
+    local_summary = _select_clear_local_website_summary(summaries)
+    if local_summary is not None:
+        return WebsiteColumnSelection(
+            column_index=local_summary.index,
+            header=local_summary.header,
+            confidence="local",
+            reason=_build_selection_reason(local_summary, llm_result={}),
+            skip_header=has_header,
+        )
     llm_result = _call_website_column_picker(
         source_name=source_name,
         summaries=summaries,
@@ -472,6 +498,26 @@ def _pick_website_column(
         reason=reason,
         skip_header=has_header,
     )
+
+
+def _select_clear_local_website_summary(summaries: list[WebsiteColumnSummary]) -> WebsiteColumnSummary | None:
+    ranked = sorted(summaries, key=lambda item: item.local_score, reverse=True)
+    if not ranked:
+        return None
+    best_summary = ranked[0]
+    second_score = ranked[1].local_score if len(ranked) > 1 else float("-inf")
+    if best_summary.website_count <= 0:
+        return None
+    if best_summary.non_empty_count <= 0:
+        return None
+    website_ratio = best_summary.website_count / max(best_summary.non_empty_count, 1)
+    if website_ratio < _LOCAL_CLEAR_MIN_WEBSITE_RATIO:
+        return None
+    if best_summary.local_score < _LOCAL_CLEAR_MIN_SCORE:
+        return None
+    if best_summary.local_score - second_score < _LOCAL_CLEAR_MIN_GAP:
+        return None
+    return best_summary
 
 
 def _summarize_columns(rows: list[list[object]]) -> tuple[list[WebsiteColumnSummary], bool]:

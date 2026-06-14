@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import html
 import hashlib
+import queue
 import re
+import threading
 import time
 import unicodedata
 from urllib.parse import urljoin, urlparse
@@ -83,6 +85,10 @@ _SHELL_EMAIL_DROP_HINTS = {
     "regierung",
     "terms",
 }
+_SHELL_ASSET_FETCH_BUDGET_SECONDS = 5.0
+_SHELL_ASSET_REQUEST_TIMEOUT_SECONDS = 2.0
+_SHELL_ASSET_MAX_BYTES = 512_000
+_SHELL_REPLACE_BUDGET_SECONDS = 3.0
 
 
 def looks_like_shell_page(page_html: str) -> bool:
@@ -159,36 +165,110 @@ def fetch_first_party_asset_texts(
 ) -> dict[str, str]:
     if not asset_urls:
         return {}
+    effective_deadline = _resolve_shell_asset_deadline(deadline_monotonic)
     client_kwargs: dict[str, object] = {
         "follow_redirects": True,
-        "timeout": max(float(timeout_seconds or 0), 1.0),
+        "timeout": _build_shell_asset_timeout(timeout_seconds),
         "trust_env": False,
+        "verify": False,
         "headers": {"User-Agent": "Mozilla/5.0", "Accept": "*/*"},
     }
     if proxy_url:
         client_kwargs["proxy"] = proxy_url
     result: dict[str, str] = {}
-    with httpx.Client(**client_kwargs) as client:
-        for asset_url in asset_urls:
-            request_timeout = _resolve_deadline_timeout(
-                timeout_seconds=timeout_seconds,
-                deadline_monotonic=deadline_monotonic,
-            )
-            if request_timeout is None:
-                break
-            try:
-                response = client.get(asset_url, timeout=request_timeout)
-                if response.status_code != 200:
-                    continue
-                if not _looks_like_text_asset(asset_url, str(response.headers.get("Content-Type", "") or "")):
-                    continue
-                text = str(response.text or "").strip()
-                if not text:
-                    continue
-                result[asset_url] = text[:2_500_000]
-            except Exception:  # noqa: BLE001
-                continue
+    for asset_url in asset_urls:
+        request_timeout = _resolve_deadline_timeout(
+            timeout_seconds=min(max(float(timeout_seconds or 0), 1.0), _SHELL_ASSET_REQUEST_TIMEOUT_SECONDS),
+            deadline_monotonic=effective_deadline,
+        )
+        if request_timeout is None:
+            break
+        text, timed_out = _fetch_text_asset_with_timeout(
+            client_kwargs,
+            asset_url,
+            timeout_seconds=request_timeout,
+            max_bytes=_SHELL_ASSET_MAX_BYTES,
+            deadline_monotonic=effective_deadline,
+        )
+        if text:
+            result[asset_url] = text
+        if timed_out:
+            break
     return result
+
+
+def _build_shell_asset_timeout(timeout_seconds: float) -> httpx.Timeout:
+    base_timeout = min(max(float(timeout_seconds or 0), 1.0), _SHELL_ASSET_REQUEST_TIMEOUT_SECONDS)
+    return httpx.Timeout(connect=base_timeout, read=base_timeout, write=base_timeout, pool=1.0)
+
+
+def _resolve_shell_asset_deadline(deadline_monotonic: float | None) -> float:
+    budget_deadline = time.monotonic() + _SHELL_ASSET_FETCH_BUDGET_SECONDS
+    if deadline_monotonic is None:
+        return budget_deadline
+    return min(deadline_monotonic, budget_deadline)
+
+
+def _fetch_text_asset_stream(client: httpx.Client, asset_url: str, *, timeout_seconds: float, max_bytes: int) -> str:
+    chunks: list[bytes] = []
+    read_size = 0
+    with client.stream("GET", asset_url, timeout=timeout_seconds) as response:
+        if response.status_code != 200:
+            return ""
+        if not _looks_like_text_asset(asset_url, str(response.headers.get("Content-Type", "") or "")):
+            return ""
+        for chunk in response.iter_bytes():
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8", errors="ignore")
+            if not chunk:
+                continue
+            chunks.append(bytes(chunk))
+            read_size += len(chunk)
+            if read_size >= max_bytes:
+                break
+    if not chunks:
+        return ""
+    return b"".join(chunks)[:max_bytes].decode("utf-8", errors="replace").strip()
+
+
+def _fetch_text_asset_with_timeout(
+    client_kwargs: dict[str, object],
+    asset_url: str,
+    *,
+    timeout_seconds: float,
+    max_bytes: int,
+    deadline_monotonic: float,
+) -> tuple[str, bool]:
+    remaining = _resolve_deadline_timeout(timeout_seconds=timeout_seconds, deadline_monotonic=deadline_monotonic)
+    if remaining is None:
+        return "", True
+    result_queue: queue.Queue[str] = queue.Queue(maxsize=1)
+
+    def worker() -> None:
+        try:
+            with httpx.Client(**client_kwargs) as client:
+                text = _fetch_text_asset_stream(
+                    client,
+                    asset_url,
+                    timeout_seconds=timeout_seconds,
+                    max_bytes=max_bytes,
+                )
+        except Exception:  # noqa: BLE001
+            text = ""
+        try:
+            result_queue.put_nowait(text)
+        except queue.Full:
+            return
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout=max(remaining, 0.01))
+    if thread.is_alive():
+        return "", True
+    try:
+        return result_queue.get_nowait(), False
+    except queue.Empty:
+        return "", False
 
 
 def build_shell_evidence_html(page_url: str, page_html: str, asset_texts: dict[str, str]) -> str:
@@ -241,7 +321,10 @@ def replace_shell_pages_with_evidence(
     deadline_monotonic: float | None,
 ) -> int:
     started = time.monotonic()
+    shell_deadline = _resolve_shell_replace_deadline(deadline_monotonic)
     for url in target_urls:
+        if time.monotonic() >= shell_deadline:
+            break
         page = page_map.get(url)
         if page is None or not looks_like_shell_page(getattr(page, "html", "")):
             continue
@@ -250,11 +333,18 @@ def replace_shell_pages_with_evidence(
             page.html,
             proxy_url=proxy_url,
             timeout_seconds=timeout_seconds,
-            deadline_monotonic=deadline_monotonic,
+            deadline_monotonic=shell_deadline,
         )
         if enriched_html.strip() and enriched_html != page.html:
             page_map[url] = type(page)(url=page.url, html=_merge_shell_evidence(page.html, enriched_html))
     return int(round((time.monotonic() - started) * 1000))
+
+
+def _resolve_shell_replace_deadline(deadline_monotonic: float | None) -> float:
+    budget_deadline = time.monotonic() + _SHELL_REPLACE_BUDGET_SECONDS
+    if deadline_monotonic is None:
+        return budget_deadline
+    return min(deadline_monotonic, budget_deadline)
 
 
 def _merge_shell_evidence(original_html: str, enriched_html: str) -> str:
