@@ -783,7 +783,7 @@ class SiteProtocolClient:
             guessed_urls = self._probe_common_value_urls(session, start_url, limit=limit)
             if guessed_urls:
                 return guessed_urls, ""
-            speculative_limit = min(limit, max(int(self._config.common_probe_target or 1) + 2, 4))
+            speculative_limit = min(limit, max(int(self._config.common_probe_target or 1), 4))
             speculative_urls = _pick_speculative_common_value_urls(start_url, limit=speculative_limit)
             if speculative_urls:
                 return speculative_urls, ""

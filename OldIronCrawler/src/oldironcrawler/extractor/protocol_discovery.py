@@ -202,10 +202,10 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/recruit/form", 20),
 )
 _BRAZIL_SPECULATIVE_PATH_WEIGHTS = (
-    ("fale-conosco", 172),
+    ("contato", 190),
+    ("fale-conosco", 185),
     ("home/faleconosco", 154),
     ("home/contato", 154),
-    ("contato", 166),
     ("faleconosco", 156),
     ("atendimento", 132),
     ("ouvidoria", 128),
@@ -574,7 +574,54 @@ def pick_speculative_common_value_urls(start_url: str, *, limit: int) -> list[st
             continue
         scored.append((-score, index, url))
     scored.sort()
-    return [url for _, _, url in scored[:limit]]
+    return _diversify_speculative_common_urls(scored, limit=limit)
+
+
+def _diversify_speculative_common_urls(scored: list[tuple[int, int, str]], *, limit: int) -> list[str]:
+    picked: list[str] = []
+    seen_urls: set[str] = set()
+    seen_families: set[str] = set()
+    for _, _, url in scored:
+        family = _speculative_common_path_family(url)
+        if family in seen_families:
+            continue
+        seen_families.add(family)
+        seen_urls.add(url)
+        picked.append(url)
+        if len(picked) >= limit:
+            return picked
+    for _, _, url in scored:
+        if url in seen_urls:
+            continue
+        picked.append(url)
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def _speculative_common_path_family(url: str) -> str:
+    path = (urlparse(url).path or "").strip("/").lower()
+    if not path:
+        return ""
+    parts = [part for part in path.split("/") if part]
+    if parts and re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", parts[0]):
+        locale = parts.pop(0)
+    else:
+        locale = "root"
+    normalized = "/".join(parts)
+    for family, tokens in (
+        ("fale-conosco", ("fale-conosco", "faleconosco")),
+        ("contato", ("contato",)),
+        ("iletisim", ("iletisim",)),
+        ("bize-ulasin", ("bize-ulasin",)),
+        ("inquiry", ("inquiry",)),
+        ("mailform", ("mailform",)),
+        ("contact", ("contact",)),
+        ("privacy", ("privacidade", "politica-de-privacidade", "politica-privacidade", "privacy")),
+    ):
+        if any(token in normalized for token in tokens):
+            return f"{locale}:{family}"
+    return f"{locale}:{normalized}"
 
 
 def _score_speculative_common_value_url(start_url: str, url: str) -> int:
@@ -607,6 +654,8 @@ def _score_country_path(path: str, weights: tuple[tuple[str, int], ...]) -> int:
 
 def _score_locale_prefix(path: str, host: str) -> int:
     prefix = path.split("/", 1)[0]
+    if (host.endswith(".br") or ".com.br" in host) and prefix not in {"pt", "br", "en"}:
+        return 12
     if prefix == "pt" and (host.endswith(".br") or ".com.br" in host):
         return 8
     if prefix == "tr" and (host.endswith(".tr") or ".com.tr" in host):

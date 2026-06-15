@@ -89,6 +89,7 @@ _SHELL_ASSET_FETCH_BUDGET_SECONDS = 5.0
 _SHELL_ASSET_REQUEST_TIMEOUT_SECONDS = 2.0
 _SHELL_ASSET_MAX_BYTES = 512_000
 _SHELL_REPLACE_BUDGET_SECONDS = 3.0
+_SHELL_REPLACE_MIN_REMAINING_SECONDS = 0.005
 _SHELL_PAGE_PARSE_MAX_CHARS = 250_000
 _SCRIPT_SRC_RE = re.compile(r"<script\b[^>]{0,800}\bsrc\s*=", re.IGNORECASE)
 _ROOT_MARKER_RE = re.compile(
@@ -331,12 +332,12 @@ def replace_shell_pages_with_evidence(
     started = time.monotonic()
     shell_deadline = _resolve_shell_replace_deadline(deadline_monotonic)
     for url in target_urls:
-        if time.monotonic() >= shell_deadline:
+        if shell_deadline - time.monotonic() <= _SHELL_REPLACE_MIN_REMAINING_SECONDS:
             break
         page = page_map.get(url)
         if page is None or not looks_like_shell_page(getattr(page, "html", "")):
             continue
-        enriched_html = enrich_shell_page_html(
+        enriched_html = _enrich_shell_page_html_with_deadline(
             page.url,
             page.html,
             proxy_url=proxy_url,
@@ -346,6 +347,47 @@ def replace_shell_pages_with_evidence(
         if enriched_html.strip() and enriched_html != page.html:
             page_map[url] = type(page)(url=page.url, html=_merge_shell_evidence(page.html, enriched_html))
     return int(round((time.monotonic() - started) * 1000))
+
+
+def _enrich_shell_page_html_with_deadline(
+    page_url: str,
+    page_html: str,
+    *,
+    proxy_url: str,
+    timeout_seconds: float,
+    deadline_monotonic: float,
+) -> str:
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        return str(page_html or "")
+    result_queue: queue.Queue[str] = queue.Queue(maxsize=1)
+
+    def worker() -> None:
+        try:
+            enriched_html = enrich_shell_page_html(
+                page_url,
+                page_html,
+                proxy_url=proxy_url,
+                timeout_seconds=timeout_seconds,
+                deadline_monotonic=deadline_monotonic,
+            )
+        except Exception:  # noqa: BLE001
+            enriched_html = str(page_html or "")
+        try:
+            result_queue.put_nowait(str(enriched_html or ""))
+        except queue.Full:
+            return
+
+    # 外层预算必须兜住底层网络库或解析器偶发卡住的情况。
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout=max(remaining, _SHELL_REPLACE_MIN_REMAINING_SECONDS))
+    if thread.is_alive():
+        return str(page_html or "")
+    try:
+        return result_queue.get_nowait()
+    except queue.Empty:
+        return str(page_html or "")
 
 
 def _resolve_shell_replace_deadline(deadline_monotonic: float | None) -> float:

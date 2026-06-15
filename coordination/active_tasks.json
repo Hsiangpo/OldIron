@@ -1,27 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-06-15T07:36:21Z",
-  "tasks": [
-    {
-      "task_id": "oldironcrawler-3x-speed-hit-20260615",
-      "status": "in_progress",
-      "machine": "local-windows",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [
-        "OldIronCrawler/src/oldironcrawler/extractor",
-        "OldIronCrawler/tests"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-15T02:24:02Z",
-      "last_heartbeat_at": "2026-06-15T07:36:21Z",
-      "notes": "Continue systemic OldIronCrawler optimization: preserve/improve hit rate and prove >=3x Brazil speedup"
-    }
-  ]
+  "updated_at": "2026-06-15T10:50:02Z",
+  "tasks": []
 }

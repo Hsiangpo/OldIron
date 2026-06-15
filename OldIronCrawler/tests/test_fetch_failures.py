@@ -89,6 +89,41 @@ def test_page_fetch_pool_raises_timeout_when_deadline_expires_without_pages() ->
         pool.close()
 
 
+def test_page_fetch_pool_releases_worker_after_batch_timeout() -> None:
+    pool = PageFetchPool(PageFetchPoolConfig(worker_count=1, per_host_limit=1))
+
+    def fetch_one(url: str):
+        if "slow" in url:
+            time.sleep(0.2)
+        return url
+
+    try:
+        try:
+            pool.fetch_pages(
+                urls=["https://slow.example.com/contact"],
+                fetch_one=fetch_one,
+                deadline_monotonic=time.monotonic() + 1.0,
+                batch_timeout_seconds=0.03,
+            )
+            raise AssertionError("expected TimeoutError")
+        except TimeoutError:
+            pass
+
+        started = time.monotonic()
+        result = pool.fetch_pages(
+            urls=["https://fast.example.com/contact"],
+            fetch_one=fetch_one,
+            deadline_monotonic=time.monotonic() + 1.0,
+            batch_timeout_seconds=0.08,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        pool.close()
+
+    assert result == ["https://fast.example.com/contact"]
+    assert elapsed < 0.08
+
+
 def test_page_fetch_pool_keeps_later_batch_progress_under_slot_contention() -> None:
     pool = PageFetchPool(PageFetchPoolConfig(worker_count=4, per_host_limit=4))
     outcomes: list[tuple[str, object]] = []

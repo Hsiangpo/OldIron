@@ -11,6 +11,7 @@ from oldironcrawler.extractor.protocol_runtime import DaemonProbeExecutor
 
 _DISPATCH_QUANTUM_SECONDS = 0.01
 _MAX_INFLIGHT_PER_BATCH = 8
+_ABANDONED_TASK_WORKER_RESERVE = 4
 
 
 @dataclass
@@ -29,6 +30,8 @@ class _FetchBatch:
     pending_urls: deque[str] = field(default_factory=deque)
     pages_by_url: dict[str, object] = field(default_factory=dict)
     inflight_count: int = 0
+    inflight_host_semaphores: dict[str, threading.BoundedSemaphore] = field(default_factory=dict)
+    abandoned_urls: set[str] = field(default_factory=set)
     active_deadline_monotonic: float = 0.0
     last_error: Exception | None = None
     closed: bool = False
@@ -37,12 +40,15 @@ class _FetchBatch:
 class PageFetchPool:
     def __init__(self, config: PageFetchPoolConfig) -> None:
         self._config = config
-        self._executor = DaemonProbeExecutor(max_workers=max(config.worker_count, 1))
+        logical_workers = max(config.worker_count, 1)
+        # 超时批次里的旧请求可能还在系统调用中，底层线程池需要少量预留线程承接后续批次。
+        executor_workers = max(logical_workers + _ABANDONED_TASK_WORKER_RESERVE, logical_workers * 2)
+        self._executor = DaemonProbeExecutor(max_workers=executor_workers)
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._host_limits: dict[str, threading.BoundedSemaphore] = {}
         self._active_batches: list[_FetchBatch] = []
-        self._available_slots = max(config.worker_count, 1)
+        self._available_slots = logical_workers
         self._dispatch_cursor = 0
 
     def fetch_pages(
@@ -118,6 +124,7 @@ class PageFetchPool:
                     self._available_slots += 1
                     batch.pending_urls.appendleft(url)
                     break
+                batch.inflight_host_semaphores[url] = host_semaphore
                 future.add_done_callback(
                     lambda completed, batch=batch, url=url, host_semaphore=host_semaphore: self._handle_future_completion(
                         batch,
@@ -184,9 +191,14 @@ class PageFetchPool:
         future: Future,
     ) -> None:
         with self._condition:
-            host_semaphore.release()
-            batch.inflight_count = max(batch.inflight_count - 1, 0)
-            self._available_slots += 1
+            abandoned = url in batch.abandoned_urls
+            batch.inflight_host_semaphores.pop(url, None)
+            if abandoned:
+                batch.abandoned_urls.discard(url)
+            else:
+                host_semaphore.release()
+                batch.inflight_count = max(batch.inflight_count - 1, 0)
+                self._available_slots = min(self._available_slots + 1, max(self._config.worker_count, 1))
             try:
                 page = future.result()
             except Exception as exc:  # noqa: BLE001
@@ -203,6 +215,7 @@ class PageFetchPool:
             index = self._active_batches.index(batch)
         except ValueError:
             return
+        self._release_abandoned_inflight_locked(batch)
         self._active_batches.pop(index)
         if not self._active_batches:
             self._dispatch_cursor = 0
@@ -213,6 +226,24 @@ class PageFetchPool:
 
     def _is_batch_complete_locked(self, batch: _FetchBatch) -> bool:
         return not batch.pending_urls and batch.inflight_count <= 0
+
+    def _release_abandoned_inflight_locked(self, batch: _FetchBatch) -> None:
+        if batch.inflight_count <= 0:
+            return
+        abandoned_count = batch.inflight_count
+        for url, host_semaphore in list(batch.inflight_host_semaphores.items()):
+            if url in batch.abandoned_urls:
+                continue
+            batch.abandoned_urls.add(url)
+            try:
+                host_semaphore.release()
+            except ValueError:
+                pass
+        batch.inflight_count = 0
+        self._available_slots = min(
+            self._available_slots + abandoned_count,
+            max(self._config.worker_count, 1),
+        )
 
     def _inflight_limit(self, urls: list[str]) -> int:
         if not urls:

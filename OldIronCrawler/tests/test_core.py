@@ -3397,6 +3397,13 @@ def test_common_probe_urls_prioritize_country_local_value_paths() -> None:
     assert any("/inquiry" in url for url in japan_urls[:8])
 
 
+def test_brazil_common_probe_prioritizes_root_contato_in_first_batch() -> None:
+    brazil_urls = protocol_module._build_common_probe_urls("https://example.com.br")
+
+    assert "https://example.com.br/contato" in brazil_urls[:4]
+    assert "https://example.com.br/Contato" in brazil_urls[:4]
+
+
 def test_company_name_fallback_prefers_site_name_and_strips_welcome_prefix() -> None:
     html_text = """
     <html>

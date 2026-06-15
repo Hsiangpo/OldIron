@@ -255,6 +255,34 @@ def test_shell_replacement_stops_after_total_budget(monkeypatch) -> None:
     assert calls == ["https://acme.example/contact"]
 
 
+def test_shell_replacement_does_not_wait_for_stuck_enrichment(monkeypatch) -> None:
+    shell_html = """
+    <html><head><script src="/assets/app.js"></script></head><body><div id="root"></div></body></html>
+    """
+    page_map = {
+        "https://acme.example/contact": HtmlPage(url="https://acme.example/contact", html=shell_html),
+    }
+
+    def stuck_enrich(page_url: str, page_html: str, **_kwargs) -> str:
+        time.sleep(0.2)
+        return page_html.replace("</body>", "<p>late@acme.example</p></body>")
+
+    monkeypatch.setattr(shell_module, "_SHELL_REPLACE_BUDGET_SECONDS", 0.02, raising=False)
+    monkeypatch.setattr(shell_module, "enrich_shell_page_html", stuck_enrich)
+
+    started = time.monotonic()
+    shell_module.replace_shell_pages_with_evidence(
+        page_map,
+        ["https://acme.example/contact"],
+        proxy_url="",
+        timeout_seconds=1.0,
+        deadline_monotonic=None,
+    )
+
+    assert time.monotonic() - started < 0.1
+    assert "late@acme.example" not in page_map["https://acme.example/contact"].html
+
+
 def test_shell_page_detects_root_container_even_with_cookie_text() -> None:
     html_text = """
     <html>

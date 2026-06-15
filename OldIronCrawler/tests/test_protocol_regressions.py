@@ -480,7 +480,7 @@ def test_resolve_cloudflare_challenge_skips_non_cloudflare_pages(monkeypatch) ->
     assert result == html_text
 
 
-def test_build_site_protocol_config_caps_page_batch_timeout_for_fast_email_runs() -> None:
+def test_build_site_protocol_config_keeps_brazil_value_page_batch_window() -> None:
     config = SimpleNamespace(
         request_timeout_seconds=10.0,
         total_wait_seconds=180.0,
@@ -496,7 +496,7 @@ def test_build_site_protocol_config_caps_page_batch_timeout_for_fast_email_runs(
 
     protocol_config = _build_site_protocol_config(config, None)
 
-    assert protocol_config.page_batch_timeout_seconds == 8.0
+    assert protocol_config.page_batch_timeout_seconds == 20.0
 
 
 def test_fetch_page_optional_allows_fast_httpx_fallback_but_disables_slow_fallbacks(monkeypatch) -> None:
@@ -660,7 +660,7 @@ def test_page_fetch_pool_batch_timeout_includes_queue_wait() -> None:
 
 
 def test_discovery_homepage_timeout_cap_stays_short() -> None:
-    assert 5.0 <= protocol_module._DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS <= 6.0
+    assert 3.5 <= protocol_module._DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS <= 4.0
 
 
 def test_discovery_homepage_uses_httpx_fast_path(monkeypatch) -> None:
@@ -742,7 +742,7 @@ def test_discovery_limits_speculative_common_paths_after_homepage_timeout(monkey
     finally:
         client.close()
 
-    assert 4 <= len(result.urls) <= 6
+    assert len(result.urls) == 4
 
 
 def test_fetch_html_allows_fast_tls_fallback_without_slow_target_fallbacks(monkeypatch) -> None:

@@ -1304,6 +1304,30 @@ def test_site_profile_service_fetches_remaining_primary_email_pages_after_fast_t
     store.close()
 
 
+def test_initial_primary_recovery_skips_second_batch_after_slow_empty_timeout() -> None:
+    website = "https://acmeholdings.co.uk"
+    contact_url = f"{website}/contact"
+    support_url = f"{website}/support"
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": [website],
+        "email_primary_urls": [contact_url, support_url],
+        "email_overflow_urls": [],
+        "all_primary_urls": [website, contact_url, support_url],
+    }
+
+    should_recover = service_module._should_recover_initial_primary_fetch(
+        TimeoutError("page_batch_timeout"),
+        fetch_plan,
+        {},
+        [website, contact_url],
+        cascade_email_primary=True,
+        elapsed_ms=9000,
+    )
+
+    assert should_recover is False
+
+
 def test_site_profile_service_keeps_reused_homepage_when_initial_email_fetch_times_out(
     tmp_path: Path,
     monkeypatch,
@@ -1358,6 +1382,67 @@ def test_site_profile_service_keeps_reused_homepage_when_initial_email_fetch_tim
     result = service.process(task.id, task.website)
 
     assert fetch_calls == [[contact_url]]
+    assert result.result.emails == "info@acmeholdings.co.uk"
+    assert result.stage_metrics.fetched_page_count == 1
+    learning_store.close()
+    store.close()
+
+
+def test_site_profile_service_keeps_reused_homepage_when_recovery_fetch_also_times_out(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://acmeholdings.co.uk"
+    contact_url = f"{website}/contact"
+    support_url = f"{website}/support"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            raise TimeoutError("page_batch_timeout")
+
+        def close(self) -> None:
+            return None
+
+    class FakeLlmClient:
+        def pick_email_urls(self, **_kwargs):
+            return []
+
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(
+        service_module,
+        "_discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=[website, contact_url, support_url],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=[website, contact_url, support_url],
+            homepage_html="<html><p>Contact us at info@acmeholdings.co.uk</p></html>",
+        ),
+    )
+
+    config = _build_service_config()
+    config.extract_representative_enabled = False
+    config.collect_company_name_enabled = False
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    config.email_page_soft_limit = 3
+    config.email_page_hard_limit = 3
+    config.page_total_hard_limit = 4
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+
+    result = service.process(task.id, task.website)
+
+    assert fetch_calls == [[contact_url], [support_url]]
     assert result.result.emails == "info@acmeholdings.co.uk"
     assert result.stage_metrics.fetched_page_count == 1
     learning_store.close()

@@ -65,12 +65,14 @@ _DEFAULT_AI_EMAIL_CONCURRENCY = 32
 _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS = 8.0
 _AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS = 0.1
 _AI_EMAIL_LOW_SIGNAL_TIMEOUT_SECONDS = 0.5
+_SLOW_EMPTY_INITIAL_FETCH_RECOVERY_CUTOFF_MS = 8000
 _AI_EMAIL_SEMAPHORE_LOCK = threading.Lock()
 _AI_EMAIL_SEMAPHORE: threading.Semaphore | None = None
 _AI_EMAIL_SEMAPHORE_LIMIT = 0
 _AI_EMAIL_EXECUTOR_LOCK = threading.Lock()
 _AI_EMAIL_EXECUTOR: DaemonProbeExecutor | None = None
 _AI_EMAIL_EXECUTOR_LIMIT = 0
+
 @dataclass
 class SiteProcessingResult:
     result: SiteResult
@@ -84,7 +86,6 @@ class AiEmailFuture:
     started_monotonic: float
     deadline_monotonic: float
     max_wait_seconds: float
-
 
 class SiteProfileService:
     def __init__(
@@ -576,7 +577,6 @@ def _merge_page_targets(rep_urls: list[str], email_urls: list[str]) -> list[str]
             result.append(url)
     return result
 
-
 def _fetch_initial_primary_pages_with_recovery(
     protocol: SiteProtocolClient,
     fetch_plan: dict[str, list[str]],
@@ -605,6 +605,7 @@ def _fetch_initial_primary_pages_with_recovery(
             page_map,
             primary_urls,
             cascade_email_primary=cascade_email_primary,
+            elapsed_ms=elapsed_ms,
         ):
             raise
         failed_urls = set(primary_urls)
@@ -612,14 +613,19 @@ def _fetch_initial_primary_pages_with_recovery(
             url for url in _select_unfetched_primary_urls(fetch_plan, page_map)
             if url not in failed_urls
         ]
-        fallback_pages, fallback_ms = _fetch_primary_pages(
-            protocol,
-            fallback_urls,
-            page_concurrency=page_concurrency,
-            page_pool=page_pool,
-        )
+        try:
+            fallback_pages, fallback_ms = _fetch_primary_pages(
+                protocol,
+                fallback_urls,
+                page_concurrency=page_concurrency,
+                page_pool=page_pool,
+            )
+        except Exception:  # noqa: BLE001
+            if page_map:
+                fallback_ms = int(round((time.monotonic() - started) * 1000)) - elapsed_ms
+                return [], elapsed_ms + max(fallback_ms, 0)
+            raise
         return fallback_pages, elapsed_ms + fallback_ms
-
 
 def _should_recover_initial_primary_fetch(
     exc: Exception,
@@ -628,6 +634,7 @@ def _should_recover_initial_primary_fetch(
     primary_urls: list[str],
     *,
     cascade_email_primary: bool,
+    elapsed_ms: int = 0,
 ) -> bool:
     if not cascade_email_primary:
         return False
@@ -635,6 +642,8 @@ def _should_recover_initial_primary_fetch(
         return False
     if page_map:
         return True
+    if _is_slow_empty_initial_fetch_timeout(exc, elapsed_ms):
+        return False
     failed_urls = set(primary_urls)
     remaining_urls = [
         url for url in _select_unfetched_primary_urls(fetch_plan, page_map)
@@ -642,6 +651,13 @@ def _should_recover_initial_primary_fetch(
     ]
     return bool(remaining_urls)
 
+def _is_slow_empty_initial_fetch_timeout(exc: Exception, elapsed_ms: int) -> bool:
+    if elapsed_ms < _SLOW_EMPTY_INITIAL_FETCH_RECOVERY_CUTOFF_MS:
+        return False
+    if isinstance(exc, TimeoutError):
+        return True
+    message = str(exc or "").lower()
+    return "timeout" in message or "timed out" in message
 
 def _is_recoverable_initial_fetch_error(exc: Exception) -> bool:
     if isinstance(exc, TimeoutError):
@@ -658,7 +674,6 @@ def _is_recoverable_initial_fetch_error(exc: Exception) -> bool:
             "connection",
         )
     )
-
 
 def _start_active_representative_search(
     searcher,
@@ -680,7 +695,6 @@ def _start_active_representative_search(
         )
     except Exception:  # noqa: BLE001
         return None
-
 
 def _finish_active_representative_search(
     future: Future | None,
@@ -707,10 +721,12 @@ def _finish_active_representative_search(
     finally:
         if future is not None:
             metrics.search_rep_ms = int(round((time.monotonic() - started_monotonic) * 1000))
+
 def _remaining_deadline_seconds(deadline_monotonic: float | None) -> float | None:
     if deadline_monotonic is None:
         return None
     return max(deadline_monotonic - time.monotonic(), 0.0)
+
 def _collect_contact_details(
     website: str,
     email_rule_pages: list[tuple[str, str]],
@@ -769,7 +785,6 @@ def _extract_ai_emails_or_empty(
         if acquired:
             semaphore.release()
 
-
 def _start_ai_email_future(
     *,
     llm_client: WebsiteLlmClient,
@@ -810,7 +825,6 @@ def _start_ai_email_future(
         max_wait_seconds=wait_timeout_seconds,
     )
 
-
 def _merge_ai_email_future(
     *,
     website: str,
@@ -848,7 +862,6 @@ def _merge_ai_email_future(
         return rule_emails
     return merge_ai_emails_for_website(website, rule_emails, ai_emails, email_rule_pages)
 
-
 def _remaining_ai_email_wait_seconds(
     ai_email_future: AiEmailFuture,
     deadline_monotonic: float | None,
@@ -861,7 +874,6 @@ def _remaining_ai_email_wait_seconds(
         remaining = min(remaining, max(deadline_monotonic - now, 0.0))
     return remaining
 
-
 def _await_ai_email_future(future: Future, wait_timeout: float):
     # 这里等待的是本地 Future，不直接等 SDK 网络调用；标准超时比自写忙轮询更稳。
     timeout = max(float(wait_timeout or 0.0), 0.0)
@@ -871,7 +883,6 @@ def _await_ai_email_future(future: Future, wait_timeout: float):
         raise FutureTimeoutError()
     return future.result(timeout=timeout)
 
-
 def _get_ai_email_semaphore(limit: int) -> threading.Semaphore:
     global _AI_EMAIL_SEMAPHORE, _AI_EMAIL_SEMAPHORE_LIMIT
     normalized_limit = min(max(int(limit or _DEFAULT_AI_EMAIL_CONCURRENCY), 1), 32)
@@ -880,7 +891,6 @@ def _get_ai_email_semaphore(limit: int) -> threading.Semaphore:
             _AI_EMAIL_SEMAPHORE = threading.Semaphore(normalized_limit)
             _AI_EMAIL_SEMAPHORE_LIMIT = normalized_limit
         return _AI_EMAIL_SEMAPHORE
-
 
 def _get_ai_email_executor(limit: int) -> DaemonProbeExecutor:
     global _AI_EMAIL_EXECUTOR, _AI_EMAIL_EXECUTOR_LIMIT
@@ -897,7 +907,6 @@ def _get_ai_email_executor(limit: int) -> DaemonProbeExecutor:
         old_executor.shutdown(wait=False, cancel_futures=False)
     return executor
 
-
 def _resolve_ai_email_deadline(
     deadline_monotonic: float | None,
     *,
@@ -909,7 +918,6 @@ def _resolve_ai_email_deadline(
         return ai_deadline
     return min(deadline_monotonic, ai_deadline)
 
-
 def _resolve_ai_email_wait_timeout_seconds(
     email_rule_pages: list[tuple[str, str]],
     *,
@@ -918,7 +926,6 @@ def _resolve_ai_email_wait_timeout_seconds(
     if any(has_email_evidence_hint(html_text) for _url, html_text in email_rule_pages):
         return ai_email_timeout_seconds
     return min(ai_email_timeout_seconds, _AI_EMAIL_LOW_SIGNAL_TIMEOUT_SECONDS)
-
 
 def _pick_email_urls_with_deadline(
     *,
@@ -986,5 +993,5 @@ def _resolve_page_batch_timeout_seconds(config: AppConfig) -> float:
         float(getattr(config, "total_wait_seconds", request_timeout * 2) or 0.0),
         request_timeout * 2,
     )
-    batch_ceiling = 8.0
-    return max(min(site_budget, batch_ceiling), min(request_timeout, batch_ceiling))
+    batch_ceiling = min(max(request_timeout * 2, 12.0), 20.0)
+    return max(min(site_budget, batch_ceiling), min(request_timeout * 2, batch_ceiling))
