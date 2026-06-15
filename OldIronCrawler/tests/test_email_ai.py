@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
 import sys
 import threading
 import time
@@ -356,7 +357,7 @@ def test_ai_email_future_starts_but_rule_hit_returns_without_waiting() -> None:
     future = service_module._start_ai_email_future(
         llm_client=llm,
         homepage="https://acme.example",
-        email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+        email_rule_pages=[("https://acme.example/contact", "<html>AI: ai at acme dot example</html>")],
         deadline_monotonic=time.monotonic() + 10,
         ai_email_concurrency=1,
         ai_email_timeout_seconds=5.0,
@@ -369,7 +370,7 @@ def test_ai_email_future_starts_but_rule_hit_returns_without_waiting() -> None:
         emails = service_module._merge_ai_email_future(
             website="https://acme.example",
             rule_emails=["info@acme.example"],
-            email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+            email_rule_pages=[("https://acme.example/contact", "<html>AI: ai at acme dot example</html>")],
             ai_email_future=future,
             metrics=service_module.SiteStageMetrics(),
             deadline_monotonic=time.monotonic() + 10,
@@ -380,6 +381,227 @@ def test_ai_email_future_starts_but_rule_hit_returns_without_waiting() -> None:
     assert emails == ["info@acme.example"]
     assert time.monotonic() - begin < 0.2
     assert llm.calls == 1
+
+
+def test_ai_email_future_waits_for_ai_when_rule_misses() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class SlowLlm:
+        def extract_emails_from_pages(self, **_kwargs):
+            started.set()
+            release.wait(timeout=1.0)
+            return ["ai@acme.example"]
+
+    future = service_module._start_ai_email_future(
+        llm_client=SlowLlm(),
+        homepage="https://acme.example",
+        email_rule_pages=[("https://acme.example/contact", "<html>AI: ai at acme dot example</html>")],
+        deadline_monotonic=time.monotonic() + 10,
+        ai_email_concurrency=1,
+        ai_email_timeout_seconds=5.0,
+    )
+    assert future is not None
+    assert started.wait(timeout=1.0)
+
+    timer = threading.Timer(0.05, release.set)
+    timer.start()
+
+    begin = time.monotonic()
+    try:
+        emails = service_module._merge_ai_email_future(
+            website="https://acme.example",
+            rule_emails=[],
+            email_rule_pages=[("https://acme.example/contact", "<html>AI: ai at acme dot example</html>")],
+            ai_email_future=future,
+            metrics=service_module.SiteStageMetrics(),
+            deadline_monotonic=time.monotonic() + 10,
+        )
+    finally:
+        release.set()
+        timer.cancel()
+
+    elapsed = time.monotonic() - begin
+    assert emails == ["ai@acme.example"]
+    assert elapsed >= 0.03
+    assert elapsed < 0.5
+
+
+def test_ai_email_future_uses_shorter_wait_for_pages_without_email_evidence(monkeypatch) -> None:
+    release = threading.Event()
+
+    class SlowLlm:
+        def extract_emails_from_pages(self, **_kwargs):
+            release.wait(timeout=0.35)
+            return ["ai@acme.example"]
+
+    monkeypatch.setattr(service_module, "_AI_EMAIL_LOW_SIGNAL_TIMEOUT_SECONDS", 0.05, raising=False)
+
+    future = service_module._start_ai_email_future(
+        llm_client=SlowLlm(),
+        homepage="https://acme.example",
+        email_rule_pages=[("https://acme.example/about", "<html>plain company page</html>")],
+        deadline_monotonic=time.monotonic() + 10,
+        ai_email_concurrency=1,
+        ai_email_timeout_seconds=5.0,
+    )
+    assert future is not None
+
+    begin = time.monotonic()
+    try:
+        emails = service_module._merge_ai_email_future(
+            website="https://acme.example",
+            rule_emails=[],
+            email_rule_pages=[("https://acme.example/about", "<html>plain company page</html>")],
+            ai_email_future=future,
+            metrics=service_module.SiteStageMetrics(),
+            deadline_monotonic=time.monotonic() + 10,
+        )
+    finally:
+        release.set()
+
+    elapsed = time.monotonic() - begin
+    assert emails == []
+    assert elapsed >= 0.03
+    assert elapsed < 0.2
+
+
+def test_ai_email_future_join_uses_stored_wait_cap_when_deadline_is_far() -> None:
+    pending_future = Future()
+    ai_email_future = service_module.AiEmailFuture(
+        future=pending_future,
+        started_monotonic=time.monotonic(),
+        deadline_monotonic=time.monotonic() + 10.0,
+        max_wait_seconds=0.05,
+    )
+
+    begin = time.monotonic()
+    emails = service_module._merge_ai_email_future(
+        website="https://acme.example",
+        rule_emails=[],
+        email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+        ai_email_future=ai_email_future,
+        metrics=service_module.SiteStageMetrics(),
+        deadline_monotonic=time.monotonic() + 10.0,
+    )
+
+    elapsed = time.monotonic() - begin
+    assert emails == []
+    assert elapsed >= 0.03
+    assert elapsed < 0.2
+
+
+def test_ai_email_future_join_has_merge_hard_cap(monkeypatch) -> None:
+    pending_future = Future()
+    ai_email_future = service_module.AiEmailFuture(
+        future=pending_future,
+        started_monotonic=time.monotonic(),
+        deadline_monotonic=time.monotonic() + 10.0,
+        max_wait_seconds=0.2,
+    )
+    monkeypatch.setattr(service_module, "_AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS", 0.05, raising=False)
+
+    begin = time.monotonic()
+    emails = service_module._merge_ai_email_future(
+        website="https://acme.example",
+        rule_emails=[],
+        email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+        ai_email_future=ai_email_future,
+        metrics=service_module.SiteStageMetrics(),
+        deadline_monotonic=time.monotonic() + 10.0,
+    )
+
+    elapsed = time.monotonic() - begin
+    assert emails == []
+    assert elapsed >= 0.03
+    assert elapsed < 0.12
+
+
+def test_ai_email_future_join_does_not_trust_blocking_result_timeout() -> None:
+    class BlockingResultFuture:
+        def __init__(self) -> None:
+            self.cancelled_flag = False
+
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> bool:
+            self.cancelled_flag = True
+            return True
+
+        def result(self, timeout=None):
+            time.sleep(0.35)
+            return ["ai@acme.example"]
+
+    blocking_future = BlockingResultFuture()
+    ai_email_future = service_module.AiEmailFuture(
+        future=blocking_future,
+        started_monotonic=time.monotonic(),
+        deadline_monotonic=time.monotonic() + 10.0,
+        max_wait_seconds=0.05,
+    )
+
+    begin = time.monotonic()
+    emails = service_module._merge_ai_email_future(
+        website="https://acme.example",
+        rule_emails=[],
+        email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+        ai_email_future=ai_email_future,
+        metrics=service_module.SiteStageMetrics(),
+        deadline_monotonic=time.monotonic() + 10.0,
+    )
+
+    assert emails == []
+    assert not blocking_future.cancelled_flag
+    assert time.monotonic() - begin < 0.2
+
+
+def test_ai_email_future_join_leaves_pending_ai_running() -> None:
+    pending_future = Future()
+    ai_email_future = service_module.AiEmailFuture(
+        future=pending_future,
+        started_monotonic=time.monotonic(),
+        deadline_monotonic=time.monotonic() + 10.0,
+        max_wait_seconds=0.05,
+    )
+
+    begin = time.monotonic()
+    emails = service_module._merge_ai_email_future(
+        website="https://acme.example",
+        rule_emails=[],
+        email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+        ai_email_future=ai_email_future,
+        metrics=service_module.SiteStageMetrics(),
+        deadline_monotonic=time.monotonic() + 10.0,
+    )
+
+    elapsed = time.monotonic() - begin
+    assert emails == []
+    assert not pending_future.cancelled()
+    assert elapsed >= 0.03
+    assert elapsed < 0.2
+
+
+def test_ai_email_future_merge_uses_ready_ai_result() -> None:
+    ready_future = Future()
+    ready_future.set_result(["sales@acme.example"])
+    ai_email_future = service_module.AiEmailFuture(
+        future=ready_future,
+        started_monotonic=time.monotonic(),
+        deadline_monotonic=time.monotonic() + 60.0,
+        max_wait_seconds=60.0,
+    )
+
+    emails = service_module._merge_ai_email_future(
+        website="https://acme.example",
+        rule_emails=[],
+        email_rule_pages=[("https://acme.example/contact", "Sales: sales at acme dot example")],
+        ai_email_future=ai_email_future,
+        metrics=service_module.SiteStageMetrics(),
+        deadline_monotonic=time.monotonic() + 60.0,
+    )
+
+    assert emails == ["sales@acme.example"]
 
 
 def test_collect_emails_skips_embedded_scan_after_direct_same_domain_hit(monkeypatch) -> None:

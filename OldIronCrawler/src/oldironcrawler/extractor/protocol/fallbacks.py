@@ -82,6 +82,7 @@ def _should_try_host_fallback(lowered_error: str) -> bool:
         for token in (
             "connection closed abruptly",
             "could not resolve host",
+            "getaddrinfo failed",
             "empty reply from server",
             "name or service not known",
             "nodename nor servname",
@@ -98,6 +99,7 @@ def _should_try_root_host_fallback(lowered_error: str) -> bool:
         token in lowered_error
         for token in (
             "could not resolve host",
+            "getaddrinfo failed",
             "name or service not known",
             "nodename nor servname",
         )

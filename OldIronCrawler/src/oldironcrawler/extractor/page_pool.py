@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from oldironcrawler.extractor.protocol_runtime import DaemonProbeExecutor
 
 _DISPATCH_QUANTUM_SECONDS = 0.01
+_MAX_INFLIGHT_PER_BATCH = 8
 
 
 @dataclass
@@ -22,11 +23,13 @@ class PageFetchPoolConfig:
 class _FetchBatch:
     urls: list[str]
     fetch_one: object
-    deadline_monotonic: float
+    site_deadline_monotonic: float
+    batch_timeout_seconds: float
     inflight_limit: int
     pending_urls: deque[str] = field(default_factory=deque)
     pages_by_url: dict[str, object] = field(default_factory=dict)
     inflight_count: int = 0
+    active_deadline_monotonic: float = 0.0
     last_error: Exception | None = None
     closed: bool = False
 
@@ -48,14 +51,20 @@ class PageFetchPool:
         urls: list[str],
         fetch_one,
         deadline_monotonic: float,
+        batch_timeout_seconds: float | None = None,
     ) -> list:
         inflight_limit = self._inflight_limit(urls)
         if inflight_limit <= 0:
             return []
+        if batch_timeout_seconds is None:
+            timeout_seconds = max(deadline_monotonic - _now_monotonic(), 0.01)
+        else:
+            timeout_seconds = max(float(batch_timeout_seconds), 0.01)
         batch = _FetchBatch(
             urls=list(urls),
             fetch_one=fetch_one,
-            deadline_monotonic=deadline_monotonic,
+            site_deadline_monotonic=deadline_monotonic,
+            batch_timeout_seconds=timeout_seconds,
             inflight_limit=inflight_limit,
             pending_urls=deque(urls),
         )
@@ -67,7 +76,7 @@ class PageFetchPool:
                     self._dispatch_locked()
                     if self._is_batch_complete_locked(batch):
                         break
-                    remaining = batch.deadline_monotonic - _now_monotonic()
+                    remaining = self._remaining_batch_seconds_locked(batch)
                     if remaining <= 0:
                         timed_out = True
                         batch.closed = True
@@ -138,7 +147,7 @@ class PageFetchPool:
             return False
         if not batch.pending_urls:
             return False
-        return batch.deadline_monotonic > _now_monotonic()
+        return batch.site_deadline_monotonic > _now_monotonic()
 
     def _take_dispatch_item_locked(self, batch: _FetchBatch) -> tuple[str, threading.BoundedSemaphore] | None:
         total_urls = len(batch.pending_urls)
@@ -147,9 +156,24 @@ class PageFetchPool:
             host_semaphore = self._get_host_semaphore_locked(url)
             if host_semaphore.acquire(blocking=False):
                 batch.pending_urls.popleft()
+                self._activate_batch_locked(batch)
                 return url, host_semaphore
             batch.pending_urls.rotate(-1)
         return None
+
+    def _activate_batch_locked(self, batch: _FetchBatch) -> None:
+        if batch.active_deadline_monotonic > 0:
+            return
+        batch.active_deadline_monotonic = min(
+            _now_monotonic() + batch.batch_timeout_seconds,
+            batch.site_deadline_monotonic,
+        )
+
+    def _remaining_batch_seconds_locked(self, batch: _FetchBatch) -> float:
+        now = _now_monotonic()
+        if batch.active_deadline_monotonic > 0:
+            return batch.active_deadline_monotonic - now
+        return batch.site_deadline_monotonic - now
 
     def _handle_future_completion(
         self,
@@ -192,7 +216,8 @@ class PageFetchPool:
     def _inflight_limit(self, urls: list[str]) -> int:
         if not urls:
             return 0
-        base_limit = max(min(self._config.worker_count, 24), max(self._config.per_host_limit, 1))
+        # 单个站点批次不能吃满全局抓页线程，否则慢站会拖住其他站点。
+        base_limit = min(max(self._config.worker_count // 2, 1), _MAX_INFLIGHT_PER_BATCH)
         unique_hosts = {self._host_key(url) for url in urls}
         host_cap = max(len(unique_hosts), 1) * max(self._config.per_host_limit, 1)
         return min(len(urls), base_limit, host_cap)

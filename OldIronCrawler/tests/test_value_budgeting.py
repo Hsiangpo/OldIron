@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -498,6 +499,55 @@ def test_site_profile_service_skips_email_overflow_after_first_primary_email_for
     store.close()
 
 
+def test_site_profile_service_uses_homepage_when_discovery_deadline_expires(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://acme.example"
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            return [HtmlPage(url=website, html="<html>info@acme.example</html>") for url in urls if url == website]
+
+        def close(self) -> None:
+            return None
+
+    class FakeLlmClient:
+        def pick_email_urls(self, **_kwargs):
+            return []
+
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+    def slow_discovery(*_args, **_kwargs):
+        time.sleep(0.2)
+        return DiscoverySnapshot(urls=[], candidates=[], rep_urls=[], teacher_pool=[], email_urls=[])
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(service_module, "_discover_value_snapshot", slow_discovery)
+    monkeypatch.setattr(service_module, "_resolve_discovery_deadline", lambda *_args, **_kwargs: time.monotonic() + 0.03)
+
+    config = _build_service_config()
+    config.extract_representative_enabled = False
+    config.collect_company_name_enabled = False
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+
+    started = time.monotonic()
+    result = service.process(task.id, task.website)
+
+    assert time.monotonic() - started < 0.15
+    assert result.result.emails == "info@acme.example"
+    assert result.stage_metrics.discovered_url_count == 1
+    learning_store.close()
+    store.close()
+
+
 def test_site_profile_service_uses_llm_email_picker_when_rules_only_select_homepage(
     tmp_path: Path,
     monkeypatch,
@@ -876,7 +926,7 @@ def test_site_profile_service_skips_email_overflow_when_primary_email_is_enough_
     store.close()
 
 
-def test_site_profile_service_records_ai_email_timing_when_rules_find_no_email(
+def test_site_profile_service_waits_for_ai_email_when_rules_find_no_email(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1129,6 +1179,75 @@ def test_site_profile_service_fetches_remaining_primary_email_pages_after_fast_m
     store.close()
 
 
+def test_site_profile_service_fetches_remaining_primary_email_pages_after_fast_timeout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://acmeholdings.co.uk"
+    contact_url = f"{website}/contact"
+    support_url = f"{website}/support"
+    legal_url = f"{website}/legal"
+    privacy_url = f"{website}/privacy"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            if contact_url in urls:
+                raise TimeoutError("page_batch_timeout")
+            html_map = {
+                website: "<html>Home</html>",
+                support_url: "<html>Support form</html>",
+                legal_url: "<html>Legal text</html>",
+                privacy_url: "<html>privacy@acmeholdings.co.uk</html>",
+            }
+            return [HtmlPage(url=url, html=html_map[url]) for url in urls if url in html_map]
+
+        def close(self) -> None:
+            return None
+
+    class FakeLlmClient:
+        def pick_email_urls(self, **_kwargs):
+            return []
+
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(
+        service_module,
+        "_discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=[contact_url, support_url, legal_url, privacy_url],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=[contact_url, support_url, legal_url, privacy_url],
+        ),
+    )
+
+    config = _build_service_config()
+    config.extract_representative_enabled = False
+    config.collect_company_name_enabled = False
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    config.email_page_soft_limit = 4
+    config.email_page_hard_limit = 4
+    config.page_total_hard_limit = 6
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+
+    result = service.process(task.id, task.website)
+
+    assert fetch_calls == [[website, contact_url], [support_url, legal_url, privacy_url]]
+    assert result.result.emails == "privacy@acmeholdings.co.uk"
+    learning_store.close()
+    store.close()
+
+
 def test_ai_email_extraction_uses_short_deadline() -> None:
     captured_remaining: list[float] = []
 
@@ -1189,6 +1308,41 @@ def test_email_url_picker_uses_short_deadline(tmp_path: Path, monkeypatch) -> No
     assert result == [website, f"{website}/products"]
     assert captured_remaining
     assert 0.0 < captured_remaining[0] <= 7.5
+    learning_store.close()
+    store.close()
+
+
+def test_email_url_picker_timeout_keeps_discovered_urls(tmp_path: Path, monkeypatch) -> None:
+    website = "https://acmeholdings.co.uk"
+
+    def fake_pick_email_urls_or_empty(_llm_client, **_kwargs):
+        service_module.time.sleep(0.35)
+        return [f"{website}/hidden-contact"]
+
+    monkeypatch.setattr(service_module, "pick_email_urls_or_empty", fake_pick_email_urls_or_empty)
+
+    config = _build_service_config()
+    config.ai_email_timeout_seconds = 0.05
+    store, learning_store, _task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, object(), page_pool=None)
+    snapshot = DiscoverySnapshot(
+        urls=[website, f"{website}/products", f"{website}/hidden-contact"],
+        candidates=[],
+        rep_urls=[],
+        teacher_pool=[],
+        email_urls=[website],
+    )
+
+    begin = service_module.time.monotonic()
+    result = service._resolve_email_urls(
+        snapshot,
+        website,
+        service_module.SiteStageMetrics(),
+        service_module.time.monotonic() + 180.0,
+    )
+
+    assert result == [website]
+    assert service_module.time.monotonic() - begin < 0.2
     learning_store.close()
     store.close()
 

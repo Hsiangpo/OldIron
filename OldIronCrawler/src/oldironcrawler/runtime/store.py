@@ -417,9 +417,9 @@ class RuntimeStore:
                 company_name=str(row["input_company_name"] or ""),
             )
 
-    def mark_done(self, site_id: int, result: SiteResult) -> None:
+    def mark_done(self, site_id: int, result: SiteResult) -> bool:
         with self._write_lock, self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE sites
                 SET status = 'done',
@@ -435,7 +435,7 @@ class RuntimeStore:
                     evidence_quote = ?,
                     finished_at = CURRENT_TIMESTAMP,
                     last_error = ''
-                WHERE id = ?
+                WHERE id = ? AND status = 'running'
                 """,
                 (
                     result.company_name,
@@ -451,12 +451,15 @@ class RuntimeStore:
                     site_id,
                 ),
             )
+            if cursor.rowcount <= 0:
+                return False
             self._cache_terminal_site(conn, site_id)
+            return True
 
-    def update_stage_metrics(self, site_id: int, metrics: SiteStageMetrics) -> None:
+    def update_stage_metrics(self, site_id: int, metrics: SiteStageMetrics) -> bool:
         values = tuple(int(getattr(metrics, name) or 0) for name in _METRIC_COLUMNS)
         with self._write_lock, self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE sites
                 SET discover_ms = ?,
@@ -472,10 +475,11 @@ class RuntimeStore:
                     email_url_count = ?,
                     target_url_count = ?,
                     fetched_page_count = ?
-                WHERE id = ?
+                WHERE id = ? AND status = 'running'
                 """,
                 (*values, site_id),
             )
+            return cursor.rowcount > 0
 
     def load_stage_metrics(self, site_id: int) -> SiteStageMetrics:
         with self._connect() as conn:
@@ -489,49 +493,58 @@ class RuntimeStore:
 
     def mark_failed(self, site_id: int, error_text: str) -> str:
         with self._write_lock, self._connect() as conn:
-            row = conn.execute("SELECT retry_count FROM sites WHERE id = ?", (site_id,)).fetchone()
+            row = conn.execute("SELECT retry_count, status FROM sites WHERE id = ?", (site_id,)).fetchone()
+            if row is None or str(row["status"] or "") != "running":
+                return "ignored"
             retry_count = int(row["retry_count"] or 0) if row is not None else 0
             max_retry_count = _max_retry_count_for_error(error_text)
             if retry_count < max_retry_count:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE sites
                     SET status = 'failed_temp',
                         retry_count = retry_count + 1,
                         last_error = ?,
                         finished_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
+                    WHERE id = ? AND status = 'running'
                     """,
                     (error_text, site_id),
                 )
+                if cursor.rowcount <= 0:
+                    return "ignored"
                 return "failed_temp"
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE sites
                 SET status = 'dropped',
                     retry_count = retry_count + 1,
                     last_error = ?,
                     finished_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = ? AND status = 'running'
                 """,
                 (error_text, site_id),
             )
+            if cursor.rowcount <= 0:
+                return "ignored"
             self._cache_terminal_site(conn, site_id)
             return "dropped"
 
-    def mark_dropped(self, site_id: int, error_text: str) -> None:
+    def mark_dropped(self, site_id: int, error_text: str) -> bool:
         with self._write_lock, self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE sites
                 SET status = 'dropped',
                     last_error = ?,
                     finished_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = ? AND status = 'running'
                 """,
                 (error_text, site_id),
             )
+            if cursor.rowcount <= 0:
+                return False
             self._cache_terminal_site(conn, site_id)
+            return True
 
     def progress(self) -> dict[str, int]:
         with self._connect() as conn:
@@ -750,28 +763,33 @@ _FAST_FAIL_TLS_ERROR_HINTS = (
     "handshake failure",
     "openssl_internal:invalid library",
 )
+_NO_RETRY_SLOW_NETWORK_HINTS = (
+    "getaddrinfo() thread failed to start",
+    "thread failed to start",
+    "request_slot_timeout",
+    "resource temporarily unavailable",
+    "[errno 35]",
+    "page_batch_timeout",
+    "empty_page_batch",
+    "site_deadline_exceeded",
+    "site_open_timeout",
+    "temporary_request:",
+    "operation timed out",
+    "timed out after",
+)
+_RETRY_SERVICE_HINTS = (
+    "llm_queue_timeout",
+    "service_temporarily_unavailable",
+    "llm 服务暂时不可用",
+)
 
 
 def _max_retry_count_for_error(error_text: str) -> int:
     lowered = str(error_text or "").lower()
     if any(token in lowered for token in _FAST_FAIL_TLS_ERROR_HINTS):
         return 0
-    if any(
-        token in lowered
-        for token in (
-            "getaddrinfo() thread failed to start",
-            "thread failed to start",
-            "request_slot_timeout",
-            "llm_queue_timeout",
-            "service_temporarily_unavailable",
-            "llm 服务暂时不可用",
-            "resource temporarily unavailable",
-            "[errno 35]",
-            "page_batch_timeout",
-            "empty_page_batch",
-            "site_deadline_exceeded",
-            "temporary_request:",
-        )
-    ):
+    if any(token in lowered for token in _NO_RETRY_SLOW_NETWORK_HINTS):
+        return 0
+    if any(token in lowered for token in _RETRY_SERVICE_HINTS):
         return 2
     return 1

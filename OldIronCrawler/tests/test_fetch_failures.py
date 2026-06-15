@@ -132,6 +132,48 @@ def test_page_fetch_pool_keeps_later_batch_progress_under_slot_contention() -> N
     )
 
 
+def test_page_fetch_pool_does_not_let_one_batch_exhaust_all_workers() -> None:
+    pool = PageFetchPool(PageFetchPoolConfig(worker_count=4, per_host_limit=4))
+    outcomes: list[tuple[str, object]] = []
+    lock = threading.Lock()
+
+    def slow_fetch(url: str):
+        time.sleep(0.3)
+        return url
+
+    def fast_fetch(url: str):
+        return url
+
+    def run_batch(label: str, urls: list[str], deadline_seconds: float, fetch_one) -> None:
+        try:
+            result = pool.fetch_pages(
+                urls=urls,
+                fetch_one=fetch_one,
+                deadline_monotonic=time.monotonic() + deadline_seconds,
+            )
+            outcome: object = ("ok", result)
+        except Exception as exc:  # noqa: BLE001
+            outcome = exc
+        with lock:
+            outcomes.append((label, outcome))
+
+    slow_urls = [f"https://example.com/slow/{index}" for index in range(4)]
+    fast_urls = ["https://example.com/fast"]
+    slow_thread = threading.Thread(target=run_batch, args=("slow", slow_urls, 1.0, slow_fetch))
+    fast_thread = threading.Thread(target=run_batch, args=("fast", fast_urls, 0.12, fast_fetch))
+
+    slow_thread.start()
+    time.sleep(0.03)
+    fast_thread.start()
+    fast_thread.join()
+    slow_thread.join()
+    pool.close()
+
+    fast_outcome = next(outcome for label, outcome in outcomes if label == "fast")
+
+    assert fast_outcome == ("ok", fast_urls)
+
+
 def test_page_fetch_pool_does_not_occupy_workers_while_waiting_for_same_host_limit() -> None:
     pool = PageFetchPool(PageFetchPoolConfig(worker_count=2, per_host_limit=1))
     lock = threading.Lock()

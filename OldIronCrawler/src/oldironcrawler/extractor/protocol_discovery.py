@@ -45,7 +45,8 @@ _UNSUPPORTED_PATH_FRAGMENTS = (
 _UNSUPPORTED_QUERY_PAIRS = (
     ("action", "lostpassword"),
 )
-_ANCHOR_RE = re.compile(r"<a\b[^>]*\bhref=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+_ANCHOR_TAG_RE = re.compile(r"<a\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
+_HREF_ATTR_RE = re.compile(r"\bhref\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
 _LINK_HINT_FRAGMENT_PREFIX = "oi-link-"
 _VALUE_ANCHOR_PHRASES = (
     ("bize ulasin", "bize-ulasin"),
@@ -78,6 +79,17 @@ _VALUE_ANCHOR_TOKENS = {
     "toiawase",
     "ulasin",
 }
+_HOMEPAGE_VALUE_LINK_TOKENS = _VALUE_ANCHOR_TOKENS | {
+    "conosco",
+    "dpo",
+    "form",
+    "lgpd",
+    "privacidade",
+    "privacy",
+    "sac",
+    "support",
+    "trabalhe",
+}
 _COMMON_VALUE_PATHS = (
     "/impressum",
     "/imprint",
@@ -88,8 +100,14 @@ _COMMON_VALUE_PATHS = (
     "/iletisim/index.html",
     "/bize-ulasin",
     "/contato",
+    "/Contato",
+    "/Home/Contato",
+    "/home/Contato",
+    "/home/contato",
     "/fale-conosco",
     "/faleconosco",
+    "/FaleConosco",
+    "/Home/FaleConosco",
     "/atendimento",
     "/ouvidoria",
     "/inquiry",
@@ -100,6 +118,7 @@ _COMMON_VALUE_PATHS = (
     "/uber-uns",
     "/hakkimizda",
     "/kurumsal",
+    "/Home/Institucional",
     "/institucional",
     "/corporate",
     "/about-us/our-people",
@@ -131,6 +150,12 @@ _COMMON_VALUE_PATHS = (
     "/privacy",
     "/kvkk",
     "/lgpd",
+    "/politica-de-privacidade",
+    "/politica-de-privacidade/",
+    "/politica-de-privacidade.html",
+    "/politica-privacidade",
+    "/politica-privacidade/",
+    "/politica-privacidade.html",
     "/privacidade",
     "/terms",
 )
@@ -170,8 +195,54 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/contact", 24),
     ("/ouvidoria", 24),
     ("/atendimento", 22),
+    ("/politica-de-privacidade", 24),
+    ("/politica-privacidade", 23),
+    ("/privacidade", 22),
     ("/trabalhe-conosco", 20),
     ("/recruit/form", 20),
+)
+_BRAZIL_SPECULATIVE_PATH_WEIGHTS = (
+    ("fale-conosco", 172),
+    ("home/faleconosco", 154),
+    ("home/contato", 154),
+    ("contato", 166),
+    ("faleconosco", 156),
+    ("atendimento", 132),
+    ("ouvidoria", 128),
+    ("lgpd", 96),
+    ("politica-de-privacidade", 98),
+    ("politica-privacidade", 96),
+    ("privacidade", 92),
+    ("trabalhe-conosco", 82),
+    ("institucional", 72),
+    ("contact", 60),
+)
+_TURKEY_SPECULATIVE_PATH_WEIGHTS = (
+    ("iletisim", 180),
+    ("bize-ulasin", 172),
+    ("kvkk", 112),
+    ("hakkimizda", 96),
+    ("kurumsal", 94),
+    ("insan-kaynaklari", 86),
+    ("kariyer", 82),
+    ("contact", 60),
+)
+_JAPAN_SPECULATIVE_PATH_WEIGHTS = (
+    ("inquiry", 180),
+    ("mailform", 172),
+    ("contact/form", 168),
+    ("contact/mail", 166),
+    ("recruit/form", 112),
+    ("form", 104),
+    ("contact", 92),
+)
+_GENERIC_SPECULATIVE_PATH_WEIGHTS = (
+    ("contact-us", 120),
+    ("contact", 112),
+    ("kontakt", 108),
+    ("impressum", 96),
+    ("imprint", 94),
+    ("privacy", 64),
 )
 _DISCOVERY_PRIORITY_NEGATIVE_TOKENS = {
     "article",
@@ -264,7 +335,25 @@ def extract_same_site_links(html_text: str, page_url: str, *, limit: int) -> lis
 
 
 def _iter_anchor_links(html_text: str) -> list[tuple[str, str]]:
-    return [(match.group(1), match.group(2)) for match in _ANCHOR_RE.finditer(str(html_text or ""))]
+    text = str(html_text or "")
+    links: list[tuple[str, str]] = []
+    for match in _ANCHOR_TAG_RE.finditer(text):
+        href_match = _HREF_ATTR_RE.search(match.group("attrs") or "")
+        if href_match is None:
+            continue
+        links.append((href_match.group(1), _extract_anchor_body_hint(text, match.end())))
+    return links
+
+
+def _extract_anchor_body_hint(html_text: str, start_index: int) -> str:
+    closing_index = html_text.find("</a>", start_index)
+    next_anchor_index = html_text.find("<a", start_index)
+    end_index = len(html_text)
+    if closing_index >= 0:
+        end_index = min(end_index, closing_index)
+    if next_anchor_index >= 0:
+        end_index = min(end_index, next_anchor_index)
+    return html_text[start_index : min(end_index, start_index + 500)]
 
 
 def _pick_relative_link_base_url(html_text: str, page_url: str) -> str:
@@ -343,6 +432,16 @@ def _normalize_anchor_text(anchor_text: str) -> str:
 
 def _url_has_value_hint(url: str) -> bool:
     return any(token in _VALUE_ANCHOR_TOKENS for token in extract_url_hint_tokens(url))
+
+
+def has_homepage_value_links(start_url: str, urls: list[str]) -> bool:
+    for url in urls:
+        tokens = extract_url_hint_tokens(url)
+        if any(token in _HOMEPAGE_VALUE_LINK_TOKENS for token in tokens):
+            return True
+        if _discovery_priority_score(start_url, url) >= 18:
+            return True
+    return False
 
 
 def extract_same_org_seed_urls(html_text: str, page_url: str, *, site_domain: str, limit: int) -> list[str]:
@@ -439,7 +538,92 @@ def build_common_probe_urls(start_url: str) -> list[str]:
                 if probe_url not in seen:
                     seen.add(probe_url)
                     result.append(probe_url)
+    if _should_prioritize_country_common_paths(parsed.netloc):
+        return _prioritize_common_probe_urls(start_url, result)
     return result
+
+
+def _should_prioritize_country_common_paths(host: str) -> bool:
+    lowered = str(host or "").strip().lower()
+    return (
+        lowered.endswith(".br")
+        or ".com.br" in lowered
+        or lowered.endswith(".tr")
+        or ".com.tr" in lowered
+        or lowered.endswith(".jp")
+        or ".co.jp" in lowered
+    )
+
+
+def _prioritize_common_probe_urls(start_url: str, urls: list[str]) -> list[str]:
+    scored = [
+        (-_score_speculative_common_value_url(start_url, url), index, url)
+        for index, url in enumerate(urls)
+    ]
+    scored.sort()
+    return [url for _score, _index, url in scored]
+
+
+def pick_speculative_common_value_urls(start_url: str, *, limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    scored: list[tuple[int, int, str]] = []
+    for index, url in enumerate(build_common_probe_urls(start_url)):
+        score = _score_speculative_common_value_url(start_url, url)
+        if score <= 0:
+            continue
+        scored.append((-score, index, url))
+    scored.sort()
+    return [url for _, _, url in scored[:limit]]
+
+
+def _score_speculative_common_value_url(start_url: str, url: str) -> int:
+    parsed_start = urlparse(start_url)
+    parsed_url = urlparse(url)
+    host = (parsed_start.netloc or "").lower()
+    path = (parsed_url.path or "").strip("/").lower()
+    if not path:
+        return 0
+    score = 0
+    if host.endswith(".br") or ".com.br" in host:
+        score = _score_country_path(path, _BRAZIL_SPECULATIVE_PATH_WEIGHTS)
+    elif host.endswith(".tr") or ".com.tr" in host:
+        score = _score_country_path(path, _TURKEY_SPECULATIVE_PATH_WEIGHTS)
+    elif host.endswith(".jp") or ".co.jp" in host:
+        score = _score_country_path(path, _JAPAN_SPECULATIVE_PATH_WEIGHTS)
+    if score <= 0:
+        score = _score_country_path(path, _GENERIC_SPECULATIVE_PATH_WEIGHTS)
+    if score <= 0:
+        return 0
+    return score + _score_locale_prefix(path, host) + _score_original_host(parsed_start.netloc, parsed_url.netloc)
+
+
+def _score_country_path(path: str, weights: tuple[tuple[str, int], ...]) -> int:
+    for fragment, weight in weights:
+        if fragment in path:
+            return weight
+    return 0
+
+
+def _score_locale_prefix(path: str, host: str) -> int:
+    prefix = path.split("/", 1)[0]
+    if prefix == "pt" and (host.endswith(".br") or ".com.br" in host):
+        return 8
+    if prefix == "tr" and (host.endswith(".tr") or ".com.tr" in host):
+        return 8
+    if prefix == "ja" and (host.endswith(".jp") or ".co.jp" in host):
+        return 8
+    if prefix in {"br", "jp"}:
+        return 4
+    if prefix == "en":
+        return 2
+    return 6
+
+
+def _score_original_host(start_host: str, candidate_host: str) -> int:
+    if (start_host or "").lower() == (candidate_host or "").lower():
+        return 6
+    return 0
 
 
 def _build_common_probe_prefixes(host: str, locale_prefix: str) -> list[str]:

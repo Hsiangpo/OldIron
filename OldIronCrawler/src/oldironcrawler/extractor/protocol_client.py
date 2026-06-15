@@ -35,6 +35,12 @@ from oldironcrawler.extractor.protocol.fallbacks import (
     should_try_httpx_fallback as _should_try_httpx_fallback,
     should_try_httpx_status_fallback as _should_try_httpx_status_fallback,
 )
+from oldironcrawler.extractor.protocol.homepage import (
+    fetch_discovery_homepage_httpx as _fetch_discovery_homepage_httpx,
+    fetch_discovery_homepage_with_host_fallback as _fetch_discovery_homepage_with_host_fallback,
+    normalize_discovery_homepage_response as _normalize_discovery_homepage_response,
+)
+from oldironcrawler.extractor.protocol.httpx_client import build_httpx_client as _build_httpx_client, build_httpx_client_kwargs as _build_httpx_client_kwargs
 from oldironcrawler.extractor.protocol.types import DiscoveryStageResult, HtmlPage, SiteProtocolConfig
 from oldironcrawler.extractor.protocol.sitemap import discover_sitemap_urls as _discover_sitemap_urls
 from oldironcrawler.extractor.protocol_discovery import (
@@ -42,8 +48,10 @@ from oldironcrawler.extractor.protocol_discovery import (
     extract_registrable_domain as _extract_registrable_domain,
     extract_same_org_seed_urls as _extract_same_org_seed_urls,
     extract_same_site_links as _extract_same_site_links,
+    has_homepage_value_links as _has_homepage_value_links,
     is_supported_url as _is_supported_url,
     merge_unique_urls as _merge_unique_urls,
+    pick_speculative_common_value_urls as _pick_speculative_common_value_urls,
     pick_subdomain_probe_urls as _pick_subdomain_probe_urls,
 )
 from oldironcrawler.extractor.protocol_runtime import configure_protocol_runtime, get_probe_executor, request_slot
@@ -55,7 +63,7 @@ class SiteProtocolClient:
             probe_workers=max(config.probe_worker_count, 1),
             request_slots=max(config.request_slot_limit, 1),
         )
-        self._http_client = self._build_httpx_client()
+        self._http_client = _build_httpx_client(self._config.default_headers, self._config.proxy_url, self._config.timeout_seconds)
         self._session_lock = threading.Lock()
         self._thread_sessions: dict[int, cffi_requests.Session] = {}
     def close(self) -> None:
@@ -114,21 +122,21 @@ class SiteProtocolClient:
         last_error: Exception | None = None
         timed_out = False
         filtered = [url for url in urls if _is_supported_url(url)]
-        deadline = time.monotonic() + max(self._config.page_batch_timeout_seconds, 0.01)
+        batch_timeout_seconds = max(self._config.page_batch_timeout_seconds, 0.01)
+        deadline = time.monotonic() + batch_timeout_seconds
         if self._config.deadline_monotonic is not None:
             deadline = min(deadline, self._config.deadline_monotonic)
         if page_pool is not None and filtered:
+            site_deadline = self._config.deadline_monotonic or deadline
             pages = page_pool.fetch_pages(
                 urls=filtered,
                 fetch_one=lambda url: self._call_fetch_page_optional(
                     url,
-                    timeout_seconds=_cap_page_fetch_timeout(
-                        self._config.timeout_seconds,
-                        max(deadline - time.monotonic(), 0.01),
-                    ),
-                    request_deadline_monotonic=deadline,
+                    timeout_seconds=_cap_page_fetch_timeout(self._config.timeout_seconds, batch_timeout_seconds),
+                    request_deadline_monotonic=site_deadline,
                 ),
-                deadline_monotonic=deadline,
+                deadline_monotonic=site_deadline,
+                batch_timeout_seconds=batch_timeout_seconds,
             )
             if pages:
                 return pages
@@ -194,19 +202,6 @@ class SiteProtocolClient:
         session.trust_env = False
         session.headers.update(self._config.default_headers)
         return session
-    def _build_httpx_client(self) -> httpx.Client:
-        return httpx.Client(**self._build_httpx_client_kwargs(self._config.timeout_seconds))
-    def _build_httpx_client_kwargs(self, timeout_seconds: float) -> dict[str, object]:
-        client_kwargs: dict[str, object] = {
-            "follow_redirects": True,
-            "headers": dict(self._config.default_headers),
-            "timeout": timeout_seconds,
-            "limits": httpx.Limits(max_connections=128, max_keepalive_connections=32, keepalive_expiry=30.0),
-            "trust_env": False,
-        }
-        if self._config.proxy_url:
-            client_kwargs["proxy"] = self._config.proxy_url
-        return client_kwargs
     def _fetch_html(
         self,
         session: cffi_requests.Session,
@@ -591,7 +586,6 @@ class SiteProtocolClient:
         if last_challenge_html:
             _raise_if_challenge_page(url, last_challenge_html)
         return None
-
     def _fetch_httpx_snapshot(
         self,
         url: str,
@@ -602,7 +596,7 @@ class SiteProtocolClient:
         request_deadline_monotonic: float | None = None,
     ) -> tuple[int, str, str]:
         if fresh_client:
-            with httpx.Client(**self._build_httpx_client_kwargs(timeout_seconds)) as client:
+            with httpx.Client(**_build_httpx_client_kwargs(self._config.default_headers, self._config.proxy_url, timeout_seconds)) as client:
                 with request_slot(
                     timeout_seconds=timeout_seconds,
                     wait_timeout_seconds=self._bounded_request_slot_wait_timeout(
@@ -644,15 +638,8 @@ class SiteProtocolClient:
         if not _should_try_http_fallback(url, lowered_error):
             return None
         request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
-        client_kwargs: dict[str, object] = {
-            "follow_redirects": True,
-            "headers": dict(self._config.default_headers),
-            "timeout": request_timeout,
-            "verify": False,
-            "trust_env": False,
-        }
-        if self._config.proxy_url:
-            client_kwargs["proxy"] = self._config.proxy_url
+        client_kwargs = _build_httpx_client_kwargs(self._config.default_headers, self._config.proxy_url, request_timeout)
+        client_kwargs["verify"] = False
         try:
             with httpx.Client(**client_kwargs) as client:
                 with request_slot(
@@ -789,9 +776,15 @@ class SiteProtocolClient:
             guessed_urls = self._probe_common_value_urls(session, start_url, limit=limit)
             if guessed_urls:
                 return guessed_urls, ""
+            speculative_limit = min(limit, max(int(self._config.common_probe_target or 1) + 2, 4))
+            speculative_urls = _pick_speculative_common_value_urls(start_url, limit=speculative_limit)
+            if speculative_urls:
+                return speculative_urls, ""
             raise _normalize_homepage_open_error(start_url, homepage_error) from homepage_error
-        guessed_urls = self._probe_common_value_urls(session, start_url, limit=limit)
         homepage_links = _extract_same_site_links(homepage_html, start_url, limit=limit) if homepage_html else []
+        if homepage_html and _has_homepage_value_links(start_url, homepage_links):
+            return homepage_links, homepage_html
+        guessed_urls = self._probe_common_value_urls(session, start_url, limit=limit)
         merged = _merge_unique_urls(homepage_links, guessed_urls, limit=limit)
         if homepage_html:
             return merged, homepage_html
@@ -803,21 +796,26 @@ class SiteProtocolClient:
 
     def _fetch_discovery_homepage(self, session: cffi_requests.Session, start_url: str) -> str:
         timeout_seconds = min(self._config.timeout_seconds, _DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS)
-        request_deadline = time.monotonic() + timeout_seconds
-        try:
-            return self._fetch_html(
-                session,
-                start_url,
-                required=False,
-                timeout_seconds=timeout_seconds,
-                max_retries_override=0,
-                request_deadline_monotonic=request_deadline,
-                allow_httpx_fallback=False,
-            )
-        except TypeError as exc:
-            if "unexpected keyword" not in str(exc).lower():
-                raise
-            return self._fetch_html(session, start_url, required=False, timeout_seconds=timeout_seconds)
+        return _fetch_discovery_homepage_with_host_fallback(start_url, timeout_seconds, self._fetch_discovery_homepage_httpx)
+
+    def _fetch_discovery_homepage_httpx(self, start_url: str, timeout_seconds: float) -> str:
+        return _fetch_discovery_homepage_httpx(
+            start_url,
+            timeout_seconds,
+            fetch_direct=self._fetch_discovery_homepage_httpx_direct,
+            normalize_response=self._normalize_discovery_homepage_response,
+        )
+
+    def _fetch_discovery_homepage_httpx_direct(self, start_url: str, timeout_seconds: float) -> object:
+        with httpx.Client(**_build_httpx_client_kwargs(self._config.default_headers, self._config.proxy_url, timeout_seconds)) as client:
+            return client.get(start_url, timeout=timeout_seconds)
+
+    def _normalize_discovery_homepage_response(self, start_url: str, response: object) -> str:
+        return _normalize_discovery_homepage_response(
+            start_url,
+            response,
+            max_html_chars=self._config.max_html_chars,
+        )
 
     def _probe_common_value_urls(
         self,
@@ -857,7 +855,6 @@ class SiteProtocolClient:
             ):
                 break
         return result
-
     def _probe_common_value_batch(
         self,
         probe_urls: list[str],
@@ -916,7 +913,7 @@ class SiteProtocolClient:
                 request_slot_wait_seconds=_COMMON_PROBE_SLOT_WAIT_SECONDS,
                 request_deadline_monotonic=request_deadline,
                 allow_httpx_fallback=False,
-                use_request_slot=False,
+                use_request_slot=True,
             )
         except ProtocolPermanentError:
             # 鍏叡鎺㈡祴闃舵鍙繚鐣欑湡瀹炴鏂囬〉锛屾寫鎴橀〉涓嶅啀褰撴垚鈥滃懡涓〉鈥濄€?

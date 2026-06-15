@@ -4,6 +4,7 @@ import sys
 import time
 from concurrent.futures import Future
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -169,6 +170,49 @@ def test_primary_discovery_probes_common_paths_after_homepage_timeout(monkeypatc
     assert homepage_html == ""
     assert probed == ["https://slow.example"]
     client.close()
+
+
+def test_primary_discovery_skips_common_probe_when_homepage_has_value_links(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+    homepage_html = """
+    <a href="/contato">Contato</a>
+    <a href="/privacidade">Privacidade</a>
+    """
+
+    monkeypatch.setattr(client, "_fetch_discovery_homepage", lambda *_args, **_kwargs: homepage_html)
+    monkeypatch.setattr(
+        client,
+        "_probe_common_value_urls",
+        lambda *_args, **_kwargs: pytest.fail("homepage value links should be enough"),
+    )
+
+    urls, returned_homepage_html = client._discover_primary_urls(object(), "https://example.com.br", limit=20)
+
+    assert urls == ["https://example.com.br/contato", "https://example.com.br/privacidade"]
+    assert returned_homepage_html == homepage_html
+    client.close()
+
+
+def test_common_probe_uses_global_request_slot() -> None:
+    calls: list[dict[str, object]] = []
+
+    class ProbeClient(protocol_module.SiteProtocolClient):
+        def __init__(self) -> None:
+            return None
+
+        def _get_or_create_session(self):
+            return object()
+
+        def _fetch_html(self, _session, url: str, **kwargs):
+            calls.append({"url": url, **kwargs})
+            return "<html>contact</html>"
+
+    client = ProbeClient()
+    client._config = SimpleNamespace(timeout_seconds=10.0)
+
+    assert client._probe_common_value_url("https://example.com/contact") == "https://example.com/contact"
+    assert calls
+    assert calls[0]["use_request_slot"] is True
 
 
 def test_select_email_urls_limits_family_sprawl_and_total_count() -> None:

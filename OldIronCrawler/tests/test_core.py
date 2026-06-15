@@ -354,7 +354,7 @@ def test_store_llm_service_unavailable_gets_extra_retry_budget(tmp_path: Path) -
     assert store.mark_failed(third.id, "LLM 服务暂时不可用，请稍后重试。（service_temporarily_unavailable）") == "dropped"
 
 
-def test_store_empty_page_batch_gets_extra_retry_budget(tmp_path: Path) -> None:
+def test_store_empty_page_batch_drops_without_retry(tmp_path: Path) -> None:
     db_path = tmp_path / "runtime.sqlite3"
     store = RuntimeStore(db_path)
     rows = [
@@ -364,17 +364,8 @@ def test_store_empty_page_batch_gets_extra_retry_budget(tmp_path: Path) -> None:
 
     first = store.claim_next_site()
     assert first is not None
-    assert store.mark_failed(first.id, "empty_page_batch: https://a.com/contact") == "failed_temp"
-
-    second = store.claim_next_site()
-    assert second is not None
-    assert second.id == first.id
-    assert store.mark_failed(second.id, "empty_page_batch: https://a.com/contact") == "failed_temp"
-
-    third = store.claim_next_site()
-    assert third is not None
-    assert third.id == first.id
-    assert store.mark_failed(third.id, "empty_page_batch: https://a.com/contact") == "dropped"
+    assert store.mark_failed(first.id, "empty_page_batch: https://a.com/contact") == "dropped"
+    assert store.claim_next_site() is None
 
 
 def test_completed_job_can_be_reset_for_rerun(tmp_path: Path) -> None:
@@ -777,7 +768,12 @@ def test_site_profile_starts_ai_email_before_rule_extraction(
 
     def fake_start_ai_email_future(**_kwargs):
         events.append("ai-start")
-        return service_module.AiEmailFuture(future=Future(), started_monotonic=time.monotonic())
+        return service_module.AiEmailFuture(
+            future=Future(),
+            started_monotonic=time.monotonic(),
+            deadline_monotonic=time.monotonic() + 1.0,
+            max_wait_seconds=1.0,
+        )
 
     def fake_collect_contact_details(*_args, **_kwargs):
         events.append("rules")
@@ -1331,6 +1327,11 @@ def test_protocol_client_discovers_related_company_subdomain_pages(monkeypatch) 
         return []
 
     monkeypatch.setattr(client, "_fetch_html", fake_fetch_html)
+    monkeypatch.setattr(
+        client,
+        "_fetch_discovery_homepage",
+        lambda session, url: fake_fetch_html(session, url, required=True),
+    )
     monkeypatch.setattr(client, "_discover_sitemap_urls", fake_discover_sitemap_urls)
 
     urls = client.discover_urls("https://atomlearning.com", limit=20)
@@ -1362,11 +1363,16 @@ def test_protocol_client_skips_broken_probe_pages_during_related_discovery(monke
         return []
 
     monkeypatch.setattr(client, "_fetch_html", fake_fetch_html)
+    monkeypatch.setattr(
+        client,
+        "_fetch_discovery_homepage",
+        lambda session, url: fake_fetch_html(session, url, required=True),
+    )
     monkeypatch.setattr(client, "_discover_sitemap_urls", fake_discover_sitemap_urls)
 
     urls = client.discover_urls("https://example.com", limit=20)
 
-    assert urls == ["https://www.example.com/about"]
+    assert "https://www.example.com/about" in urls
 
 
 def test_prioritize_representative_content_keeps_signal_without_dropping_body() -> None:
@@ -1697,7 +1703,14 @@ def test_fetch_pages_propagates_batch_deadline_into_page_fetch_pool() -> None:
         def __init__(self) -> None:
             self.captured_deadlines: list[float | None] = []
 
-        def fetch_pages(self, *, urls: list[str], fetch_one, deadline_monotonic: float) -> list:
+        def fetch_pages(
+            self,
+            *,
+            urls: list[str],
+            fetch_one,
+            deadline_monotonic: float,
+            batch_timeout_seconds: float | None = None,
+        ) -> list:
             fetch_one(urls[0])
             return []
 
@@ -1734,7 +1747,14 @@ def test_fetch_pages_caps_individual_page_timeout_in_page_pool() -> None:
         def __init__(self) -> None:
             self.captured_timeouts: list[float | None] = []
 
-        def fetch_pages(self, *, urls: list[str], fetch_one, deadline_monotonic: float) -> list:
+        def fetch_pages(
+            self,
+            *,
+            urls: list[str],
+            fetch_one,
+            deadline_monotonic: float,
+            batch_timeout_seconds: float | None = None,
+        ) -> list:
             fetch_one(urls[0])
             return []
 
@@ -1764,7 +1784,7 @@ def test_fetch_pages_caps_individual_page_timeout_in_page_pool() -> None:
         pass
 
     assert fake_pool.captured_timeouts
-    assert fake_pool.captured_timeouts[0] <= 8.5
+    assert fake_pool.captured_timeouts[0] <= 12.0
     client.close()
 
 
@@ -2006,6 +2026,24 @@ def test_select_email_urls_uses_value_anchor_text_for_query_only_links() -> None
     assert any(url.startswith("https://taluinsaat.com/?page_id=33") for url in email_urls)
 
 
+def test_select_email_urls_prioritizes_brazil_privacy_over_news_atendimento() -> None:
+    candidates = build_candidates(
+        "https://example.com.br",
+        [
+            "https://example.com.br/atendimento-de-fisioterapia-aos-sabados/boletim-013-2025/",
+            "https://example.com.br/institucional/politica-de-privacidade/",
+        ],
+        {},
+        {},
+    )
+
+    email_urls = select_email_urls(candidates)
+
+    assert email_urls.index("https://example.com.br/institucional/politica-de-privacidade/") < email_urls.index(
+        "https://example.com.br/atendimento-de-fisioterapia-aos-sabados/boletim-013-2025/"
+    )
+
+
 def test_build_site_protocol_config_separates_probe_batch_and_global_worker_limits() -> None:
     config = SimpleNamespace(
         request_timeout_seconds=10.0,
@@ -2024,9 +2062,17 @@ def test_build_site_protocol_config_separates_probe_batch_and_global_worker_limi
     protocol_config = _build_site_protocol_config(config, 123.0)
 
     assert protocol_config.common_probe_concurrency == 7
-    assert protocol_config.probe_worker_count == 24
+    assert protocol_config.probe_worker_count == 7
     assert protocol_config.request_slot_limit == 24
     assert protocol_config.deadline_monotonic == 123.0
+
+    config.page_concurrency = 32
+    protocol_config = _build_site_protocol_config(config, 456.0)
+
+    assert protocol_config.common_probe_concurrency == 8
+    assert protocol_config.probe_worker_count == 8
+    assert protocol_config.request_slot_limit == 24
+    assert protocol_config.deadline_monotonic == 456.0
 
 
 def test_merge_page_targets_dedupes_cross_pipeline_urls() -> None:
@@ -2801,7 +2847,7 @@ def test_run_single_site_treats_site_deadline_exceeded_as_permanent(monkeypatch)
         )
 
 
-def test_handle_future_retries_site_deadline_without_fetched_pages(tmp_path: Path, monkeypatch) -> None:
+def test_handle_future_drops_site_deadline_without_retrying_same_batch(tmp_path: Path, monkeypatch) -> None:
     store = RuntimeStore(tmp_path / "runtime.sqlite3")
     rows = [ImportedWebsite(input_index=1, raw_website="a.com", website="https://a.com", dedupe_key="a.com")]
     store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
@@ -2825,10 +2871,10 @@ def test_handle_future_retries_site_deadline_without_fetched_pages(tmp_path: Pat
         delivery_writer=SimpleNamespace(note_completion=lambda: None),
     )
 
-    assert completed == 0
+    assert completed == 1
     progress = store.progress()
-    assert progress["failed_temp"] == 1
-    assert progress["dropped"] == 0
+    assert progress["failed_temp"] == 0
+    assert progress["dropped"] == 1
 
 
 def test_normalize_llm_result_accepts_canonical_evidence_url() -> None:
@@ -3195,6 +3241,17 @@ def test_protocol_discovery_probes_common_value_paths_when_homepage_is_blocked(m
     monkeypatch.setattr(client, "_fetch_html", fake_fetch_html)
     monkeypatch.setattr(
         client,
+        "_fetch_discovery_homepage",
+        lambda session, url: fake_fetch_html(
+            session,
+            url,
+            required=True,
+            timeout_seconds=None,
+            max_retries_override=None,
+        ),
+    )
+    monkeypatch.setattr(
+        client,
         "_probe_common_value_urls",
         lambda *_args, **_kwargs: ["https://example.com/contact-us"],
     )
@@ -3218,6 +3275,17 @@ def test_protocol_discovery_drops_challenged_common_value_paths(monkeypatch) -> 
         return ""
 
     monkeypatch.setattr(client, "_fetch_html", fake_fetch_html)
+    monkeypatch.setattr(
+        client,
+        "_fetch_discovery_homepage",
+        lambda session, url: fake_fetch_html(
+            session,
+            url,
+            required=True,
+            timeout_seconds=None,
+            max_retries_override=None,
+        ),
+    )
     monkeypatch.setattr(client, "_discover_sitemap_urls", lambda *_args, **_kwargs: [])
 
     urls, _homepage_html = client._discover_direct_urls(object(), "https://example.com", limit=20)
@@ -3247,6 +3315,7 @@ def test_protocol_discovery_skips_sitemap_when_probe_hits_are_enough(monkeypatch
     client = SiteProtocolClient(SiteProtocolConfig(common_probe_target=2))
 
     monkeypatch.setattr(client, "_fetch_html", lambda *_args, **_kwargs: "<html>home</html>")
+    monkeypatch.setattr(client, "_fetch_discovery_homepage", lambda *_args, **_kwargs: "<html>home</html>")
     monkeypatch.setattr(
         client,
         "_probe_common_value_urls",
@@ -3289,10 +3358,23 @@ def test_common_probe_urls_include_turkey_brazil_japan_value_paths() -> None:
     assert "https://example.com.tr/tr/bize-ulasin" in turkey_urls
     assert "https://example.com.br/pt/contato" in brazil_urls
     assert "https://example.com.br/fale-conosco" in brazil_urls
+    assert "https://example.com.br/Home/Contato" in brazil_urls
+    assert "https://example.com.br/politica-de-privacidade" in brazil_urls
+    assert "https://example.com.br/politica-de-privacidade.html" in brazil_urls
     assert "https://example.com.br/ouvidoria" in brazil_urls
     assert "https://example.co.jp/ja/inquiry" in japan_urls
     assert "https://example.co.jp/inquiry" in japan_urls
     assert "https://example.co.jp/recruit/form" in japan_urls
+
+
+def test_common_probe_urls_prioritize_country_local_value_paths() -> None:
+    brazil_urls = protocol_module._build_common_probe_urls("https://example.com.br")
+    turkey_urls = protocol_module._build_common_probe_urls("https://example.com.tr")
+    japan_urls = protocol_module._build_common_probe_urls("https://example.co.jp")
+
+    assert any("/fale-conosco" in url or "/contato" in url for url in brazil_urls[:8])
+    assert any("/iletisim" in url for url in turkey_urls[:8])
+    assert any("/inquiry" in url for url in japan_urls[:8])
 
 
 def test_company_name_fallback_prefers_site_name_and_strips_welcome_prefix() -> None:

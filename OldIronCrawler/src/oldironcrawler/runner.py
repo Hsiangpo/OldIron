@@ -63,49 +63,32 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
     wait_for_executor = True
     try:
         futures: dict[Future, SiteTask] = {}
+        future_deadlines: dict[Future, float] = {}
         while True:
             while len(futures) < config.site_concurrency:
                 task = store.claim_next_site()
                 if task is None:
                     break
-                futures[
-                    _submit_single_site(
-                        executor,
-                        config,
-                        store,
-                        learning_store,
-                        llm_client,
-                        page_pool,
-                        task,
-                        representative_searcher,
-                    )
-                ] = task
+                future = _submit_single_site(
+                    executor,
+                    config,
+                    store,
+                    learning_store,
+                    llm_client,
+                    page_pool,
+                    task,
+                    representative_searcher,
+                )
+                futures[future] = task
+                future_deadlines[future] = _new_site_deadline(config)
             if not futures:
                 break
-            done, _ = wait(futures.keys(), timeout=heartbeat_seconds, return_when=FIRST_COMPLETED)
-            if not done:
-                delivery_writer.flush_if_due()
-                _emit_progress_snapshot(store, total)
-                continue
+            wait_timeout = _next_site_wait_timeout(future_deadlines, heartbeat_seconds)
+            done, _ = wait(futures.keys(), timeout=wait_timeout, return_when=FIRST_COMPLETED)
             llm_error: LlmConfigurationError | None = None
-            completed_count, llm_error = _process_done_futures(
-                done=done,
-                futures=futures,
-                total=total,
-                completed_count=completed_count,
-                store=store,
-                learning_store=learning_store,
-                delivery_writer=delivery_writer,
-                show_company_name=show_company,
-                show_email=show_email,
-                show_phone=show_phone,
-                show_representative=show_rep,
-                show_searched_representative=show_search,
-            )
-            _emit_progress_snapshot(store, total)
-            if llm_error is not None:
-                completed_count, _ = _process_done_futures(
-                    done=_collect_ready_futures(futures),
+            if done:
+                completed_count, llm_error = _process_done_futures(
+                    done=done,
                     futures=futures,
                     total=total,
                     completed_count=completed_count,
@@ -118,6 +101,43 @@ def run_crawl_session(config: AppConfig, store: RuntimeStore, delivery_path) -> 
                     show_representative=show_rep,
                     show_searched_representative=show_search,
                 )
+                _discard_future_deadlines(future_deadlines, done)
+            completed_count, detached = _drop_expired_site_futures(
+                futures=futures,
+                future_deadlines=future_deadlines,
+                total=total,
+                completed_count=completed_count,
+                store=store,
+                delivery_writer=delivery_writer,
+                show_company_name=show_company,
+                show_email=show_email,
+                show_phone=show_phone,
+                show_representative=show_rep,
+                show_searched_representative=show_search,
+            )
+            wait_for_executor = wait_for_executor and not detached
+            if done or detached:
+                _emit_progress_snapshot(store, total)
+            else:
+                delivery_writer.flush_if_due()
+                _emit_progress_snapshot(store, total)
+            if llm_error is not None:
+                ready_futures = _collect_ready_futures(futures)
+                completed_count, _ = _process_done_futures(
+                    done=ready_futures,
+                    futures=futures,
+                    total=total,
+                    completed_count=completed_count,
+                    store=store,
+                    learning_store=learning_store,
+                    delivery_writer=delivery_writer,
+                    show_company_name=show_company,
+                    show_email=show_email,
+                    show_phone=show_phone,
+                    show_representative=show_rep,
+                    show_searched_representative=show_search,
+                )
+                _discard_future_deadlines(future_deadlines, ready_futures)
                 for pending_future in list(futures):
                     pending_future.cancel()
                 wait_for_executor = False
@@ -210,6 +230,107 @@ def _collect_ready_futures(futures: dict[Future, SiteTask]) -> set[Future]:
         return set()
     done, _ = wait(futures.keys(), timeout=0, return_when=FIRST_COMPLETED)
     return set(done)
+
+
+def _new_site_deadline(config: AppConfig) -> float:
+    timeout_seconds = float(getattr(config, "total_wait_seconds", 180.0) or 180.0)
+    bounded_timeout = max(timeout_seconds, 0.01)
+    return time.monotonic() + bounded_timeout + _site_deadline_grace_seconds(bounded_timeout)
+
+
+def _site_deadline_grace_seconds(timeout_seconds: float) -> float:
+    return min(max(timeout_seconds * 0.25, 0.01), 15.0)
+
+
+def _next_site_wait_timeout(future_deadlines: dict[Future, float], heartbeat_seconds: float) -> float:
+    if not future_deadlines:
+        return heartbeat_seconds
+    nearest_deadline = min(future_deadlines.values())
+    remaining = nearest_deadline - time.monotonic()
+    return max(min(heartbeat_seconds, remaining), 0.0)
+
+
+def _discard_future_deadlines(future_deadlines: dict[Future, float], done: set[Future]) -> None:
+    for future in done:
+        future_deadlines.pop(future, None)
+
+
+def _drop_expired_site_futures(
+    *,
+    futures: dict[Future, SiteTask],
+    future_deadlines: dict[Future, float],
+    total: int,
+    completed_count: int,
+    store: RuntimeStore,
+    delivery_writer,
+    show_company_name: bool,
+    show_email: bool,
+    show_phone: bool,
+    show_representative: bool,
+    show_searched_representative: bool,
+) -> tuple[int, bool]:
+    now = time.monotonic()
+    expired = [
+        future
+        for future, deadline in list(future_deadlines.items())
+        if deadline <= now and future in futures and not future.done()
+    ]
+    detached = False
+    for future in expired:
+        task = futures.pop(future, None)
+        future_deadlines.pop(future, None)
+        if task is None:
+            continue
+        future.cancel()
+        detached = True
+        if not store.mark_dropped(task.id, "site_deadline_exceeded"):
+            continue
+        completed_count += 1
+        delivery_writer.note_completion()
+        _print_dropped_site_result(
+            task=task,
+            total=total,
+            completed_count=completed_count,
+            store=store,
+            show_company_name=show_company_name,
+            show_email=show_email,
+            show_phone=show_phone,
+            show_representative=show_representative,
+            show_searched_representative=show_searched_representative,
+        )
+    return completed_count, detached
+
+
+def _print_dropped_site_result(
+    *,
+    task: SiteTask,
+    total: int,
+    completed_count: int,
+    store: RuntimeStore,
+    show_company_name: bool,
+    show_email: bool,
+    show_phone: bool,
+    show_representative: bool,
+    show_searched_representative: bool,
+) -> None:
+    stage_metrics = store.load_stage_metrics(task.id)
+    print_site_result(
+        completed_index=completed_count,
+        total=total,
+        website=task.website,
+        company_name=getattr(task, "company_name", ""),
+        representative="",
+        emails="",
+        searched_representative="",
+        phones="",
+        reason=_describe_error_reason("site_deadline_exceeded"),
+        stage_metrics=stage_metrics,
+        show_company_name=show_company_name,
+        show_emails=show_email,
+        show_phones=show_phone,
+        show_representative=show_representative,
+        show_searched_representative=show_searched_representative,
+    )
 
 
 def _process_done_futures(
@@ -586,9 +707,7 @@ def _is_site_deadline_error(error: Exception) -> bool:
 
 
 def _should_retry_protocol_deadline(error: Exception, stage_metrics) -> bool:
-    if not _is_site_deadline_error(error):
-        return False
-    return int(getattr(stage_metrics, "fetched_page_count", 0) or 0) <= 0
+    return False
 
 
 def _describe_missing_reason(

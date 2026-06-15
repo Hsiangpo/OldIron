@@ -71,11 +71,11 @@ _EMAIL_WEIGHTS = {
     "kaynaklari": 8,
     "kurumsal": 5,
     "kvkk": 8,
-    "lgpd": 8,
+    "lgpd": 18,
     "mailform": 20,
     "otoiawase": 22,
     "ouvidoria": 18,
-    "privacidade": 8,
+    "privacidade": 18,
     "recruit": 8,
     "join": 6,
     "saiyo": 8,
@@ -96,7 +96,7 @@ _EMAIL_WEIGHTS = {
 _NEGATIVE_TOKENS = {
     "blog", "discussion", "discussions", "event", "forum", "forums",
     "news", "post", "press-release", "sponsored", "tag",
-    "author", "category",
+    "author", "boletim", "category",
 }
 _REP_SOURCE_NEGATIVE_TOKENS = {
     "forum",

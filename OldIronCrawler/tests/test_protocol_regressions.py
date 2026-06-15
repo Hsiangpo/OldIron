@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from oldironcrawler.extractor.protocol_client import ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient, SiteProtocolConfig
+from oldironcrawler.extractor.page_pool import PageFetchPool, PageFetchPoolConfig
 from oldironcrawler.extractor.protocol.fallbacks import build_host_fallback_urls
 from oldironcrawler.extractor.service import _build_site_protocol_config
 from oldironcrawler import challenge_solver as challenge_module
@@ -183,6 +185,40 @@ def test_protocol_fetch_html_uses_registrable_root_after_subdomain_dns_failure()
     client.close()
 
 
+def test_getaddrinfo_failure_builds_registrable_root_fallback_url() -> None:
+    urls = build_host_fallback_urls(
+        "http://info.altcom.com.br",
+        "[errno 11001] getaddrinfo failed",
+    )
+
+    assert "http://altcom.com.br" in urls
+
+
+def test_discovery_homepage_uses_registrable_root_after_getaddrinfo_failure(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+    calls: list[str] = []
+
+    def fake_homepage_httpx(url: str, _timeout: float) -> str:
+        calls.append(url)
+        if "info.altcom.com.br" in url:
+            raise ProtocolTemporaryError("[Errno 11001] getaddrinfo failed")
+        return "<html><body>root homepage contato@altcom.com.br</body></html>"
+
+    monkeypatch.setattr(client, "_fetch_discovery_homepage_httpx", fake_homepage_httpx)
+
+    try:
+        result = client.discover_primary_urls("http://info.altcom.com.br", limit=20)
+    finally:
+        client.close()
+
+    assert "root homepage" in result.homepage_html
+    assert calls[:3] == [
+        "http://info.altcom.com.br",
+        "http://www.info.altcom.com.br",
+        "http://altcom.com.br",
+    ]
+
+
 def test_protocol_fetch_html_marks_plain_403_as_blocked(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
 
@@ -336,11 +372,11 @@ def test_protocol_common_probe_does_not_keep_challenge_pages(monkeypatch) -> Non
 def test_discover_primary_urls_still_probes_when_homepage_is_temporary_failure(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
 
-    def fake_fetch_html(_session, url: str, *, required: bool, timeout_seconds=None, max_retries_override=None):
+    def fake_fetch_homepage(_session, url: str):
         assert url == "https://example.com"
         raise ProtocolTemporaryError("temporary_http_503: https://example.com")
 
-    monkeypatch.setattr(client, "_fetch_html", fake_fetch_html)
+    monkeypatch.setattr(client, "_fetch_discovery_homepage", fake_fetch_homepage)
     monkeypatch.setattr(client, "_probe_common_value_urls", lambda *_args, **_kwargs: ["https://example.com/impressum"])
 
     urls, homepage_html = client._discover_primary_urls(object(), "https://example.com", limit=20)
@@ -468,6 +504,136 @@ def test_fetch_html_recomputes_timeout_after_request_slot_wait(monkeypatch) -> N
     client.close()
 
 
+def test_request_slot_wait_timeout_is_capped_for_high_concurrency() -> None:
+    client = SiteProtocolClient(SiteProtocolConfig(timeout_seconds=8.0, max_retries=0))
+
+    try:
+        assert client._resolve_request_slot_wait_timeout(8.0) <= 6.0
+    finally:
+        client.close()
+
+
+def test_page_fetch_request_timeout_cap_allows_slow_brazil_value_pages() -> None:
+    assert protocol_module._cap_page_fetch_timeout(30.0, 30.0) == 12.0
+
+
+def test_page_fetch_pool_batch_timeout_starts_after_dispatch() -> None:
+    pool = PageFetchPool(PageFetchPoolConfig(worker_count=1, per_host_limit=1))
+    try:
+        def fetch_one(url: str):
+            if "slow" in url:
+                time.sleep(0.08)
+            return SimpleNamespace(url=url, html="<html>ok</html>")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(
+                pool.fetch_pages,
+                urls=["https://slow.example/contact"],
+                fetch_one=fetch_one,
+                deadline_monotonic=time.monotonic() + 1.0,
+                batch_timeout_seconds=0.2,
+            )
+            time.sleep(0.01)
+            second = executor.submit(
+                pool.fetch_pages,
+                urls=["https://fast.example/contact"],
+                fetch_one=fetch_one,
+                deadline_monotonic=time.monotonic() + 1.0,
+                batch_timeout_seconds=0.05,
+            )
+
+            assert [page.url for page in second.result(timeout=1.0)] == ["https://fast.example/contact"]
+            assert [page.url for page in first.result(timeout=1.0)] == ["https://slow.example/contact"]
+    finally:
+        pool.close()
+
+
+def test_discovery_homepage_timeout_cap_stays_short() -> None:
+    assert 5.0 <= protocol_module._DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS <= 6.0
+
+
+def test_discovery_homepage_uses_httpx_fast_path(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig(timeout_seconds=8.0, max_retries=0))
+
+    def fail_curl_path(*_args, **_kwargs):
+        raise AssertionError("discovery homepage should use fast httpx path first")
+
+    monkeypatch.setattr(client, "_fetch_html", fail_curl_path)
+    monkeypatch.setattr(client, "_fetch_discovery_homepage_httpx", lambda _url, _timeout: "<html>ok</html>")
+
+    try:
+        assert client._fetch_discovery_homepage(SimpleNamespace(), "https://example.com") == "<html>ok</html>"
+    finally:
+        client.close()
+
+
+def test_discovery_homepage_httpx_fast_path_has_hard_timeout(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig(timeout_seconds=8.0, max_retries=0))
+
+    def slow_fetch(*_args, **_kwargs):
+        time.sleep(0.2)
+        return SimpleNamespace(status_code=200, headers={"Content-Type": "text/html"}, text="<html>late</html>")
+
+    monkeypatch.setattr(client, "_fetch_discovery_homepage_httpx_direct", slow_fetch)
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProtocolTemporaryError, match="site_open_timeout"):
+            client._fetch_discovery_homepage_httpx("https://slow.example.com", 0.02)
+    finally:
+        client.close()
+
+    assert time.monotonic() - started < 0.1
+
+
+def test_extract_same_site_links_handles_large_unclosed_anchor_markup_quickly() -> None:
+    html_text = '<html><body><a href="/Home/Contato">Contato' + ("x" * 200_000) + "</body></html>"
+
+    started = time.monotonic()
+    urls = protocol_module._extract_same_site_links(html_text, "https://example.com.br", limit=5)
+    elapsed = time.monotonic() - started
+
+    assert urls == ["https://example.com.br/Home/Contato"]
+    assert elapsed < 0.2
+
+
+def test_discovery_uses_speculative_common_paths_after_homepage_timeout(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig(common_probe_target=4))
+
+    monkeypatch.setattr(
+        client,
+        "_fetch_discovery_homepage",
+        lambda _session, _url: (_ for _ in ()).throw(ProtocolTemporaryError("site_open_timeout")),
+    )
+    monkeypatch.setattr(client, "_probe_common_value_urls", lambda *_args, **_kwargs: [])
+
+    try:
+        result = client.discover_primary_urls("https://example.com.br", limit=10)
+    finally:
+        client.close()
+
+    assert "https://example.com.br/pt/contato" in result.urls
+    assert "https://example.com.br/fale-conosco" in result.urls
+
+
+def test_discovery_limits_speculative_common_paths_after_homepage_timeout(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig(common_probe_target=4))
+
+    monkeypatch.setattr(
+        client,
+        "_fetch_discovery_homepage",
+        lambda _session, _url: (_ for _ in ()).throw(ProtocolTemporaryError("site_open_timeout")),
+    )
+    monkeypatch.setattr(client, "_probe_common_value_urls", lambda *_args, **_kwargs: [])
+
+    try:
+        result = client.discover_primary_urls("https://example.com.br", limit=80)
+    finally:
+        client.close()
+
+    assert 4 <= len(result.urls) <= 6
+
+
 def test_fetch_html_allows_fast_tls_fallback_without_slow_target_fallbacks(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
 
@@ -558,7 +724,7 @@ def test_common_probe_scan_stops_after_total_budget(monkeypatch) -> None:
     client.close()
 
 
-def test_common_probe_fetch_does_not_hold_global_request_slot(monkeypatch) -> None:
+def test_common_probe_fetch_uses_global_request_slot(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
 
     class FakeResponse:
@@ -576,10 +742,21 @@ def test_common_probe_fetch_does_not_hold_global_request_slot(monkeypatch) -> No
 
     monkeypatch.setattr(client, "_get_or_create_session", lambda: FakeSession())
 
-    def fail_request_slot(*_args, **_kwargs):
-        raise AssertionError("common probe should not consume the global page-fetch slot")
+    calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr(protocol_module, "request_slot", fail_request_slot)
+    class FakeRequestSlot:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_request_slot(**kwargs):
+        calls.append(dict(kwargs))
+        return FakeRequestSlot()
+
+    monkeypatch.setattr(protocol_module, "request_slot", fake_request_slot)
 
     assert client._probe_common_value_url("https://example.com/contact") == "https://example.com/contact"
+    assert calls
     client.close()

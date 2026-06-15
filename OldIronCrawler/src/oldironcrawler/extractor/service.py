@@ -8,13 +8,20 @@ import time
 from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.company_rules import clean_company_name_candidate, extract_company_name_fallback
 from oldironcrawler.extractor.discovery_fallback import has_non_homepage_email_target
+from oldironcrawler.extractor.discovery_timeout import discover_value_snapshot_or_homepage
 from oldironcrawler.extractor.email_page_selection import build_email_teacher_pool, pick_email_urls_or_empty
 from oldironcrawler.extractor.email_rules import (
     collect_emails_for_pages,
+    has_email_evidence_hint,
     join_emails,
     merge_ai_emails_for_website,
 )
+from oldironcrawler.extractor.learning_feedback import LearningFeedback, build_learning_feedback
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtractionResult, LlmTemporaryError, WebsiteLlmClient
+from oldironcrawler.extractor.llm_result import (
+    extract_with_llm_or_empty as _extract_with_llm_or_empty,
+    normalize_llm_result as _normalize_llm_result,
+)
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_phones
 from oldironcrawler.extractor.protocol_client import SiteProtocolClient, SiteProtocolConfig
@@ -50,16 +57,14 @@ from oldironcrawler.extractor.shell_page import (
     canonicalize_shell_target_urls,
     replace_shell_pages_with_evidence,
 )
-from oldironcrawler.extractor.value_rules import (
-    canonicalize_target_url,
-    extract_learning_tokens,
-    merge_representative_urls,
-)
+from oldironcrawler.extractor.value_rules import merge_representative_urls
 from oldironcrawler.runtime.global_learning import GlobalLearningStore
 from oldironcrawler.runtime.store import RuntimeStore, SiteResult, SiteStageMetrics
 
 _DEFAULT_AI_EMAIL_CONCURRENCY = 32
-_DEFAULT_AI_EMAIL_TIMEOUT_SECONDS = 16.0
+_DEFAULT_AI_EMAIL_TIMEOUT_SECONDS = 8.0
+_AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS = 8.0
+_AI_EMAIL_LOW_SIGNAL_TIMEOUT_SECONDS = 6.0
 _AI_EMAIL_SEMAPHORE_LOCK = threading.Lock()
 _AI_EMAIL_SEMAPHORE: threading.Semaphore | None = None
 _AI_EMAIL_SEMAPHORE_LIMIT = 0
@@ -71,18 +76,14 @@ class SiteProcessingResult:
     result: SiteResult
     learning_feedback: "LearningFeedback"
     stage_metrics: SiteStageMetrics
-@dataclass
-class LearningFeedback:
-    rep_positive_tokens: list[str]
-    rep_negative_tokens: list[str]
-    email_positive_tokens: list[str]
-    email_negative_tokens: list[str]
 
 
 @dataclass
 class AiEmailFuture:
     future: Future
     started_monotonic: float
+    deadline_monotonic: float
+    max_wait_seconds: float
 
 
 class SiteProfileService:
@@ -141,7 +142,8 @@ class SiteProfileService:
                 discovery = self._time_call(
                     metrics,
                     "discover_ms",
-                    lambda: _discover_value_snapshot(
+                    lambda: discover_value_snapshot_or_homepage(
+                        _discover_value_snapshot,
                         discovery_protocol,
                         website,
                         rep_learned,
@@ -149,6 +151,7 @@ class SiteProfileService:
                         rep_target_count=rep_target_count,
                         contact_target_enabled=need_contact_extract,
                         discovery_deadline_monotonic=discovery_deadline_monotonic,
+                        discovery_workers=getattr(self._config, "page_worker_count", 32),
                     ),
                 )
             finally:
@@ -338,13 +341,18 @@ class SiteProfileService:
         picked_urls = self._time_call(
             metrics,
             "llm_pick_ms",
-            lambda: pick_email_urls_or_empty(
-                self._llm,
+            lambda: _pick_email_urls_with_deadline(
+                llm_client=self._llm,
                 homepage=website,
                 candidate_urls=candidate_urls,
                 existing_email_urls=email_urls,
                 target_count=target_count,
                 deadline_monotonic=picker_deadline,
+                ai_email_concurrency=getattr(
+                    self._config,
+                    "ai_email_concurrency",
+                    _DEFAULT_AI_EMAIL_CONCURRENCY,
+                ),
             ),
         )
         allowed = set(candidate_urls)
@@ -378,11 +386,14 @@ class SiteProfileService:
                 fetch_plan,
                 cascade_email_primary=cascade_email_primary,
             )
-            primary_pages, primary_fetch_ms = _fetch_primary_pages(
+            primary_pages, primary_fetch_ms = _fetch_initial_primary_pages_with_recovery(
                 protocol,
+                fetch_plan,
+                page_map,
                 _filter_network_primary_urls(initial_primary_urls, reused_primary_pages),
                 page_concurrency=self._config.page_concurrency,
                 page_pool=self._page_pool,
+                cascade_email_primary=cascade_email_primary,
             )
             _merge_pages_into_map(page_map, primary_pages)
             shell_alias_map = build_shell_alias_map(
@@ -566,6 +577,87 @@ def _merge_page_targets(rep_urls: list[str], email_urls: list[str]) -> list[str]
     return result
 
 
+def _fetch_initial_primary_pages_with_recovery(
+    protocol: SiteProtocolClient,
+    fetch_plan: dict[str, list[str]],
+    page_map: dict[str, object],
+    primary_urls: list[str],
+    *,
+    page_concurrency: int,
+    page_pool: PageFetchPool | None,
+    cascade_email_primary: bool,
+) -> tuple[list, int]:
+    if not primary_urls:
+        return [], 0
+    started = time.monotonic()
+    try:
+        return _fetch_primary_pages(
+            protocol,
+            primary_urls,
+            page_concurrency=page_concurrency,
+            page_pool=page_pool,
+        )
+    except Exception as exc:  # noqa: BLE001
+        elapsed_ms = int(round((time.monotonic() - started) * 1000))
+        if not _should_recover_initial_primary_fetch(
+            exc,
+            fetch_plan,
+            page_map,
+            primary_urls,
+            cascade_email_primary=cascade_email_primary,
+        ):
+            raise
+        failed_urls = set(primary_urls)
+        fallback_urls = [
+            url for url in _select_unfetched_primary_urls(fetch_plan, page_map)
+            if url not in failed_urls
+        ]
+        fallback_pages, fallback_ms = _fetch_primary_pages(
+            protocol,
+            fallback_urls,
+            page_concurrency=page_concurrency,
+            page_pool=page_pool,
+        )
+        return fallback_pages, elapsed_ms + fallback_ms
+
+
+def _should_recover_initial_primary_fetch(
+    exc: Exception,
+    fetch_plan: dict[str, list[str]],
+    page_map: dict[str, object],
+    primary_urls: list[str],
+    *,
+    cascade_email_primary: bool,
+) -> bool:
+    if not cascade_email_primary:
+        return False
+    if not _is_recoverable_initial_fetch_error(exc):
+        return False
+    failed_urls = set(primary_urls)
+    remaining_urls = [
+        url for url in _select_unfetched_primary_urls(fetch_plan, page_map)
+        if url not in failed_urls
+    ]
+    return bool(remaining_urls)
+
+
+def _is_recoverable_initial_fetch_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    message = str(exc or "").lower()
+    return any(
+        token in message
+        for token in (
+            "timeout",
+            "timed out",
+            "empty_page_batch",
+            "temporary",
+            "curl:",
+            "connection",
+        )
+    )
+
+
 def _start_active_representative_search(
     searcher,
     *,
@@ -689,19 +781,32 @@ def _start_ai_email_future(
         return None
     executor = _get_ai_email_executor(ai_email_concurrency)
     started = time.monotonic()
+    wait_timeout_seconds = _resolve_ai_email_wait_timeout_seconds(
+        email_rule_pages,
+        ai_email_timeout_seconds=ai_email_timeout_seconds,
+    )
+    ai_deadline = _resolve_ai_email_deadline(
+        deadline_monotonic,
+        ai_email_timeout_seconds=wait_timeout_seconds,
+    )
     try:
         future = executor.submit(
             _extract_ai_emails_or_empty,
             llm_client=llm_client,
             homepage=homepage,
             email_rule_pages=email_rule_pages,
-            deadline_monotonic=deadline_monotonic,
+            deadline_monotonic=ai_deadline,
             ai_email_concurrency=ai_email_concurrency,
-            ai_email_timeout_seconds=ai_email_timeout_seconds,
+            ai_email_timeout_seconds=wait_timeout_seconds,
         )
     except Exception:  # noqa: BLE001
         return None
-    return AiEmailFuture(future=future, started_monotonic=started)
+    return AiEmailFuture(
+        future=future,
+        started_monotonic=started,
+        deadline_monotonic=ai_deadline,
+        max_wait_seconds=wait_timeout_seconds,
+    )
 
 
 def _merge_ai_email_future(
@@ -719,13 +824,16 @@ def _merge_ai_email_future(
         return rule_emails
     wait_started = time.monotonic()
     try:
-        timeout = _remaining_deadline_seconds(deadline_monotonic)
-        if timeout is not None and timeout <= 0:
-            ai_email_future.future.cancel()
+        # 规则没有命中时，最多只等 AI 剩余预算；超时后后台任务继续跑完。
+        wait_timeout = _remaining_ai_email_wait_seconds(ai_email_future, deadline_monotonic)
+        if ai_email_future.future.done():
+            wait_timeout = 0.0
+        elif not isinstance(ai_email_future.future, Future):
             return rule_emails
-        ai_emails = ai_email_future.future.result(timeout=timeout)
+        elif wait_timeout <= 0:
+            return rule_emails
+        ai_emails = ai_email_future.future.result(timeout=wait_timeout)
     except FutureTimeoutError:
-        ai_email_future.future.cancel()
         return rule_emails
     except LlmConfigurationError:
         raise
@@ -736,6 +844,19 @@ def _merge_ai_email_future(
     if not ai_emails:
         return rule_emails
     return merge_ai_emails_for_website(website, rule_emails, ai_emails, email_rule_pages)
+
+
+def _remaining_ai_email_wait_seconds(
+    ai_email_future: AiEmailFuture,
+    deadline_monotonic: float | None,
+) -> float:
+    now = time.monotonic()
+    remaining = max(ai_email_future.max_wait_seconds - (now - ai_email_future.started_monotonic), 0.0)
+    remaining = min(remaining, max(float(_AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS), 0.01))
+    remaining = min(remaining, max(ai_email_future.deadline_monotonic - now, 0.0))
+    if deadline_monotonic is not None:
+        remaining = min(remaining, max(deadline_monotonic - now, 0.0))
+    return remaining
 
 
 def _get_ai_email_semaphore(limit: int) -> threading.Semaphore:
@@ -769,16 +890,63 @@ def _resolve_ai_email_deadline(
     *,
     ai_email_timeout_seconds: float,
 ) -> float:
-    timeout_seconds = min(max(float(ai_email_timeout_seconds or _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS), 3.0), 45.0)
+    timeout_seconds = min(max(float(ai_email_timeout_seconds or _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS), 0.05), 45.0)
     ai_deadline = time.monotonic() + timeout_seconds
     if deadline_monotonic is None:
         return ai_deadline
     return min(deadline_monotonic, ai_deadline)
 
 
+def _resolve_ai_email_wait_timeout_seconds(
+    email_rule_pages: list[tuple[str, str]],
+    *,
+    ai_email_timeout_seconds: float,
+) -> float:
+    if any(has_email_evidence_hint(html_text) for _url, html_text in email_rule_pages):
+        return ai_email_timeout_seconds
+    return min(ai_email_timeout_seconds, _AI_EMAIL_LOW_SIGNAL_TIMEOUT_SECONDS)
+
+
+def _pick_email_urls_with_deadline(
+    *,
+    llm_client: WebsiteLlmClient,
+    homepage: str,
+    candidate_urls: list[str],
+    existing_email_urls: list[str],
+    target_count: int,
+    deadline_monotonic: float | None,
+    ai_email_concurrency: int,
+) -> list[str]:
+    executor = _get_ai_email_executor(ai_email_concurrency)
+    try:
+        future = executor.submit(
+            pick_email_urls_or_empty,
+            llm_client,
+            homepage=homepage,
+            candidate_urls=candidate_urls,
+            existing_email_urls=existing_email_urls,
+            target_count=target_count,
+            deadline_monotonic=deadline_monotonic,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        timeout = _remaining_deadline_seconds(deadline_monotonic)
+        if timeout is not None and timeout <= 0:
+            future.cancel()
+            return []
+        return future.result(timeout=timeout) or []
+    except FutureTimeoutError:
+        future.cancel()
+        return []
+    except LlmConfigurationError:
+        raise
+    except Exception:  # noqa: BLE001
+        return []
 def _build_site_protocol_config(config: AppConfig, deadline_monotonic: float | None) -> SiteProtocolConfig:
     page_concurrency = max(int(getattr(config, "page_concurrency", 1) or 1), 1)
     page_worker_count = max(int(getattr(config, "page_worker_count", page_concurrency) or page_concurrency), 1)
+    common_probe_limit = min(page_concurrency, page_worker_count, 8)
     return SiteProtocolConfig(
         timeout_seconds=config.request_timeout_seconds,
         proxy_url=config.proxy_url,
@@ -790,8 +958,8 @@ def _build_site_protocol_config(config: AppConfig, deadline_monotonic: float | N
         cloudflare_proxy_url=config.cloudflare_proxy_url,
         deadline_monotonic=deadline_monotonic,
         page_batch_timeout_seconds=_resolve_page_batch_timeout_seconds(config),
-        common_probe_concurrency=page_concurrency,
-        probe_worker_count=page_worker_count,
+        common_probe_concurrency=common_probe_limit,
+        probe_worker_count=common_probe_limit,
         request_slot_limit=page_worker_count,
     )
 
@@ -806,110 +974,3 @@ def _resolve_page_batch_timeout_seconds(config: AppConfig) -> float:
     )
     batch_ceiling = min(max(request_timeout * 2, 12.0), 20.0)
     return max(min(site_budget, batch_ceiling), min(request_timeout * 2, batch_ceiling))
-
-
-def build_learning_feedback(
-    *,
-    representative: str,
-    evidence_url: str,
-    rep_urls: list[str],
-    rep_fetched_urls: list[str],
-    emails: str,
-    email_sources: list[str],
-    email_urls: list[str],
-    email_fetched_urls: list[str],
-) -> LearningFeedback:
-    rep_positive_tokens = _collect_positive_rep_tokens(representative, evidence_url, rep_fetched_urls)
-    rep_negative_tokens = _collect_failed_rep_negative_tokens(
-        representative,
-        evidence_url,
-        rep_positive_tokens,
-        rep_fetched_urls,
-    )
-    email_positive_tokens = _collect_positive_email_tokens(emails, email_sources, email_fetched_urls)
-    email_negative_tokens = _collect_failed_email_negative_tokens(
-        emails,
-        email_positive_tokens,
-        email_fetched_urls,
-    )
-    return LearningFeedback(
-        rep_positive_tokens=rep_positive_tokens,
-        rep_negative_tokens=rep_negative_tokens,
-        email_positive_tokens=email_positive_tokens,
-        email_negative_tokens=email_negative_tokens,
-    )
-
-
-def _merge_learning_tokens(urls: list[str]) -> list[str]:
-    tokens: list[str] = []
-    for url in urls:
-        for token in extract_learning_tokens(url):
-            if token not in tokens:
-                tokens.append(token)
-    return tokens
-
-
-def _collect_failed_rep_negative_tokens(
-    representative: str,
-    evidence_url: str,
-    positive_tokens: list[str],
-    rep_fetched_urls: list[str],
-) -> list[str]:
-    return []
-
-
-def _collect_failed_email_negative_tokens(
-    emails: str,
-    positive_tokens: list[str],
-    email_fetched_urls: list[str],
-) -> list[str]:
-    return []
-
-
-def _collect_positive_rep_tokens(representative: str, evidence_url: str, rep_fetched_urls: list[str]) -> list[str]:
-    if not representative or not evidence_url:
-        return []
-    if evidence_url not in rep_fetched_urls:
-        return []
-    return extract_learning_tokens(evidence_url)
-
-
-def _collect_positive_email_tokens(emails: str, email_sources: list[str], email_fetched_urls: list[str]) -> list[str]:
-    if not emails:
-        return []
-    kept_sources = [url for url in email_sources if url in email_fetched_urls]
-    return _merge_learning_tokens(kept_sources)
-
-
-def _extract_with_llm_or_empty(
-    *,
-    llm_client: WebsiteLlmClient,
-    homepage: str,
-    rep_pages: list,
-    deadline_monotonic: float | None,
-) -> LlmExtractionResult:
-    if not rep_pages:
-        return LlmExtractionResult(company_name="", representative="", evidence_url="", evidence_quote="")
-    return llm_client.extract_company_and_representative(
-        homepage=homepage,
-        pages=[{"url": page.url, "html": page.html} for page in rep_pages],
-        deadline_monotonic=deadline_monotonic,
-    )
-
-
-def _normalize_llm_result(llm_result: LlmExtractionResult, rep_pages: list) -> LlmExtractionResult:
-    available_urls = {
-        canonicalize_target_url(page.url): page.url
-        for page in rep_pages
-        if str(page.url or "").strip()
-    }
-    raw_evidence_url = str(llm_result.evidence_url or "").strip()
-    evidence_url = available_urls.get(canonicalize_target_url(raw_evidence_url), "")
-    representative = str(llm_result.representative or "").strip() if evidence_url else ""
-    evidence_quote = str(llm_result.evidence_quote or "").strip() if representative else ""
-    return LlmExtractionResult(
-        company_name=str(llm_result.company_name or "").strip() if rep_pages else "",
-        representative=representative,
-        evidence_url=evidence_url,
-        evidence_quote=evidence_quote,
-    )
