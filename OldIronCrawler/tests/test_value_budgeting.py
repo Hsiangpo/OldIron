@@ -23,7 +23,7 @@ from oldironcrawler.extractor import discovery_timeout as discovery_timeout_modu
 from oldironcrawler.extractor import value_rules as value_rules_module
 from oldironcrawler.importer import ImportedWebsite
 from oldironcrawler.runtime.global_learning import GlobalLearningStore
-from oldironcrawler.runtime.store import RuntimeStore
+from oldironcrawler.runtime.store import RuntimeStore, SiteStageMetrics
 
 
 def test_app_config_loads_value_budget_defaults(tmp_path: Path, monkeypatch) -> None:
@@ -1385,6 +1385,61 @@ def test_site_profile_service_keeps_reused_homepage_when_initial_email_fetch_tim
     assert fetch_calls == [[contact_url]]
     assert result.result.emails == "info@acmeholdings.co.uk"
     assert result.stage_metrics.fetched_page_count == 1
+    learning_store.close()
+    store.close()
+
+
+def test_collect_budgeted_pages_records_elapsed_when_initial_fetch_times_out(tmp_path: Path) -> None:
+    website = "https://acmeholdings.co.uk"
+    contact_url = f"{website}/contact"
+    metrics = SiteStageMetrics()
+
+    class FakeProtocolClient:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            time.sleep(0.03)
+            raise TimeoutError("page_batch_timeout")
+
+    class FakeLlmClient:
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+    config = _build_service_config()
+    config.extract_representative_enabled = False
+    config.collect_company_name_enabled = False
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    config.email_page_soft_limit = 2
+    config.email_page_hard_limit = 2
+    config.page_total_hard_limit = 4
+    store, learning_store, _task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": [website],
+        "email_primary_urls": [contact_url],
+        "email_overflow_urls": [],
+        "all_primary_urls": [website, contact_url],
+    }
+
+    try:
+        service._collect_budgeted_pages(
+            FakeProtocolClient(),
+            website,
+            fetch_plan,
+            "",
+            [],
+            metrics,
+            time.monotonic() + 10.0,
+            need_llm_extract=False,
+            collect_email_enabled=True,
+            collect_phone_enabled=False,
+        )
+    except TimeoutError as exc:
+        assert "page_batch_timeout" in str(exc)
+    else:
+        raise AssertionError("initial fetch timeout should propagate")
+
+    assert metrics.fetch_pages_ms >= 20
     learning_store.close()
     store.close()
 

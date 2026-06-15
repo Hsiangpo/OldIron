@@ -60,7 +60,6 @@ from oldironcrawler.extractor.shell_page import (
 from oldironcrawler.extractor.value_rules import merge_representative_urls
 from oldironcrawler.runtime.global_learning import GlobalLearningStore
 from oldironcrawler.runtime.store import RuntimeStore, SiteResult, SiteStageMetrics
-
 _DEFAULT_AI_EMAIL_CONCURRENCY = 32
 _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS = 8.0
 _AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS = 0.1
@@ -77,14 +76,12 @@ class SiteProcessingResult:
     result: SiteResult
     learning_feedback: "LearningFeedback"
     stage_metrics: SiteStageMetrics
-
 @dataclass
 class AiEmailFuture:
     future: Future
     started_monotonic: float
     deadline_monotonic: float
     max_wait_seconds: float
-
 class SiteProfileService:
     def __init__(
         self,
@@ -392,15 +389,20 @@ class SiteProfileService:
                 fetch_plan,
                 cascade_email_primary=cascade_email_primary,
             )
-            primary_pages, primary_fetch_ms = _fetch_initial_primary_pages_with_recovery(
-                protocol,
-                fetch_plan,
-                page_map,
-                _filter_network_primary_urls(initial_primary_urls, reused_primary_pages),
-                page_concurrency=self._config.page_concurrency,
-                page_pool=self._page_pool,
-                cascade_email_primary=cascade_email_primary,
-            )
+            initial_started = time.monotonic()
+            try:
+                primary_pages, primary_fetch_ms = _fetch_initial_primary_pages_with_recovery(
+                    protocol,
+                    fetch_plan,
+                    page_map,
+                    _filter_network_primary_urls(initial_primary_urls, reused_primary_pages),
+                    page_concurrency=self._config.page_concurrency,
+                    page_pool=self._page_pool,
+                    cascade_email_primary=cascade_email_primary,
+                )
+            except Exception:
+                primary_fetch_ms += int(round((time.monotonic() - initial_started) * 1000))
+                raise
             _merge_pages_into_map(page_map, primary_pages)
             shell_alias_map = build_shell_alias_map(
                 start_url=website,
@@ -571,7 +573,6 @@ class SiteProfileService:
         finally:
             elapsed_ms = int(round((time.monotonic() - started) * 1000))
             setattr(metrics, field_name, int(getattr(metrics, field_name, 0) or 0) + elapsed_ms)
-
 def _merge_page_targets(rep_urls: list[str], email_urls: list[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -580,7 +581,6 @@ def _merge_page_targets(rep_urls: list[str], email_urls: list[str]) -> list[str]
             seen.add(url)
             result.append(url)
     return result
-
 def _fetch_initial_primary_pages_with_recovery(
     protocol: SiteProtocolClient,
     fetch_plan: dict[str, list[str]],
