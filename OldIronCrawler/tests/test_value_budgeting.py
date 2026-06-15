@@ -13,6 +13,7 @@ if str(SRC_DIR) not in sys.path:
 
 from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.email_page_selection import build_email_teacher_pool
+from oldironcrawler.extractor.email_rules import split_emails
 from oldironcrawler.extractor.llm_client import LlmExtractionResult
 from oldironcrawler.extractor.page_pool import PageFetchPool, PageFetchPoolConfig
 from oldironcrawler.extractor.protocol_client import HtmlPage
@@ -1546,6 +1547,112 @@ def test_email_url_picker_timeout_keeps_discovered_urls(tmp_path: Path, monkeypa
     assert service_module.time.monotonic() - begin < 0.2
     learning_store.close()
     store.close()
+
+
+def test_site_profile_service_reuses_prefetched_email_pages_from_discovery(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://acmeholdings.co.uk"
+    contact_url = f"{website}/contact"
+    network_fetches: list[list[str]] = []
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            network_fetches.append(list(urls))
+            return [HtmlPage(url=website, html="<html>home</html>") for url in urls if url == website]
+
+        def close(self) -> None:
+            return None
+
+    snapshot = DiscoverySnapshot(
+        urls=[website, contact_url],
+        candidates=[],
+        rep_urls=[],
+        teacher_pool=[],
+        email_urls=[contact_url],
+        homepage_html="<html>home</html>",
+    )
+    snapshot.prefetched_pages = [
+        HtmlPage(url=contact_url, html="<html><p>sales@acmeholdings.co.uk</p></html>")
+    ]
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(service_module, "_discover_value_snapshot", lambda *_args, **_kwargs: snapshot)
+
+    config = _build_service_config()
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    config.collect_company_name_enabled = False
+    config.extract_representative_enabled = False
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, object(), page_pool=None)
+
+    result = service.process(task.id, task.website)
+
+    assert result.result.emails == "sales@acmeholdings.co.uk"
+    assert all(contact_url not in urls for urls in network_fetches)
+    learning_store.close()
+    store.close()
+
+
+def test_site_profile_service_extracts_from_prefetched_non_target_value_pages(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://acmeholdings.co.uk"
+    hidden_contact_url = f"{website}/fale-conosco"
+    network_fetches: list[list[str]] = []
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            network_fetches.append(list(urls))
+            return [HtmlPage(url=website, html="<html>home</html>") for url in urls if url == website]
+
+        def close(self) -> None:
+            return None
+
+    snapshot = DiscoverySnapshot(
+        urls=[website, hidden_contact_url],
+        candidates=[],
+        rep_urls=[],
+        teacher_pool=[],
+        email_urls=[website],
+        homepage_html="<html>home</html>",
+        prefetched_pages=[
+            HtmlPage(url=hidden_contact_url, html="<html><p>contact@acmeholdings.co.uk</p></html>")
+        ],
+    )
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(service_module, "_discover_value_snapshot", lambda *_args, **_kwargs: snapshot)
+
+    config = _build_service_config()
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    config.collect_company_name_enabled = False
+    config.extract_representative_enabled = False
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, object(), page_pool=None)
+
+    result = service.process(task.id, task.website)
+
+    assert result.result.emails == "contact@acmeholdings.co.uk"
+    assert all(hidden_contact_url not in urls for urls in network_fetches)
+    learning_store.close()
+    store.close()
+
+
+def test_split_emails_drops_common_doe_placeholder_address() -> None:
+    assert split_emails(["john@doe.com", "jane@doe.com", "contato@acme.com.br"]) == [
+        "contato@acme.com.br"
+    ]
 
 
 def test_site_profile_service_uses_discovery_deadline_for_discovery_client(tmp_path: Path, monkeypatch) -> None:

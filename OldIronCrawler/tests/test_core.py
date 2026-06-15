@@ -1599,6 +1599,10 @@ def test_discovery_snapshot_probes_common_paths_when_email_targets_missing() -> 
     assert protocol.fetch_calls
     assert "https://example.com.tr/iletisim" in snapshot.urls
     assert "https://example.com.tr/iletisim" in snapshot.email_urls
+    assert any(
+        page.url == "https://example.com.tr/iletisim" and "info@example.com.tr" in page.html
+        for page in snapshot.prefetched_pages
+    )
 
 
 def test_discovery_snapshot_probes_locale_paths_from_discovered_urls() -> None:

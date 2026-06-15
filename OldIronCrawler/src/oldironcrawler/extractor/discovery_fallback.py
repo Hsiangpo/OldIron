@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-from oldironcrawler.extractor.protocol_client import ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient
+from oldironcrawler.extractor.protocol_client import HtmlPage, ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient
 from oldironcrawler.extractor.protocol_discovery import build_common_probe_urls, extract_path_locale_prefix
 from oldironcrawler.extractor.value_rules import build_candidates, canonicalize_target_url, select_email_urls
 
@@ -30,6 +30,14 @@ def probe_common_email_value_urls(
     website: str,
     snapshot: Any,
 ) -> list[str]:
+    return [page.url for page in probe_common_email_value_pages(protocol, website, snapshot)]
+
+
+def probe_common_email_value_pages(
+    protocol: SiteProtocolClient,
+    website: str,
+    snapshot: Any,
+) -> list[HtmlPage]:
     probe_urls = _select_common_email_probe_urls(website, snapshot)
     if not probe_urls:
         return []
@@ -43,7 +51,7 @@ def probe_common_email_value_urls(
         return []
     except Exception:  # noqa: BLE001
         return []
-    return [page.url for page in pages if str(getattr(page, "html", "") or "").strip()]
+    return [page for page in pages if str(getattr(page, "html", "") or "").strip()]
 
 
 def _select_common_email_probe_urls(website: str, snapshot: Any) -> list[str]:

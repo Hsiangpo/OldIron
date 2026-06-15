@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 
 from oldironcrawler.config import AppConfig
-from oldironcrawler.extractor.discovery_fallback import has_non_homepage_email_target, probe_common_email_value_urls
+from oldironcrawler.extractor.discovery_fallback import has_non_homepage_email_target, probe_common_email_value_pages
 from oldironcrawler.extractor.email_rules import analyze_email_set, collect_emails_for_pages
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.protocol_client import HtmlPage, SiteProtocolClient
@@ -59,6 +59,7 @@ class DiscoverySnapshot:
     teacher_pool: list[str]
     email_urls: list[str]
     homepage_html: str = ""
+    prefetched_pages: list[HtmlPage] = field(default_factory=list)
 
 
 def _resolve_discovery_deadline(config: AppConfig, site_deadline_monotonic: float | None) -> float:
@@ -84,6 +85,7 @@ def _discover_value_snapshot(
     discovery_deadline_monotonic: float | None = None,
 ) -> DiscoverySnapshot:
     primary = protocol.discover_primary_urls(website, limit=_DISCOVERY_PRIMARY_LIMIT)
+    primary_prefetched_pages = list(getattr(primary, "prefetched_pages", []) or [])
     snapshot = _build_discovery_snapshot(
         website,
         primary.urls,
@@ -91,6 +93,7 @@ def _discover_value_snapshot(
         email_learned,
         rep_target_count=rep_target_count,
         homepage_html=primary.homepage_html,
+        prefetched_pages=primary_prefetched_pages,
     )
     if _has_enough_discovery_coverage(snapshot, rep_target_count=rep_target_count):
         return snapshot
@@ -105,6 +108,7 @@ def _discover_value_snapshot(
         email_learned,
         rep_target_count=rep_target_count,
         homepage_html=primary.homepage_html,
+        prefetched_pages=primary_prefetched_pages,
     )
     if _has_enough_discovery_coverage(snapshot, rep_target_count=rep_target_count):
         return snapshot
@@ -124,13 +128,16 @@ def _discover_value_snapshot(
         email_learned,
         rep_target_count=rep_target_count,
         homepage_html=primary.homepage_html,
+        prefetched_pages=primary_prefetched_pages,
     )
     if _discovery_budget_exceeded(discovery_deadline_monotonic):
         return snapshot
     if contact_target_enabled and not has_non_homepage_email_target(website, snapshot.email_urls):
-        fallback_urls = probe_common_email_value_urls(protocol, website, snapshot)
+        fallback_pages = probe_common_email_value_pages(protocol, website, snapshot)
+        fallback_urls = [page.url for page in fallback_pages]
         if fallback_urls:
             merged = _merge_unique_urls(snapshot.urls, fallback_urls, limit=_DISCOVERY_FINAL_LIMIT)
+            primary_prefetched_pages = _merge_prefetched_pages(primary_prefetched_pages, fallback_pages)
             snapshot = _build_discovery_snapshot(
                 website,
                 merged,
@@ -138,8 +145,22 @@ def _discover_value_snapshot(
                 email_learned,
                 rep_target_count=rep_target_count,
                 homepage_html=primary.homepage_html,
+                prefetched_pages=primary_prefetched_pages,
             )
     return snapshot
+
+
+def _merge_prefetched_pages(first: list[HtmlPage], second: list[HtmlPage]) -> list[HtmlPage]:
+    result: list[HtmlPage] = []
+    seen: set[str] = set()
+    for page in [*first, *second]:
+        url = str(getattr(page, "url", "") or "")
+        html = str(getattr(page, "html", "") or "")
+        if not url or url in seen or not html.strip():
+            continue
+        seen.add(url)
+        result.append(HtmlPage(url=url, html=html))
+    return result
 
 
 def _build_discovery_snapshot(
@@ -150,6 +171,7 @@ def _build_discovery_snapshot(
     *,
     rep_target_count: int = 5,
     homepage_html: str = "",
+    prefetched_pages: list[HtmlPage] | None = None,
 ) -> DiscoverySnapshot:
     candidates = build_candidates(website, discovered_urls, rep_learned, email_learned)
     rep_urls, teacher_pool = select_representative_urls(candidates, target_count=rep_target_count)
@@ -161,6 +183,7 @@ def _build_discovery_snapshot(
         teacher_pool=teacher_pool,
         email_urls=email_urls,
         homepage_html=homepage_html,
+        prefetched_pages=list(prefetched_pages or []),
     )
 
 
@@ -272,14 +295,28 @@ def _collect_email_rule_pages(page_map: dict[str, object], fetch_plan: dict[str,
         [*fetch_plan["email_primary_urls"], *fetch_plan["email_overflow_urls"]],
     )
     rep_pages = _select_pages_from_map(page_map, fetch_plan["rep_urls"])
-    return _merge_email_rule_pages(email_pages, homepage_pages, rep_pages)
+    selected_urls = [
+        *fetch_plan["homepage_primary_urls"],
+        *fetch_plan["email_primary_urls"],
+        *fetch_plan["email_overflow_urls"],
+        *fetch_plan["rep_urls"],
+    ]
+    extra_pages = _select_extra_pages_from_map(page_map, selected_urls)
+    return _merge_email_rule_pages(email_pages, homepage_pages, rep_pages, extra_pages)
 
 
 def _collect_primary_email_rule_pages(page_map: dict[str, object], fetch_plan: dict[str, list[str]]) -> list[tuple[str, str]]:
     homepage_pages = _select_pages_from_map(page_map, fetch_plan["homepage_primary_urls"])
     email_primary_pages = _select_pages_from_map(page_map, fetch_plan["email_primary_urls"])
     rep_pages = _select_pages_from_map(page_map, fetch_plan["rep_urls"])
-    return _merge_email_rule_pages(email_primary_pages, homepage_pages, rep_pages)
+    selected_urls = [*fetch_plan["homepage_primary_urls"], *fetch_plan["email_primary_urls"], *fetch_plan["rep_urls"]]
+    extra_pages = _select_extra_pages_from_map(page_map, selected_urls)
+    return _merge_email_rule_pages(email_primary_pages, homepage_pages, rep_pages, extra_pages)
+
+
+def _select_extra_pages_from_map(page_map: dict[str, object], selected_urls: list[str]) -> list:
+    selected = set(selected_urls)
+    return [page for url, page in page_map.items() if url not in selected]
 
 
 def _merge_email_rule_pages(*page_groups: list) -> list[tuple[str, str]]:
@@ -294,12 +331,25 @@ def _merge_email_rule_pages(*page_groups: list) -> list[tuple[str, str]]:
     return merged_pages
 
 
-def _build_reused_primary_pages(website: str, fetch_plan: dict[str, list[str]], homepage_html: str) -> list[HtmlPage]:
-    if not homepage_html:
-        return []
-    if website not in fetch_plan["all_primary_urls"]:
-        return []
-    return [HtmlPage(url=website, html=homepage_html)]
+def _build_reused_primary_pages(
+    website: str,
+    fetch_plan: dict[str, list[str]],
+    homepage_html: str,
+    prefetched_pages: list[HtmlPage] | None = None,
+) -> list[HtmlPage]:
+    reused: list[HtmlPage] = []
+    seen: set[str] = set()
+    if homepage_html and website in fetch_plan["all_primary_urls"]:
+        reused.append(HtmlPage(url=website, html=homepage_html))
+        seen.add(website)
+    for page in prefetched_pages or []:
+        url = str(getattr(page, "url", "") or "")
+        html = str(getattr(page, "html", "") or "")
+        if not url or url in seen or not html.strip():
+            continue
+        reused.append(HtmlPage(url=url, html=html))
+        seen.add(url)
+    return reused
 
 
 def _filter_network_primary_urls(primary_urls: list[str], reused_pages: list[HtmlPage]) -> list[str]:

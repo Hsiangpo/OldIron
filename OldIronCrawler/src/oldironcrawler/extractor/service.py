@@ -72,13 +72,11 @@ _AI_EMAIL_SEMAPHORE_LIMIT = 0
 _AI_EMAIL_EXECUTOR_LOCK = threading.Lock()
 _AI_EMAIL_EXECUTOR: DaemonProbeExecutor | None = None
 _AI_EMAIL_EXECUTOR_LIMIT = 0
-
 @dataclass
 class SiteProcessingResult:
     result: SiteResult
     learning_feedback: "LearningFeedback"
     stage_metrics: SiteStageMetrics
-
 
 @dataclass
 class AiEmailFuture:
@@ -175,6 +173,7 @@ class SiteProfileService:
                 website,
                 fetch_plan,
                 discovery.homepage_html,
+                discovery.prefetched_pages,
                 metrics,
                 deadline_monotonic,
                 need_llm_extract=need_llm_extract,
@@ -369,6 +368,7 @@ class SiteProfileService:
         website: str,
         fetch_plan: dict[str, list[str]],
         homepage_html: str,
+        prefetched_pages: list | None,
         metrics: SiteStageMetrics,
         deadline_monotonic: float | None,
         *,
@@ -380,7 +380,12 @@ class SiteProfileService:
         overflow_fetch_ms = 0
         page_map: dict[str, object] = {}
         try:
-            reused_primary_pages = _build_reused_primary_pages(website, fetch_plan, homepage_html)
+            reused_primary_pages = _build_reused_primary_pages(
+                website,
+                fetch_plan,
+                homepage_html,
+                prefetched_pages,
+            )
             _merge_pages_into_map(page_map, reused_primary_pages)
             cascade_email_primary = collect_email_enabled and not collect_phone_enabled
             initial_primary_urls = _select_initial_primary_urls(
@@ -566,7 +571,6 @@ class SiteProfileService:
         finally:
             elapsed_ms = int(round((time.monotonic() - started) * 1000))
             setattr(metrics, field_name, int(getattr(metrics, field_name, 0) or 0) + elapsed_ms)
-
 
 def _merge_page_targets(rep_urls: list[str], email_urls: list[str]) -> list[str]:
     result: list[str] = []
@@ -983,7 +987,6 @@ def _build_site_protocol_config(config: AppConfig, deadline_monotonic: float | N
         probe_worker_count=common_probe_limit,
         request_slot_limit=page_worker_count,
     )
-
 
 def _resolve_page_batch_timeout_seconds(config: AppConfig) -> float:
     """限制单轮目标页批抓时长，避免整站预算都耗在同一批卡住的子页上。"""

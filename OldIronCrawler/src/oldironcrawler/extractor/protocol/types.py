@@ -13,6 +13,7 @@ class HtmlPage:
 class DiscoveryStageResult:
     urls: list[str]
     homepage_html: str
+    prefetched_pages: list[HtmlPage] = field(default_factory=list)
 
 
 @dataclass

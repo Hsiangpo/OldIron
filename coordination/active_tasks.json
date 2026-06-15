@@ -1,5 +1,27 @@
 {
   "version": 1,
-  "updated_at": "2026-06-15T10:50:02Z",
-  "tasks": []
+  "updated_at": "2026-06-15T10:54:46Z",
+  "tasks": [
+    {
+      "task_id": "oldironcrawler-hitplus-speed-20260615",
+      "status": "in_progress",
+      "machine": "local-windows",
+      "agent": "codex",
+      "change_class": "site_local",
+      "base_branch": "main",
+      "working_branch": "main",
+      "scope": [
+        "OldIronCrawler"
+      ],
+      "planned_files": [
+        "OldIronCrawler/src/oldironcrawler/extractor",
+        "OldIronCrawler/tests"
+      ],
+      "shared_lock_ids": [],
+      "github_ref": "not-created",
+      "started_at": "2026-06-15T10:54:46Z",
+      "last_heartbeat_at": "2026-06-15T10:54:46Z",
+      "notes": "Continue OldIronCrawler systemic optimization: increase Brazil hit count while keeping >=3x speed."
+    }
+  ]
 }

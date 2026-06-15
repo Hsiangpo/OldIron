@@ -60,6 +60,7 @@ _PLACEHOLDER_EXACT_PARTS = {
     "test", "xxx", "xxxx", "xxxxx", "yourdomain", "yourdmain",
 }
 _PLACEHOLDER_DOMAIN_WORDS = {"aaa", "beispiel", "dominio", "dummy", "email", "example", "exemplo", "sample", "test", "yourdomain", "yourdmain"}
+_PLACEHOLDER_EXACT_DOMAINS = {"doe.com"}
 _PLACEHOLDER_STEM_WORDS = {"beispiel", "dummy", "email", "example", "exemplo", "name", "sample", "test"}
 _EMAIL_PRIORITY_LOCAL_PARTS = {
     "contact", "customer", "hello", "help", "hr", "info", "inquiry", "office",
@@ -402,6 +403,8 @@ def _local_part_is_placeholder(local: str) -> bool:
 def _domain_is_placeholder(domain: str) -> bool:
     labels = [label for label in str(domain or "").strip().lower().split(".") if label]
     if len(labels) < 2:
+        return True
+    if ".".join(labels) in _PLACEHOLDER_EXACT_DOMAINS:
         return True
     if ".".join(labels[-2:]) in _MULTI_LABEL_PUBLIC_SUFFIXES and len(labels) < 3:
         return True

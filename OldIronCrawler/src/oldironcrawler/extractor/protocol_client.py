@@ -2,12 +2,22 @@ from __future__ import annotations
 import re
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, wait
+from concurrent.futures import wait
 import httpx
 from curl_cffi import requests as cffi_requests
 from oldironcrawler.challenge_solver import resolve_cloudflare_challenge
 from oldironcrawler.extractor.page_pool import PageFetchPool
-from oldironcrawler.extractor.protocol.budget import COMMON_PROBE_BATCH_WAIT_CAP_SECONDS as _COMMON_PROBE_BATCH_WAIT_CAP_SECONDS, COMMON_PROBE_REQUEST_TIMEOUT_SECONDS as _COMMON_PROBE_REQUEST_TIMEOUT_SECONDS, COMMON_PROBE_SLOT_WAIT_SECONDS as _COMMON_PROBE_SLOT_WAIT_SECONDS, COMMON_PROBE_TOTAL_WAIT_CAP_SECONDS as _COMMON_PROBE_TOTAL_WAIT_CAP_SECONDS, DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS as _DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS, REQUEST_SLOT_WAIT_CAP_SECONDS as _REQUEST_SLOT_WAIT_CAP_SECONDS, REQUEST_SLOT_WAIT_FLOOR_SECONDS as _REQUEST_SLOT_WAIT_FLOOR_SECONDS, REQUEST_SLOT_WAIT_MULTIPLIER as _REQUEST_SLOT_WAIT_MULTIPLIER, SITE_DEADLINE_SAFETY_SECONDS as _SITE_DEADLINE_SAFETY_SECONDS, cap_page_fetch_timeout as _cap_page_fetch_timeout
+from oldironcrawler.extractor.protocol.budget import COMMON_PROBE_TOTAL_WAIT_CAP_SECONDS as _COMMON_PROBE_TOTAL_WAIT_CAP_SECONDS, DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS as _DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS, REQUEST_SLOT_WAIT_CAP_SECONDS as _REQUEST_SLOT_WAIT_CAP_SECONDS, REQUEST_SLOT_WAIT_FLOOR_SECONDS as _REQUEST_SLOT_WAIT_FLOOR_SECONDS, REQUEST_SLOT_WAIT_MULTIPLIER as _REQUEST_SLOT_WAIT_MULTIPLIER, SITE_DEADLINE_SAFETY_SECONDS as _SITE_DEADLINE_SAFETY_SECONDS, cap_page_fetch_timeout as _cap_page_fetch_timeout
+from oldironcrawler.extractor.protocol.common_probe import (
+    get_prefetched_value_pages as _get_prefetched_value_pages,
+    has_enough_discovery_hits as _has_enough_discovery_hits,
+    probe_common_value_batch_with_hooks as _probe_common_value_batch_with_hooks,
+    probe_common_value_url as _probe_common_value_url_impl,
+    probe_common_value_urls_with_hooks as _probe_common_value_urls_with_hooks,
+    reset_prefetched_value_pages as _reset_prefetched_value_pages,
+    resolve_common_probe_scan_deadline as _resolve_common_probe_scan_deadline,
+    should_stop_common_probe_scan as _should_stop_common_probe_scan,
+)
 from oldironcrawler.extractor.protocol.content import (
     decode_bytes as _decode_bytes,
     decode_response_text as _decode_response_text,
@@ -90,9 +100,14 @@ class SiteProtocolClient:
         )
         return _merge_unique_urls(extra_urls, urls, limit=limit)
     def discover_primary_urls(self, start_url: str, *, limit: int = 80) -> DiscoveryStageResult:
+        _reset_prefetched_value_pages(self)
         session = self._get_or_create_session()
         urls, homepage_html = self._discover_primary_urls(session, start_url, limit=limit)
-        return DiscoveryStageResult(urls=urls, homepage_html=homepage_html)
+        return DiscoveryStageResult(
+            urls=urls,
+            homepage_html=homepage_html,
+            prefetched_pages=_get_prefetched_value_pages(self),
+        )
     def discover_sitemap_urls(self, start_url: str, *, limit: int = 80) -> list[str]:
         session = self._get_or_create_session()
         return self._discover_sitemap_urls(session, start_url, limit=limit)
@@ -837,101 +852,35 @@ class SiteProtocolClient:
         *,
         limit: int,
     ) -> list[str]:
-        probe_urls = _build_common_probe_urls(start_url)
-        if not probe_urls:
-            return []
-        result: list[str] = []
-        probe_target = min(max(self._config.common_probe_target, 1), max(limit, 1), len(probe_urls))
-        batch_size = min(max(self._config.common_probe_concurrency, 1), len(probe_urls))
-        start_index = 0
-        empty_batches = 0
-        scan_deadline = self._resolve_common_probe_scan_deadline()
-        while start_index < len(probe_urls) and len(result) < probe_target:
-            if time.monotonic() >= scan_deadline:
-                break
-            batch = probe_urls[start_index : start_index + batch_size]
-            start_index += batch_size
-            batch_hits = self._probe_common_value_batch(batch, scan_deadline_monotonic=scan_deadline)
-            result = _merge_unique_urls(
-                result,
-                batch_hits,
-                limit=probe_target,
-            )
-            if batch_hits:
-                empty_batches = 0
-            else:
-                empty_batches += 1
-            if self._should_stop_common_probe_scan(
-                batch_count=max(start_index // max(batch_size, 1), 1),
-                hit_count=len(result),
-                empty_batches=empty_batches,
-            ):
-                break
-        return result
+        return _probe_common_value_urls_with_hooks(
+            self,
+            start_url,
+            limit=limit,
+            build_probe_urls=_build_common_probe_urls,
+            total_wait_cap_seconds=_COMMON_PROBE_TOTAL_WAIT_CAP_SECONDS,
+        )
     def _probe_common_value_batch(
         self,
         probe_urls: list[str],
         *,
         scan_deadline_monotonic: float | None = None,
     ) -> list[str]:
-        if not probe_urls:
-            return []
-        futures: dict[Future, str] = {}
-        results: list[str] = []
-        batch_timeout = min(self._config.timeout_seconds, _COMMON_PROBE_BATCH_WAIT_CAP_SECONDS)
-        wait_deadline = time.monotonic() + self._resolve_timeout(batch_timeout)
-        if scan_deadline_monotonic is not None:
-            wait_deadline = min(wait_deadline, scan_deadline_monotonic)
-        for probe_url in probe_urls:
-            futures[get_probe_executor().submit(self._probe_common_value_url, probe_url)] = probe_url
-        while futures:
-            remaining = wait_deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            done, _ = wait(futures.keys(), timeout=remaining, return_when=FIRST_COMPLETED)
-            if not done:
-                break
-            for future in done:
-                futures.pop(future, None)
-                try:
-                    keep = future.result()
-                except Exception:  # noqa: BLE001
-                    continue
-                if keep:
-                    results.append(str(keep))
-        for future in futures:
-            future.cancel()
-        return results
+        return _probe_common_value_batch_with_hooks(
+            self,
+            probe_urls,
+            scan_deadline_monotonic=scan_deadline_monotonic,
+            executor_factory=get_probe_executor,
+            wait_func=wait,
+        )
 
     def _resolve_common_probe_scan_deadline(self) -> float:
-        budget_deadline = time.monotonic() + _COMMON_PROBE_TOTAL_WAIT_CAP_SECONDS
-        config_deadline = self._config.deadline_monotonic
-        if config_deadline is None:
-            return budget_deadline
-        return min(config_deadline, budget_deadline)
+        return _resolve_common_probe_scan_deadline(
+            self,
+            total_wait_cap_seconds=_COMMON_PROBE_TOTAL_WAIT_CAP_SECONDS,
+        )
 
     def _probe_common_value_url(self, probe_url: str) -> str | None:
-        session = self._get_or_create_session()
-        request_deadline = time.monotonic() + min(
-            self._config.timeout_seconds,
-            _COMMON_PROBE_REQUEST_TIMEOUT_SECONDS,
-        )
-        try:
-            html_text = self._fetch_html(
-                session,
-                probe_url,
-                required=False,
-                timeout_seconds=min(self._config.timeout_seconds, _COMMON_PROBE_REQUEST_TIMEOUT_SECONDS),
-                max_retries_override=0,
-                request_slot_wait_seconds=_COMMON_PROBE_SLOT_WAIT_SECONDS,
-                request_deadline_monotonic=request_deadline,
-                allow_httpx_fallback=False,
-                use_request_slot=True,
-            )
-        except ProtocolPermanentError:
-            # 鍏叡鎺㈡祴闃舵鍙繚鐣欑湡瀹炴鏂囬〉锛屾寫鎴橀〉涓嶅啀褰撴垚鈥滃懡涓〉鈥濄€?
-            return None
-        return probe_url if html_text.strip() else None
+        return _probe_common_value_url_impl(self, probe_url)
 
     def _has_enough_discovery_hits(self, urls: list[str]) -> bool:
         return len(urls) >= max(self._config.common_probe_target, 1)

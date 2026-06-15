@@ -331,12 +331,20 @@ def replace_shell_pages_with_evidence(
 ) -> int:
     started = time.monotonic()
     shell_deadline = _resolve_shell_replace_deadline(deadline_monotonic)
+    attempted_count = 0
     for url in target_urls:
-        if shell_deadline - time.monotonic() <= _SHELL_REPLACE_MIN_REMAINING_SECONDS:
+        remaining = shell_deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        remaining_floor = max(_SHELL_REPLACE_MIN_REMAINING_SECONDS, _SHELL_REPLACE_MIN_REMAINING_SECONDS * 2)
+        if attempted_count > 0 and _SHELL_REPLACE_BUDGET_SECONDS <= remaining_floor:
+            break
+        if attempted_count > 0 and remaining <= remaining_floor:
             break
         page = page_map.get(url)
         if page is None or not looks_like_shell_page(getattr(page, "html", "")):
             continue
+        attempted_count += 1
         enriched_html = _enrich_shell_page_html_with_deadline(
             page.url,
             page.html,
