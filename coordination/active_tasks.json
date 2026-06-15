@@ -1,27 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-06-15T14:25:49Z",
-  "tasks": [
-    {
-      "task_id": "oldironcrawler-brazil-timeout-reporting-20260615",
-      "status": "in_progress",
-      "machine": "local-windows",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [
-        "OldIronCrawler/src/oldironcrawler/extractor/service.py",
-        "OldIronCrawler/tests"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-15T14:25:49Z",
-      "last_heartbeat_at": "2026-06-15T14:25:49Z",
-      "notes": "Fix misleading zero fetch timing for Brazil timeout failures and validate crawler error reporting."
-    }
-  ]
+  "updated_at": "2026-06-15T14:34:53Z",
+  "tasks": []
 }
