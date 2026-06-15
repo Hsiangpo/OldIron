@@ -171,6 +171,48 @@ def test_extract_emails_from_pages_uses_single_fast_attempt(monkeypatch) -> None
     assert captured_kwargs[0]["max_retries"] == 1
 
 
+def test_extract_emails_from_pages_short_ai_deadline_still_calls_llm(monkeypatch) -> None:
+    client = _email_client()
+    calls: list[dict] = []
+
+    def fake_chat_call(kwargs, **call_kwargs):
+        calls.append({"kwargs": kwargs, "call_kwargs": call_kwargs})
+        return '{"emails":["info@acme.example"]}'
+
+    monkeypatch.setattr(client, "_call_chat_with_retry", fake_chat_call)
+    try:
+        emails = client.extract_emails_from_pages(
+            homepage="https://acme.example",
+            pages=[{"url": "https://acme.example/contact", "html": "<html>info at acme dot example</html>"}],
+            deadline_monotonic=time.monotonic() + 2.0,
+        )
+    finally:
+        client.close()
+
+    assert emails == ["info@acme.example"]
+    assert calls
+
+
+def test_call_json_enforces_hard_deadline(monkeypatch) -> None:
+    client = _email_client()
+    release = threading.Event()
+
+    def blocking_call(*_args, **_kwargs):
+        release.wait(timeout=0.35)
+        return '{"emails":[]}'
+
+    monkeypatch.setattr(client, "_call_with_retry", blocking_call)
+    begin = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            client._call_json("{}", deadline_monotonic=time.monotonic() + 0.05)
+    finally:
+        release.set()
+        client.close()
+
+    assert time.monotonic() - begin < 0.2
+
+
 def test_pick_email_urls_keeps_only_given_candidates(monkeypatch) -> None:
     client = _email_client()
     candidates = [
@@ -509,6 +551,89 @@ def test_ai_email_future_join_has_merge_hard_cap(monkeypatch) -> None:
         ai_email_future=ai_email_future,
         metrics=service_module.SiteStageMetrics(),
         deadline_monotonic=time.monotonic() + 10.0,
+    )
+
+    elapsed = time.monotonic() - begin
+    assert emails == []
+    assert elapsed >= 0.03
+    assert elapsed < 0.12
+
+
+def test_ai_email_future_default_join_wait_is_tiny() -> None:
+    pending_future = Future()
+    ai_email_future = service_module.AiEmailFuture(
+        future=pending_future,
+        started_monotonic=time.monotonic(),
+        deadline_monotonic=time.monotonic() + 10.0,
+        max_wait_seconds=5.0,
+    )
+
+    begin = time.monotonic()
+    emails = service_module._merge_ai_email_future(
+        website="https://acme.example",
+        rule_emails=[],
+        email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+        ai_email_future=ai_email_future,
+        metrics=service_module.SiteStageMetrics(),
+        deadline_monotonic=time.monotonic() + 10.0,
+    )
+
+    elapsed = time.monotonic() - begin
+    assert emails == []
+    assert elapsed < 0.15
+
+
+def test_ai_email_future_join_clamps_helper_wait_to_hard_cap(monkeypatch) -> None:
+    pending_future = Future()
+    ai_email_future = service_module.AiEmailFuture(
+        future=pending_future,
+        started_monotonic=time.monotonic(),
+        deadline_monotonic=time.monotonic() + 60.0,
+        max_wait_seconds=60.0,
+    )
+    monkeypatch.setattr(service_module, "_AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(service_module, "_remaining_ai_email_wait_seconds", lambda *_args, **_kwargs: 0.2)
+
+    begin = time.monotonic()
+    emails = service_module._merge_ai_email_future(
+        website="https://acme.example",
+        rule_emails=[],
+        email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+        ai_email_future=ai_email_future,
+        metrics=service_module.SiteStageMetrics(),
+        deadline_monotonic=time.monotonic() + 60.0,
+    )
+
+    elapsed = time.monotonic() - begin
+    assert emails == []
+    assert elapsed >= 0.03
+    assert elapsed < 0.12
+
+
+def test_ai_email_future_join_does_not_trust_wait_timeout(monkeypatch) -> None:
+    pending_future = Future()
+    ai_email_future = service_module.AiEmailFuture(
+        future=pending_future,
+        started_monotonic=time.monotonic(),
+        deadline_monotonic=time.monotonic() + 60.0,
+        max_wait_seconds=0.05,
+    )
+    monkeypatch.setattr(service_module, "_AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS", 0.05, raising=False)
+
+    def blocking_wait(_futures, timeout=None):
+        time.sleep(0.35)
+        return set(), set()
+
+    monkeypatch.setattr(service_module, "wait_for_futures", blocking_wait)
+
+    begin = time.monotonic()
+    emails = service_module._merge_ai_email_future(
+        website="https://acme.example",
+        rule_emails=[],
+        email_rule_pages=[("https://acme.example/contact", "<html>plain contact page</html>")],
+        ai_email_future=ai_email_future,
+        metrics=service_module.SiteStageMetrics(),
+        deadline_monotonic=time.monotonic() + 60.0,
     )
 
     elapsed = time.monotonic() - begin

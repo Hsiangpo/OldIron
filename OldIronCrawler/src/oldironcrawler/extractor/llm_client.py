@@ -8,6 +8,7 @@ import re
 import sys
 import time
 import threading
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,7 @@ from markdownify import MarkdownConverter
 from openai import OpenAI
 
 from oldironcrawler.extractor.email_page_selection import prepare_email_pages_for_llm
+from oldironcrawler.extractor.protocol_runtime import DaemonProbeExecutor
 from oldironcrawler.llm_errors import LlmIntervention, classify_llm_exception
 
 
@@ -455,10 +457,13 @@ class WebsiteLlmClient:
         if not acquired:
             raise TimeoutError("llm_queue_timeout")
         try:
-            output = self._call_with_retry(
-                kwargs,
+            output = _call_with_hard_deadline(
+                lambda: self._call_with_retry(
+                    kwargs,
+                    deadline_monotonic=deadline_monotonic,
+                    max_retries=max_retries,
+                ),
                 deadline_monotonic=deadline_monotonic,
-                max_retries=max_retries,
             )
         finally:
             semaphore.release()
@@ -708,13 +713,34 @@ def _bounded_deadline_timeout(base_timeout: float, deadline_monotonic: float | N
 def _remaining_deadline_seconds(deadline_monotonic: float | None) -> float | None:
     if deadline_monotonic is None:
         return None
-    return deadline_monotonic - time.monotonic() - _SITE_DEADLINE_SAFETY_SECONDS
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= _SITE_DEADLINE_SAFETY_SECONDS:
+        return remaining
+    return remaining - _SITE_DEADLINE_SAFETY_SECONDS
 
 
 def _raise_if_deadline_exceeded(deadline_monotonic: float | None) -> None:
     remaining = _remaining_deadline_seconds(deadline_monotonic)
     if remaining is not None and remaining <= 0:
         raise TimeoutError("site_deadline_exceeded")
+
+
+def _call_with_hard_deadline(call, *, deadline_monotonic: float | None) -> str:
+    remaining = _remaining_deadline_seconds(deadline_monotonic)
+    if remaining is None:
+        return call()
+    if remaining <= 0:
+        raise TimeoutError("site_deadline_exceeded")
+    executor = DaemonProbeExecutor(max_workers=1)
+    future = executor.submit(call)
+    try:
+        return future.result(timeout=remaining)
+    except FutureTimeoutError as exc:
+        future.cancel()
+        raise TimeoutError("site_deadline_exceeded") from exc
+    finally:
+        # SDK 请求底层偶发不听 timeout，不能让它继续占着调用方线程。
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _extract_response_text(response: Any) -> str:

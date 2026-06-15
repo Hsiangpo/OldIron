@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import gzip
 import re
 from collections.abc import Callable
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
+from oldironcrawler.extractor.protocol.content import decode_bytes
 from oldironcrawler.extractor.protocol_discovery import (
     is_supported_url,
     prioritize_discovery_urls,
 )
+from oldironcrawler.extractor.protocol_runtime import request_slot
 
 _ROBOTS_SITEMAP_RE = re.compile(r"^Sitemap:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 _NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
@@ -35,6 +38,38 @@ def discover_sitemap_urls(base_url: str, *, limit: int, fetch_text: Callable[[st
             fetch_text=fetch_text,
         )
     return prioritize_discovery_urls(base_url, urls, limit=limit)
+
+
+def fetch_sitemap_text(
+    session: object,
+    url: str,
+    *,
+    deadline_monotonic: float | None,
+    request_timeout: Callable[..., float],
+    request_slot_wait_timeout: Callable[..., float],
+) -> str:
+    try:
+        timeout_seconds = request_timeout(deadline_monotonic=deadline_monotonic)
+        with request_slot(
+            timeout_seconds=timeout_seconds,
+            wait_timeout_seconds=request_slot_wait_timeout(
+                timeout_seconds,
+                deadline_monotonic=deadline_monotonic,
+            ),
+        ):
+            timeout_seconds = request_timeout(deadline_monotonic=deadline_monotonic)
+            response = session.get(url, timeout=timeout_seconds)
+        if int(response.status_code) != 200:
+            return ""
+        content = response.content or b""
+        if url.endswith(".gz") or content[:2] == b"\x1f\x8b":
+            try:
+                content = gzip.decompress(content)
+            except Exception:  # noqa: BLE001
+                pass
+        return decode_bytes(content, str(response.headers.get("Content-Type", "") or ""))
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _find_sitemap_locations(base_url: str, fetch_text: Callable[[str], str]) -> list[str]:

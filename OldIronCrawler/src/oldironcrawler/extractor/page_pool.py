@@ -67,6 +67,7 @@ class PageFetchPool:
             batch_timeout_seconds=timeout_seconds,
             inflight_limit=inflight_limit,
             pending_urls=deque(urls),
+            active_deadline_monotonic=min(_now_monotonic() + timeout_seconds, deadline_monotonic),
         )
         timed_out = False
         with self._condition:

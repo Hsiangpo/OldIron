@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,9 +14,11 @@ if str(SRC_DIR) not in sys.path:
 from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.email_page_selection import build_email_teacher_pool
 from oldironcrawler.extractor.llm_client import LlmExtractionResult
+from oldironcrawler.extractor.page_pool import PageFetchPool, PageFetchPoolConfig
 from oldironcrawler.extractor.protocol_client import HtmlPage
 from oldironcrawler.extractor.service import DiscoverySnapshot, SiteProfileService
 from oldironcrawler.extractor import service as service_module
+from oldironcrawler.extractor import discovery_timeout as discovery_timeout_module
 from oldironcrawler.extractor import value_rules as value_rules_module
 from oldironcrawler.importer import ImportedWebsite
 from oldironcrawler.runtime.global_learning import GlobalLearningStore
@@ -185,6 +188,59 @@ def test_discovery_budget_skips_extra_stages_after_primary(monkeypatch) -> None:
     assert snapshot.urls == [f"{website}/products"]
     assert protocol.sitemap_calls == 0
     assert protocol.related_calls == 0
+
+
+def test_discovery_timeout_does_not_block_following_discovery() -> None:
+    slow_started = []
+
+    def slow_discover(*_args, **_kwargs):
+        slow_started.append(True)
+        time.sleep(0.25)
+        return service_module.DiscoverySnapshot(
+            urls=["https://slow.example/contact"],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=["https://slow.example/contact"],
+            homepage_html="",
+        )
+
+    def fast_discover(*_args, **_kwargs):
+        return service_module.DiscoverySnapshot(
+            urls=["https://fast.example/contact"],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=["https://fast.example/contact"],
+            homepage_html="",
+        )
+
+    slow_snapshot = discovery_timeout_module.discover_value_snapshot_or_homepage(
+        slow_discover,
+        object(),
+        "https://slow.example",
+        {},
+        {},
+        rep_target_count=0,
+        contact_target_enabled=True,
+        discovery_deadline_monotonic=time.monotonic() + 0.02,
+        discovery_workers=1,
+    )
+    fast_snapshot = discovery_timeout_module.discover_value_snapshot_or_homepage(
+        fast_discover,
+        object(),
+        "https://fast.example",
+        {},
+        {},
+        rep_target_count=0,
+        contact_target_enabled=True,
+        discovery_deadline_monotonic=time.monotonic() + 0.10,
+        discovery_workers=1,
+    )
+
+    assert slow_started
+    assert slow_snapshot.urls == ["https://slow.example"]
+    assert fast_snapshot.urls == ["https://fast.example/contact"]
 
 
 def test_build_fetch_plan_preserves_rep_pages_and_total_budget() -> None:
@@ -1248,6 +1304,66 @@ def test_site_profile_service_fetches_remaining_primary_email_pages_after_fast_t
     store.close()
 
 
+def test_site_profile_service_keeps_reused_homepage_when_initial_email_fetch_times_out(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://acmeholdings.co.uk"
+    contact_url = f"{website}/contact"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            raise TimeoutError("page_batch_timeout")
+
+        def close(self) -> None:
+            return None
+
+    class FakeLlmClient:
+        def pick_email_urls(self, **_kwargs):
+            return []
+
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(
+        service_module,
+        "_discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=[website, contact_url],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=[website, contact_url],
+            homepage_html="<html><p>Contact us at info@acmeholdings.co.uk</p></html>",
+        ),
+    )
+
+    config = _build_service_config()
+    config.extract_representative_enabled = False
+    config.collect_company_name_enabled = False
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    config.email_page_soft_limit = 2
+    config.email_page_hard_limit = 2
+    config.page_total_hard_limit = 4
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+
+    result = service.process(task.id, task.website)
+
+    assert fetch_calls == [[contact_url]]
+    assert result.result.emails == "info@acmeholdings.co.uk"
+    assert result.stage_metrics.fetched_page_count == 1
+    learning_store.close()
+    store.close()
+
+
 def test_ai_email_extraction_uses_short_deadline() -> None:
     captured_remaining: list[float] = []
 
@@ -1467,6 +1583,56 @@ def test_site_profile_service_skips_email_overflow_when_representative_page_emai
     assert result.result.emails == "support@acmeholdings.co.uk; founder@acmeholdings.co.uk"
     learning_store.close()
     store.close()
+
+
+def test_page_fetch_pool_batch_timeout_starts_while_waiting_for_slot() -> None:
+    pool = PageFetchPool(PageFetchPoolConfig(worker_count=1, per_host_limit=1))
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_fetch(url: str) -> HtmlPage:
+        started.set()
+        release.wait(timeout=0.5)
+        return HtmlPage(url=url, html="<html>ok</html>")
+
+    first_done: list[object] = []
+
+    def run_first_batch() -> None:
+        try:
+            first_done.extend(
+                pool.fetch_pages(
+                    urls=["https://a.example/slow"],
+                    fetch_one=blocking_fetch,
+                    deadline_monotonic=time.monotonic() + 2.0,
+                    batch_timeout_seconds=0.5,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            first_done.append(exc)
+
+    thread = threading.Thread(target=run_first_batch)
+    thread.start()
+    assert started.wait(timeout=0.3)
+
+    begin = time.monotonic()
+    try:
+        try:
+            pool.fetch_pages(
+                urls=["https://b.example/queued"],
+                fetch_one=lambda url: HtmlPage(url=url, html="<html>queued</html>"),
+                deadline_monotonic=time.monotonic() + 1.0,
+                batch_timeout_seconds=0.05,
+            )
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("queued batch should time out before a worker is free")
+    finally:
+        release.set()
+        thread.join(timeout=1.0)
+        pool.close()
+
+    assert time.monotonic() - begin < 0.2
 
 
 def _build_service_config() -> SimpleNamespace:

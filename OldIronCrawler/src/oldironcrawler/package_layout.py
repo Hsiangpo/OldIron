@@ -36,7 +36,13 @@ _PACKAGED_SECRET_KEYS = (
     "CLOUDFLARE_PROXY_URL",
     "PROXY_URL",
 )
-_PACKAGED_OVERRIDES: dict[str, str] = {}
+_PACKAGED_OVERRIDES: dict[str, str] = {
+    "LLM_CONCURRENCY": "32",
+    "SITE_CONCURRENCY": "32",
+    "PAGE_CONCURRENCY": "32",
+    "PAGE_WORKER_COUNT": "32",
+    "PAGE_HOST_LIMIT": "32",
+}
 
 
 def build_portable_dist_folder(*, repo_root: Path, built_exe_path: Path) -> Path:

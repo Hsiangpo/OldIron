@@ -1853,6 +1853,26 @@ def test_shell_page_evidence_recovers_0xam_contact_signals() -> None:
     assert "post@0xam.de" in emails
 
 
+def test_shell_page_detection_does_not_parse_full_large_non_shell_page(monkeypatch) -> None:
+    parsed_lengths: list[int] = []
+    real_parser = shell_page_module.BeautifulSoup
+
+    def tracked_parser(markup, *args, **kwargs):
+        parsed_lengths.append(len(str(markup or "")))
+        return real_parser(markup, *args, **kwargs)
+
+    monkeypatch.setattr(shell_page_module, "BeautifulSoup", tracked_parser)
+
+    html_text = (
+        "<html><head><script src='/app.js'></script></head><body>"
+        + ("ordinary content " * 50_000)
+        + "</body></html>"
+    )
+
+    assert shell_page_module.looks_like_shell_page(html_text) is False
+    assert parsed_lengths == []
+
+
 def test_collect_emails_for_pages_keeps_embedded_same_domain_email_when_offsite_email_is_visible() -> None:
     html_text = """
     <html>

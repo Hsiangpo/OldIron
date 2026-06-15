@@ -89,18 +89,26 @@ _SHELL_ASSET_FETCH_BUDGET_SECONDS = 5.0
 _SHELL_ASSET_REQUEST_TIMEOUT_SECONDS = 2.0
 _SHELL_ASSET_MAX_BYTES = 512_000
 _SHELL_REPLACE_BUDGET_SECONDS = 3.0
+_SHELL_PAGE_PARSE_MAX_CHARS = 250_000
+_SCRIPT_SRC_RE = re.compile(r"<script\b[^>]{0,800}\bsrc\s*=", re.IGNORECASE)
+_ROOT_MARKER_RE = re.compile(
+    r"(?:data-reactroot|id\s*=\s*['\"]?(?:root|app|__next|__nuxt|svelte)['\"]?)",
+    re.IGNORECASE,
+)
 
 
 def looks_like_shell_page(page_html: str) -> bool:
-    soup = BeautifulSoup(str(page_html or ""), "lxml")
+    raw_html = str(page_html or "")
+    if not _has_script_src_signal(raw_html):
+        return False
+    if len(raw_html) > _SHELL_PAGE_PARSE_MAX_CHARS and not _has_root_marker_signal(raw_html):
+        return False
+    soup = BeautifulSoup(_shell_parse_sample(raw_html), "lxml")
     body = soup.body or soup
     text = re.sub(r"\s+", " ", body.get_text(" ", strip=True)).strip()
-    if not soup.find_all("script", src=True):
-        return False
     if _has_root_container(soup):
         return True
-    lowered = str(page_html or "").lower()
-    if "data-reactroot" in lowered or "id=\"root\"" in lowered or "id='root'" in lowered:
+    if _has_root_marker_signal(raw_html):
         return True
     if len(text) > 160:
         return False
@@ -108,7 +116,7 @@ def looks_like_shell_page(page_html: str) -> bool:
 
 
 def extract_first_party_asset_urls(page_url: str, page_html: str, *, limit: int = 6) -> list[str]:
-    soup = BeautifulSoup(str(page_html or ""), "lxml")
+    soup = BeautifulSoup(_shell_parse_sample(str(page_html or "")), "lxml")
     asset_base_url = _select_asset_base_url(page_url, soup)
     page_domain = extract_registrable_domain(asset_base_url)
     urls: list[str] = []
@@ -421,6 +429,22 @@ def _has_root_container(soup: BeautifulSoup) -> bool:
     return False
 
 
+def _has_script_src_signal(page_html: str) -> bool:
+    return bool(_SCRIPT_SRC_RE.search(str(page_html or "")))
+
+
+def _has_root_marker_signal(page_html: str) -> bool:
+    return bool(_ROOT_MARKER_RE.search(str(page_html or "")))
+
+
+def _shell_parse_sample(page_html: str) -> str:
+    raw_html = str(page_html or "")
+    if len(raw_html) <= _SHELL_PAGE_PARSE_MAX_CHARS:
+        return raw_html
+    half = max(_SHELL_PAGE_PARSE_MAX_CHARS // 2, 1)
+    return raw_html[:half] + raw_html[-half:]
+
+
 def _is_first_party_asset(page_domain: str, asset_url: str) -> bool:
     if not page_domain:
         return False
@@ -443,7 +467,7 @@ def _looks_like_text_asset(asset_url: str, content_type: str) -> bool:
 
 
 def _collect_head_lines(page_html: str) -> list[str]:
-    soup = BeautifulSoup(str(page_html or ""), "lxml")
+    soup = BeautifulSoup(_shell_parse_sample(str(page_html or "")), "lxml")
     lines: list[str] = []
     if soup.title and soup.title.string:
         title = re.sub(r"\s+", " ", str(soup.title.string or "")).strip()

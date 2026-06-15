@@ -67,6 +67,65 @@ def test_protocol_fetch_html_uses_httpx_fallback_when_curl_gets_sgcaptcha(monkey
     client.close()
 
 
+def test_discovery_homepage_timeout_respects_client_deadline(monkeypatch) -> None:
+    captured_timeouts: list[float] = []
+    client = SiteProtocolClient(
+        SiteProtocolConfig(
+            timeout_seconds=10.0,
+            deadline_monotonic=time.monotonic() + 1.0,
+        )
+    )
+
+    def fake_fetch_homepage(_url: str, timeout_seconds: float) -> str:
+        captured_timeouts.append(timeout_seconds)
+        return "<html>home</html>"
+
+    monkeypatch.setattr(client, "_fetch_discovery_homepage_httpx", fake_fetch_homepage)
+
+    html = client._fetch_discovery_homepage(object(), "https://example.com")
+
+    assert html == "<html>home</html>"
+    assert captured_timeouts
+    assert 0.0 < captured_timeouts[0] <= 1.25
+    client.close()
+
+
+def test_sitemap_fetch_timeout_respects_client_deadline(monkeypatch) -> None:
+    captured_timeouts: list[float] = []
+    client = SiteProtocolClient(
+        SiteProtocolConfig(
+            timeout_seconds=10.0,
+            deadline_monotonic=time.monotonic() + 1.0,
+        )
+    )
+
+    class FakeResponse:
+        status_code = 404
+        content = b""
+        headers = {}
+
+    class FakeSession:
+        def get(self, _url: str, timeout: float):
+            captured_timeouts.append(timeout)
+            return FakeResponse()
+
+    class NoopRequestSlot:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+    monkeypatch.setattr(protocol_module, "request_slot", lambda **_kwargs: NoopRequestSlot())
+
+    text = client._fetch_sitemap_text(FakeSession(), "https://example.com/robots.txt")
+
+    assert text == ""
+    assert captured_timeouts
+    assert 0.0 < captured_timeouts[0] <= 1.25
+    client.close()
+
+
 def test_protocol_fetch_html_uses_httpx_fallback_when_curl_returns_false_404(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
 
@@ -421,7 +480,7 @@ def test_resolve_cloudflare_challenge_skips_non_cloudflare_pages(monkeypatch) ->
     assert result == html_text
 
 
-def test_build_site_protocol_config_caps_page_batch_timeout() -> None:
+def test_build_site_protocol_config_caps_page_batch_timeout_for_fast_email_runs() -> None:
     config = SimpleNamespace(
         request_timeout_seconds=10.0,
         total_wait_seconds=180.0,
@@ -437,10 +496,10 @@ def test_build_site_protocol_config_caps_page_batch_timeout() -> None:
 
     protocol_config = _build_site_protocol_config(config, None)
 
-    assert protocol_config.page_batch_timeout_seconds == 20.0
+    assert protocol_config.page_batch_timeout_seconds == 8.0
 
 
-def test_fetch_page_optional_disables_slow_fallbacks_for_budgeted_targets(monkeypatch) -> None:
+def test_fetch_page_optional_allows_fast_httpx_fallback_but_disables_slow_fallbacks(monkeypatch) -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
     captured_kwargs: dict[str, object] = {}
 
@@ -453,7 +512,7 @@ def test_fetch_page_optional_disables_slow_fallbacks_for_budgeted_targets(monkey
     page = client._fetch_page_optional("https://example.com/contact")
 
     assert page is not None
-    assert captured_kwargs["allow_httpx_fallback"] is False
+    assert captured_kwargs["allow_httpx_fallback"] is True
     assert captured_kwargs["allow_error_fallbacks"] is False
     assert captured_kwargs["allow_tls_error_fallback"] is True
     client.close()
@@ -517,7 +576,54 @@ def test_page_fetch_request_timeout_cap_allows_slow_brazil_value_pages() -> None
     assert protocol_module._cap_page_fetch_timeout(30.0, 30.0) == 12.0
 
 
-def test_page_fetch_pool_batch_timeout_starts_after_dispatch() -> None:
+def test_fetch_pages_passes_batch_deadline_to_page_pool_requests() -> None:
+    captured_deadlines: list[float | None] = []
+    started = time.monotonic()
+
+    class FakePool:
+        def fetch_pages(
+            self,
+            *,
+            urls: list[str],
+            fetch_one,
+            deadline_monotonic: float,
+            batch_timeout_seconds: float | None = None,
+        ) -> list:
+            fetch_one(urls[0])
+            return []
+
+    client = SiteProtocolClient(
+        SiteProtocolConfig(
+            timeout_seconds=30.0,
+            page_batch_timeout_seconds=8.0,
+            deadline_monotonic=started + 180.0,
+        )
+    )
+
+    def fake_fetch_page_optional(
+        _url: str,
+        *,
+        timeout_seconds: float | None = None,
+        request_deadline_monotonic: float | None = None,
+    ):
+        captured_deadlines.append(request_deadline_monotonic)
+        return None
+
+    client._fetch_page_optional = fake_fetch_page_optional
+    try:
+        try:
+            client.fetch_pages(["https://example.com/contact"], max_workers=1, page_pool=FakePool())
+        except ProtocolTemporaryError:
+            pass
+    finally:
+        client.close()
+
+    assert captured_deadlines
+    assert captured_deadlines[0] is not None
+    assert captured_deadlines[0] - started <= 9.0
+
+
+def test_page_fetch_pool_batch_timeout_includes_queue_wait() -> None:
     pool = PageFetchPool(PageFetchPoolConfig(worker_count=1, per_host_limit=1))
     try:
         def fetch_one(url: str):
@@ -542,7 +648,12 @@ def test_page_fetch_pool_batch_timeout_starts_after_dispatch() -> None:
                 batch_timeout_seconds=0.05,
             )
 
-            assert [page.url for page in second.result(timeout=1.0)] == ["https://fast.example/contact"]
+            try:
+                second.result(timeout=1.0)
+            except TimeoutError as exc:
+                assert "page_batch_timeout" in str(exc)
+            else:
+                raise AssertionError("queued batch should not wait for a slow batch to release the worker")
             assert [page.url for page in first.result(timeout=1.0)] == ["https://slow.example/contact"]
     finally:
         pool.close()
@@ -689,6 +800,49 @@ def test_fetch_html_tls_fast_path_tries_www_fallback(monkeypatch) -> None:
     )
 
     assert "www fallback ok" in html
+    client.close()
+
+
+def test_fetch_html_tls_www_fallback_keeps_page_batch_timeout() -> None:
+    client = SiteProtocolClient(
+        SiteProtocolConfig(
+            timeout_seconds=30.0,
+            deadline_monotonic=time.monotonic() + 60.0,
+        )
+    )
+    calls: list[tuple[str, float]] = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Type": "text/html"}
+        text = "<html><body>www fallback ok</body></html>"
+        content = text.encode("utf-8")
+
+        def close(self) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, url: str, timeout: float):
+            calls.append((url, float(timeout)))
+            if url == "https://ispak.com/tr-tr":
+                raise RuntimeError("no alternative certificate subject name matches target hostname")
+            return FakeResponse()
+
+    html = client._fetch_html(
+        FakeSession(),
+        "https://ispak.com/tr-tr",
+        required=False,
+        timeout_seconds=5.0,
+        max_retries_override=0,
+        allow_httpx_fallback=False,
+        allow_error_fallbacks=False,
+        allow_tls_error_fallback=True,
+    )
+
+    assert "www fallback ok" in html
+    assert len(calls) == 2
+    assert calls[0][1] <= 5.1
+    assert calls[1][1] <= 5.1
     client.close()
 
 

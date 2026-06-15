@@ -1,5 +1,4 @@
 from __future__ import annotations
-import gzip
 import re
 import threading
 import time
@@ -42,7 +41,7 @@ from oldironcrawler.extractor.protocol.homepage import (
 )
 from oldironcrawler.extractor.protocol.httpx_client import build_httpx_client as _build_httpx_client, build_httpx_client_kwargs as _build_httpx_client_kwargs
 from oldironcrawler.extractor.protocol.types import DiscoveryStageResult, HtmlPage, SiteProtocolConfig
-from oldironcrawler.extractor.protocol.sitemap import discover_sitemap_urls as _discover_sitemap_urls
+from oldironcrawler.extractor.protocol.sitemap import discover_sitemap_urls as _discover_sitemap_urls, fetch_sitemap_text as _fetch_sitemap_text
 from oldironcrawler.extractor.protocol_discovery import (
     build_common_probe_urls as _build_common_probe_urls,
     extract_registrable_domain as _extract_registrable_domain,
@@ -127,15 +126,15 @@ class SiteProtocolClient:
         if self._config.deadline_monotonic is not None:
             deadline = min(deadline, self._config.deadline_monotonic)
         if page_pool is not None and filtered:
-            site_deadline = self._config.deadline_monotonic or deadline
+            batch_deadline = deadline
             pages = page_pool.fetch_pages(
                 urls=filtered,
                 fetch_one=lambda url: self._call_fetch_page_optional(
                     url,
                     timeout_seconds=_cap_page_fetch_timeout(self._config.timeout_seconds, batch_timeout_seconds),
-                    request_deadline_monotonic=site_deadline,
+                    request_deadline_monotonic=batch_deadline,
                 ),
-                deadline_monotonic=site_deadline,
+                deadline_monotonic=batch_deadline,
                 batch_timeout_seconds=batch_timeout_seconds,
             )
             if pages:
@@ -179,7 +178,7 @@ class SiteProtocolClient:
             timeout_seconds=timeout_seconds,
             max_retries_override=0,
             request_deadline_monotonic=request_deadline_monotonic,
-            allow_httpx_fallback=False,
+            allow_httpx_fallback=True,
             allow_error_fallbacks=False,
             allow_tls_error_fallback=True,
         )
@@ -303,6 +302,7 @@ class SiteProtocolClient:
                         self._try_insecure_https_fallback,
                         url,
                         lowered,
+                        timeout_seconds=request_timeout,
                         request_deadline_monotonic=request_deadline_monotonic,
                     )
                     if insecure_html is not None:
@@ -312,6 +312,7 @@ class SiteProtocolClient:
                         session,
                         url,
                         lowered,
+                        timeout_seconds=request_timeout,
                         request_deadline_monotonic=request_deadline_monotonic,
                     )
                     if www_html is not None:
@@ -321,6 +322,7 @@ class SiteProtocolClient:
                         self._try_insecure_https_fallback,
                         url,
                         lowered,
+                        timeout_seconds=request_timeout,
                         request_deadline_monotonic=request_deadline_monotonic,
                     )
                     if insecure_html is not None:
@@ -330,6 +332,7 @@ class SiteProtocolClient:
                         session,
                         url,
                         lowered,
+                        timeout_seconds=request_timeout,
                         request_deadline_monotonic=request_deadline_monotonic,
                     )
                     if fallback_html is not None:
@@ -339,6 +342,7 @@ class SiteProtocolClient:
                         session,
                         url,
                         lowered,
+                        timeout_seconds=request_timeout,
                         request_deadline_monotonic=request_deadline_monotonic,
                     )
                     if www_html is not None:
@@ -633,11 +637,12 @@ class SiteProtocolClient:
         url: str,
         lowered_error: str,
         *,
+        timeout_seconds: float | None = None,
         request_deadline_monotonic: float | None = None,
     ) -> str | None:
         if not _should_try_http_fallback(url, lowered_error):
             return None
-        request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
+        request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
         client_kwargs = _build_httpx_client_kwargs(self._config.default_headers, self._config.proxy_url, request_timeout)
         client_kwargs["verify"] = False
         try:
@@ -649,7 +654,7 @@ class SiteProtocolClient:
                         deadline_monotonic=request_deadline_monotonic,
                     ),
                 ):
-                    request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
+                    request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
                     response = client.get(url, timeout=request_timeout)
                 if int(response.status_code) != 200:
                     return None
@@ -668,6 +673,7 @@ class SiteProtocolClient:
         url: str,
         lowered_error: str,
         *,
+        timeout_seconds: float | None = None,
         request_deadline_monotonic: float | None = None,
     ) -> str | None:
         if not _should_try_http_fallback(url, lowered_error):
@@ -675,7 +681,7 @@ class SiteProtocolClient:
         fallback_url = _replace_https_with_http(url)
         response = None
         try:
-            request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
+            request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
             with request_slot(
                 timeout_seconds=request_timeout,
                 wait_timeout_seconds=self._resolve_request_slot_wait_timeout(
@@ -683,7 +689,7 @@ class SiteProtocolClient:
                     deadline_monotonic=request_deadline_monotonic,
                 ),
             ):
-                request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
+                request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
                 response = session.get(fallback_url, timeout=request_timeout)
             if int(response.status_code) != 200:
                 return None
@@ -708,12 +714,13 @@ class SiteProtocolClient:
         url: str,
         lowered_error: str,
         *,
+        timeout_seconds: float | None = None,
         request_deadline_monotonic: float | None = None,
     ) -> str | None:
         for fallback_url in _build_host_fallback_urls(url, lowered_error):
             response = None
             try:
-                request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
+                request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
                 with request_slot(
                     timeout_seconds=request_timeout,
                     wait_timeout_seconds=self._resolve_request_slot_wait_timeout(
@@ -721,7 +728,7 @@ class SiteProtocolClient:
                         deadline_monotonic=request_deadline_monotonic,
                     ),
                 ):
-                    request_timeout = self._request_timeout(deadline_monotonic=request_deadline_monotonic)
+                    request_timeout = self._request_timeout(timeout_seconds, request_deadline_monotonic)
                     response = session.get(fallback_url, timeout=request_timeout)
                 if int(response.status_code) != 200:
                     continue
@@ -796,7 +803,13 @@ class SiteProtocolClient:
 
     def _fetch_discovery_homepage(self, session: cffi_requests.Session, start_url: str) -> str:
         timeout_seconds = min(self._config.timeout_seconds, _DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS)
-        return _fetch_discovery_homepage_with_host_fallback(start_url, timeout_seconds, self._fetch_discovery_homepage_httpx)
+        deadline_monotonic = self._config.deadline_monotonic
+
+        def fetch_with_deadline(url: str, _timeout_seconds: float) -> str:
+            request_timeout = self._request_timeout(timeout_seconds, deadline_monotonic)
+            return self._fetch_discovery_homepage_httpx(url, request_timeout)
+
+        return _fetch_discovery_homepage_with_host_fallback(start_url, timeout_seconds, fetch_with_deadline)
 
     def _fetch_discovery_homepage_httpx(self, start_url: str, timeout_seconds: float) -> str:
         return _fetch_discovery_homepage_httpx(
@@ -976,22 +989,10 @@ class SiteProtocolClient:
         return result
 
     def _fetch_sitemap_text(self, session: cffi_requests.Session, url: str) -> str:
-        try:
-            request_timeout = self._request_timeout()
-            with request_slot(
-                timeout_seconds=request_timeout,
-                wait_timeout_seconds=self._resolve_request_slot_wait_timeout(request_timeout),
-            ):
-                request_timeout = self._request_timeout()
-                response = session.get(url, timeout=request_timeout)
-            if int(response.status_code) != 200:
-                return ""
-            content = response.content or b""
-            if url.endswith(".gz") or content[:2] == b"\x1f\x8b":
-                try:
-                    content = gzip.decompress(content)
-                except Exception:  # noqa: BLE001
-                    pass
-            return _decode_bytes(content, str(response.headers.get("Content-Type", "") or ""))
-        except Exception:  # noqa: BLE001
-            return ""
+        return _fetch_sitemap_text(
+            session,
+            url,
+            deadline_monotonic=self._config.deadline_monotonic,
+            request_timeout=self._request_timeout,
+            request_slot_wait_timeout=self._resolve_request_slot_wait_timeout,
+        )

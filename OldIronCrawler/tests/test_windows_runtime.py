@@ -83,6 +83,10 @@ def test_packaging_targets_portable_folder_layout(tmp_path: Path) -> None:
                 "CAPSOLVER_PROXY=http://secret-proxy.local:9000",
                 "CLOUDFLARE_PROXY_URL=http://cloudflare-proxy.local:7000",
                 "LLM_CONCURRENCY=4",
+                "SITE_CONCURRENCY=64",
+                "PAGE_CONCURRENCY=64",
+                "PAGE_WORKER_COUNT=64",
+                "PAGE_HOST_LIMIT=64",
                 "AI_EMAIL_CONCURRENCY=8",
             ]
         )
@@ -108,11 +112,14 @@ def test_packaging_targets_portable_folder_layout(tmp_path: Path) -> None:
     assert "capsolver-secret" not in packaged_env
     assert "secret-proxy.local" not in packaged_env
     assert "cloudflare-proxy.local" not in packaged_env
-    assert "LLM_CONCURRENCY=4" in packaged_env
+    assert "LLM_CONCURRENCY=32" in packaged_env
+    assert "SITE_CONCURRENCY=32" in packaged_env
+    assert "PAGE_CONCURRENCY=32" in packaged_env
+    assert "PAGE_WORKER_COUNT=32" in packaged_env
+    assert "PAGE_HOST_LIMIT=32" in packaged_env
+    assert "LLM_CONCURRENCY=4" not in packaged_env
+    assert "SITE_CONCURRENCY=64" not in packaged_env
     assert "AI_EMAIL_CONCURRENCY" not in packaged_env
-    assert "PAGE_CONCURRENCY=32" not in packaged_env
-    assert "PAGE_WORKER_COUNT=32" not in packaged_env
-    assert "PAGE_HOST_LIMIT=32" not in packaged_env
     assert (package_root / "websites").is_dir()
     assert (package_root / "websites" / "把 Excel 网站表放到这里.md").exists()
     assert (package_root / "output").is_dir()

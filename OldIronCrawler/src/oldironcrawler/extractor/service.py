@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError, wait as wait_for_futures
 from dataclasses import dataclass
 import threading
 import time
@@ -63,8 +63,8 @@ from oldironcrawler.runtime.store import RuntimeStore, SiteResult, SiteStageMetr
 
 _DEFAULT_AI_EMAIL_CONCURRENCY = 32
 _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS = 8.0
-_AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS = 8.0
-_AI_EMAIL_LOW_SIGNAL_TIMEOUT_SECONDS = 6.0
+_AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS = 0.1
+_AI_EMAIL_LOW_SIGNAL_TIMEOUT_SECONDS = 0.5
 _AI_EMAIL_SEMAPHORE_LOCK = threading.Lock()
 _AI_EMAIL_SEMAPHORE: threading.Semaphore | None = None
 _AI_EMAIL_SEMAPHORE_LIMIT = 0
@@ -633,6 +633,8 @@ def _should_recover_initial_primary_fetch(
         return False
     if not _is_recoverable_initial_fetch_error(exc):
         return False
+    if page_map:
+        return True
     failed_urls = set(primary_urls)
     remaining_urls = [
         url for url in _select_unfetched_primary_urls(fetch_plan, page_map)
@@ -826,13 +828,14 @@ def _merge_ai_email_future(
     try:
         # 规则没有命中时，最多只等 AI 剩余预算；超时后后台任务继续跑完。
         wait_timeout = _remaining_ai_email_wait_seconds(ai_email_future, deadline_monotonic)
+        wait_timeout = min(wait_timeout, max(float(_AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS), 0.01))
         if ai_email_future.future.done():
             wait_timeout = 0.0
         elif not isinstance(ai_email_future.future, Future):
             return rule_emails
         elif wait_timeout <= 0:
             return rule_emails
-        ai_emails = ai_email_future.future.result(timeout=wait_timeout)
+        ai_emails = _await_ai_email_future(ai_email_future.future, wait_timeout)
     except FutureTimeoutError:
         return rule_emails
     except LlmConfigurationError:
@@ -857,6 +860,16 @@ def _remaining_ai_email_wait_seconds(
     if deadline_monotonic is not None:
         remaining = min(remaining, max(deadline_monotonic - now, 0.0))
     return remaining
+
+
+def _await_ai_email_future(future: Future, wait_timeout: float):
+    # 这里等待的是本地 Future，不直接等 SDK 网络调用；标准超时比自写忙轮询更稳。
+    timeout = max(float(wait_timeout or 0.0), 0.0)
+    if timeout <= 0:
+        if future.done():
+            return future.result(timeout=0)
+        raise FutureTimeoutError()
+    return future.result(timeout=timeout)
 
 
 def _get_ai_email_semaphore(limit: int) -> threading.Semaphore:
@@ -935,7 +948,8 @@ def _pick_email_urls_with_deadline(
         if timeout is not None and timeout <= 0:
             future.cancel()
             return []
-        return future.result(timeout=timeout) or []
+        wait_timeout = timeout if timeout is None else min(timeout, _AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS)
+        return _await_ai_email_future(future, wait_timeout or 0.0) or []
     except FutureTimeoutError:
         future.cancel()
         return []
@@ -972,5 +986,5 @@ def _resolve_page_batch_timeout_seconds(config: AppConfig) -> float:
         float(getattr(config, "total_wait_seconds", request_timeout * 2) or 0.0),
         request_timeout * 2,
     )
-    batch_ceiling = min(max(request_timeout * 2, 12.0), 20.0)
-    return max(min(site_budget, batch_ceiling), min(request_timeout * 2, batch_ceiling))
+    batch_ceiling = 8.0
+    return max(min(site_budget, batch_ceiling), min(request_timeout, batch_ceiling))

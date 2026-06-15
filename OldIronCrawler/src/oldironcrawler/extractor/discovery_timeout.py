@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-from concurrent.futures import TimeoutError as FutureTimeoutError
-import threading
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 import time
 from typing import Callable
 
 from oldironcrawler.extractor.protocol_runtime import DaemonProbeExecutor
 from oldironcrawler.extractor.service_discovery import DiscoverySnapshot
-
-_EXECUTOR_LOCK = threading.Lock()
-_EXECUTOR: DaemonProbeExecutor | None = None
-_EXECUTOR_LIMIT = 0
 
 
 def discover_value_snapshot_or_homepage(
@@ -28,7 +23,9 @@ def discover_value_snapshot_or_homepage(
     timeout = _remaining_seconds(discovery_deadline_monotonic)
     if timeout is not None and timeout <= 0:
         return _homepage_snapshot(website)
-    future = _get_discovery_executor(discovery_workers).submit(
+    _ = discovery_workers
+    executor = DaemonProbeExecutor(max_workers=1)
+    future = executor.submit(
         discover_func,
         protocol,
         website,
@@ -39,10 +36,13 @@ def discover_value_snapshot_or_homepage(
         discovery_deadline_monotonic=discovery_deadline_monotonic,
     )
     try:
-        return future.result(timeout=timeout)
+        return _await_discovery_future(future, discovery_deadline_monotonic)
     except FutureTimeoutError:
-        # 发现阶段到点就降级到首页，后台探测晚返回也不再影响本站结果。
+        future.cancel()
+        # 发现阶段到点就降级到首页，慢站后台任务不能拖住本站结果。
         return _homepage_snapshot(website)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _homepage_snapshot(website: str) -> DiscoverySnapshot:
@@ -62,18 +62,13 @@ def _remaining_seconds(deadline_monotonic: float | None) -> float | None:
     return max(deadline_monotonic - time.monotonic(), 0.0)
 
 
-def _get_discovery_executor(limit: int) -> DaemonProbeExecutor:
-    normalized = min(max(int(limit or 1), 1), 32)
-    old_executor: DaemonProbeExecutor | None = None
-    with _EXECUTOR_LOCK:
-        global _EXECUTOR
-        global _EXECUTOR_LIMIT
-        if _EXECUTOR is not None and _EXECUTOR_LIMIT == normalized:
-            return _EXECUTOR
-        old_executor = _EXECUTOR
-        _EXECUTOR = DaemonProbeExecutor(max_workers=normalized)
-        _EXECUTOR_LIMIT = normalized
-        executor = _EXECUTOR
-    if old_executor is not None:
-        old_executor.shutdown(wait=False, cancel_futures=False)
-    return executor
+def _await_discovery_future(future: Future, deadline_monotonic: float | None) -> DiscoverySnapshot:
+    while True:
+        if future.done():
+            return future.result(timeout=0)
+        remaining = _remaining_seconds(deadline_monotonic)
+        if remaining is not None and remaining <= 0:
+            raise FutureTimeoutError()
+        sleep_seconds = 0.02 if remaining is None else min(remaining, 0.02)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
