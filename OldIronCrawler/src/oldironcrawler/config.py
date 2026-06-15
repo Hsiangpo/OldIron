@@ -89,7 +89,7 @@ def _resolve_proxy_url(values: Mapping[str, str]) -> str:
 
 
 def _load_config_values(project_root: Path) -> dict[str, str]:
-    file_values = dotenv_values(project_root / ".env")
+    file_values = dotenv_values(project_root / ".env", encoding="utf-8-sig")
     values = {
         str(name): str(value)
         for name, value in file_values.items()

@@ -290,6 +290,25 @@ def test_app_config_prefers_runtime_llm_key_override(tmp_path: Path) -> None:
     assert config.llm_key == "runtime-key"
 
 
+def test_app_config_loads_utf8_sig_dotenv(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "LLM_BASE_URL=https://dotenv.example/v1",
+                "LLM_KEY=dotenv-key",
+                "LLM_MODEL=dotenv-model",
+            ]
+        ),
+        encoding="utf-8-sig",
+    )
+
+    config = AppConfig.load(tmp_path)
+
+    assert config.llm_base_url == "https://dotenv.example/v1"
+    assert config.llm_key == "dotenv-key"
+    assert config.llm_model == "dotenv-model"
+
+
 def test_app_config_prefers_process_environment_over_dotenv_values(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".env").write_text(
         "\n".join(
