@@ -486,10 +486,22 @@ def drop_typo_domains_for_site(website: str, emails: list[str]) -> list[str]:
         domain = email.partition("@")[2]
         registrable = extract_registrable_domain(domain)
         if registrable and registrable != site_domain:
+            if _is_brazil_global_parent_domain(site_domain, registrable):
+                result.append(email)
+                continue
             if registrable.startswith(site_domain) or site_domain.startswith(registrable):
                 continue
         result.append(email)
     return result
+
+
+def _is_brazil_global_parent_domain(site_domain: str, email_registrable_domain: str) -> bool:
+    site = str(site_domain or "").strip().lower()
+    email_domain = str(email_registrable_domain or "").strip().lower()
+    if not site.endswith(".com.br"):
+        return False
+    base = site[: -len(".com.br")]
+    return bool(base) and email_domain == f"{base}.com"
 
 
 def _prioritize_emails(emails: list[str]) -> list[str]:

@@ -1704,6 +1704,67 @@ def test_site_profile_service_extracts_from_prefetched_non_target_value_pages(
     store.close()
 
 
+def test_site_profile_service_recovers_brazil_emails_from_unselected_people_pages(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://firma.com.br"
+    contact_url = f"{website}/contato"
+    people_url = f"{website}/advogados"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            pages = []
+            for url in urls:
+                if url == website:
+                    pages.append(HtmlPage(url=url, html="<html>home</html>"))
+                elif url == contact_url:
+                    pages.append(HtmlPage(url=url, html="<html>Contato sem email</html>"))
+                elif url == people_url:
+                    pages.append(
+                        HtmlPage(
+                            url=url,
+                            html="<html>ana@firma.com.br<br>bruno@firma.com.br</html>",
+                        )
+                    )
+            return pages
+
+        def close(self) -> None:
+            return None
+
+    snapshot = DiscoverySnapshot(
+        urls=[website, contact_url, people_url],
+        candidates=[],
+        rep_urls=[],
+        teacher_pool=[],
+        email_urls=[contact_url],
+        homepage_html="<html>home</html>",
+    )
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(service_module, "_discover_value_snapshot", lambda *_args, **_kwargs: snapshot)
+
+    config = _build_service_config()
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    config.collect_company_name_enabled = False
+    config.extract_representative_enabled = False
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, object(), page_pool=None)
+
+    result = service.process(task.id, task.website)
+
+    assert result.result.emails == "ana@firma.com.br; bruno@firma.com.br"
+    assert any(people_url in urls for urls in fetch_calls)
+    learning_store.close()
+    store.close()
+
+
 def test_split_emails_drops_common_doe_placeholder_address() -> None:
     assert split_emails(["john@doe.com", "jane@doe.com", "contato@acme.com.br"]) == [
         "contato@acme.com.br"

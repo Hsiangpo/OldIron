@@ -27,6 +27,7 @@ from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_
 from oldironcrawler.extractor.protocol_client import SiteProtocolClient, SiteProtocolConfig
 from oldironcrawler.extractor.protocol_runtime import DaemonProbeExecutor
 from oldironcrawler.extractor.representative_search import ActiveRepresentativeSearchResult
+from oldironcrawler.extractor.service_email_recovery import recover_email_pages_if_needed
 from oldironcrawler.extractor.service_discovery import (
     DiscoverySnapshot,
     _build_discovery_snapshot,
@@ -233,6 +234,14 @@ class SiteProfileService:
                         collect_email_enabled=collect_email_enabled,
                         collect_phone_enabled=collect_phone_enabled,
                     ),
+                )
+                emails, email_sources, phones, email_rule_pages = recover_email_pages_if_needed(
+                    protocol, website, discovery.urls, fetch_plan, page_map, metrics,
+                    emails, email_sources, phones, email_rule_pages,
+                    page_concurrency=self._config.page_concurrency,
+                    page_pool=self._page_pool,
+                    collect_email_enabled=collect_email_enabled,
+                    collect_phone_enabled=collect_phone_enabled,
                 )
                 if collect_email_enabled:
                     emails = _merge_ai_email_future(
@@ -497,27 +506,7 @@ class SiteProfileService:
         deadline_monotonic: float | None,
     ) -> list[str]:
         # 规则已经命中邮箱时不再跑 AI；AI 只补救规则没有识别出的拆分/隐写邮箱。
-        if rule_emails or not email_rule_pages:
-            return rule_emails
-        ai_emails = self._time_call(
-            metrics,
-            "ai_email_ms",
-            lambda: _extract_ai_emails_or_empty(
-                llm_client=self._llm,
-                homepage=website,
-                email_rule_pages=email_rule_pages,
-                deadline_monotonic=deadline_monotonic,
-                ai_email_concurrency=getattr(self._config, "ai_email_concurrency", _DEFAULT_AI_EMAIL_CONCURRENCY),
-                ai_email_timeout_seconds=getattr(
-                    self._config,
-                    "ai_email_timeout_seconds",
-                    _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS,
-                ),
-            ),
-        )
-        if not ai_emails:
-            return rule_emails
-        return merge_ai_emails_for_website(website, rule_emails, ai_emails, email_rule_pages)
+        return rule_emails
 
     def _fetch_email_overflow_pages_if_needed(
         self,

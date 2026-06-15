@@ -2023,6 +2023,30 @@ def test_select_email_urls_includes_turkey_brazil_japan_value_pages() -> None:
         assert value_url in email_urls
 
 
+def test_select_email_urls_includes_brazil_people_and_investor_pages() -> None:
+    website = "https://x.com.br"
+    candidates = build_candidates(
+        website,
+        [
+            "https://x.com.br/advogados",
+            "https://x.com.br/equipe",
+            "https://x.com.br/profissionais",
+            "https://ri.x.com.br/pt",
+            "https://x.com.br/relacoes-com-investidores",
+        ],
+        {},
+        {},
+    )
+
+    email_urls = select_email_urls(candidates)
+
+    assert "https://x.com.br/advogados" in email_urls
+    assert "https://x.com.br/equipe" in email_urls
+    assert "https://x.com.br/profissionais" in email_urls
+    assert "https://ri.x.com.br/pt" in email_urls
+    assert "https://x.com.br/relacoes-com-investidores" in email_urls
+
+
 def test_select_email_urls_includes_turkish_eposta_pages() -> None:
     value_url = "https://x.com.tr/bilgi/Telefon-Eposta.htm"
     candidates = build_candidates("https://x.com.tr", [value_url], {}, {})
@@ -2972,6 +2996,20 @@ def test_email_rules_keep_real_offsite_and_personal_mail() -> None:
     assert "https://alpha.co.jp/contact" in page_hits
 
 
+def test_email_rules_keep_brazil_global_parent_domain_mail() -> None:
+    emails, _page_hits = collect_emails_for_pages(
+        "https://sigvaris.com.br",
+        [
+            (
+                "https://sigvaris.com.br/information/legal",
+                "<html>personaldatamanagement@sigvaris.com</html>",
+            )
+        ],
+    )
+
+    assert emails == ["personaldatamanagement@sigvaris.com"]
+
+
 def test_email_rules_drop_broken_offsite_variant_when_same_local_exists_on_site_domain() -> None:
     emails, _page_hits = collect_emails_for_pages(
         "https://ganco.co.uk",
@@ -3406,6 +3444,16 @@ def test_brazil_common_probe_prioritizes_root_contato_in_first_batch() -> None:
 
     assert "https://example.com.br/contato" in brazil_urls[:4]
     assert "https://example.com.br/Contato" in brazil_urls[:4]
+
+
+def test_common_probe_urls_include_brazil_people_and_investor_paths() -> None:
+    brazil_urls = protocol_module._build_common_probe_urls("https://example.com.br")
+
+    assert "https://example.com.br/advogados" in brazil_urls
+    assert "https://example.com.br/equipe" in brazil_urls
+    assert "https://example.com.br/profissionais" in brazil_urls
+    assert "https://example.com.br/ri" in brazil_urls
+    assert "https://example.com.br/relacoes-com-investidores" in brazil_urls
 
 
 def test_company_name_fallback_prefers_site_name_and_strips_welcome_prefix() -> None:

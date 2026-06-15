@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import time
+from urllib.parse import urlparse
 
 from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.discovery_fallback import has_non_homepage_email_target, probe_common_email_value_pages
-from oldironcrawler.extractor.email_rules import analyze_email_set, collect_emails_for_pages
+from oldironcrawler.extractor.email_rules import analyze_email_set, collect_emails_for_pages, extract_registrable_domain
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.protocol_client import HtmlPage, SiteProtocolClient
 from oldironcrawler.extractor.value_rules import (
     build_candidates,
     build_fetch_plan,
+    canonicalize_target_url,
     count_selected_families,
+    extract_path_tokens,
     merge_representative_urls,
     select_email_urls,
     select_representative_urls,
@@ -24,6 +27,31 @@ _DISCOVERY_FINAL_LIMIT = 160
 _DISCOVERY_EMAIL_FAMILY_TARGET = 6
 _DISCOVERY_EMAIL_ONLY_FAMILY_TARGET = 2
 _EMAIL_PRIMARY_FAST_PROBE_LIMIT = 1
+_EMAIL_RECOVERY_LIMIT = 6
+_EMAIL_RECOVERY_MAX_PRIMARY_FETCH_MS = 8000
+_BRAZIL_EMAIL_RECOVERY_TOKEN_WEIGHTS = {
+    "advogado": 120,
+    "advogados": 130,
+    "equipe": 115,
+    "profissionais": 120,
+    "profissional": 110,
+    "socio": 100,
+    "socios": 110,
+    "investidores": 100,
+    "relacoes": 80,
+    "autorizacoes": 70,
+    "cadastro": 60,
+    "empresas": 50,
+}
+_BRAZIL_EMAIL_RECOVERY_PHRASES = (
+    ("://ri.", 120),
+    ("/advogados", 130),
+    ("/equipe", 115),
+    ("/profissionais", 120),
+    ("/relacoes-com-investidores", 120),
+    ("/autorizacoes", 70),
+    ("/cadastro", 55),
+)
 _DISCOVERY_REP_STRONG_TOKENS = {
     "board",
     "chair",
@@ -261,6 +289,113 @@ def _fetch_email_overflow_pages(
         page_concurrency=page_concurrency,
         page_pool=page_pool,
     )
+
+
+def _fetch_email_recovery_pages(
+    protocol: SiteProtocolClient,
+    website: str,
+    discovered_urls: list[str],
+    fetch_plan: dict[str, list[str]],
+    page_map: dict[str, object],
+    *,
+    page_concurrency: int,
+    page_pool: PageFetchPool | None,
+    primary_fetch_ms: int,
+) -> tuple[list, int]:
+    if not page_map or primary_fetch_ms >= _EMAIL_RECOVERY_MAX_PRIMARY_FETCH_MS:
+        return [], 0
+    recovery_urls = _select_email_recovery_urls(
+        website,
+        discovered_urls,
+        fetch_plan,
+        page_map,
+        limit=_EMAIL_RECOVERY_LIMIT,
+    )
+    if not recovery_urls:
+        return [], 0
+    try:
+        return _fetch_pages_with_elapsed(
+            protocol.fetch_pages,
+            recovery_urls,
+            page_concurrency=page_concurrency,
+            page_pool=page_pool,
+        )
+    except Exception:  # noqa: BLE001
+        return [], 0
+
+
+def _select_email_recovery_urls(
+    website: str,
+    discovered_urls: list[str],
+    fetch_plan: dict[str, list[str]],
+    page_map: dict[str, object],
+    *,
+    limit: int,
+) -> list[str]:
+    if limit <= 0 or not _is_brazil_recovery_scope(website, discovered_urls):
+        return []
+    blocked = _selected_fetch_keys(fetch_plan, page_map)
+    scored: list[tuple[int, int, str]] = []
+    fallback: list[tuple[int, str]] = []
+    for order, url in enumerate(discovered_urls):
+        value = str(url or "").strip()
+        if not value or canonicalize_target_url(value) in blocked:
+            continue
+        if not _is_same_registrable_site(website, value):
+            continue
+        score = _score_brazil_email_recovery_url(value)
+        if score > 0:
+            scored.append((-score, order, value))
+        elif _is_fetchable_recovery_url(value):
+            fallback.append((order, value))
+    result = [url for _score, _order, url in sorted(scored)]
+    for _order, url in fallback:
+        if len(result) >= limit:
+            break
+        if url not in result:
+            result.append(url)
+    return result[:limit]
+
+
+def _selected_fetch_keys(fetch_plan: dict[str, list[str]], page_map: dict[str, object]) -> set[str]:
+    selected_urls = [
+        *fetch_plan["all_primary_urls"],
+        *fetch_plan["email_overflow_urls"],
+        *list(page_map.keys()),
+    ]
+    return {canonicalize_target_url(str(url or "").strip()) for url in selected_urls if str(url or "").strip()}
+
+
+def _is_brazil_recovery_scope(website: str, discovered_urls: list[str]) -> bool:
+    site_domain = extract_registrable_domain(website)
+    if site_domain.endswith(".br"):
+        return True
+    return any(_score_brazil_email_recovery_url(url) > 0 for url in discovered_urls)
+
+
+def _is_same_registrable_site(website: str, url: str) -> bool:
+    site_domain = extract_registrable_domain(website)
+    url_domain = extract_registrable_domain(url)
+    return bool(site_domain and url_domain and site_domain == url_domain)
+
+
+def _score_brazil_email_recovery_url(url: str) -> int:
+    lowered = str(url or "").strip().lower()
+    score = 0
+    for token in extract_path_tokens(url):
+        score += _BRAZIL_EMAIL_RECOVERY_TOKEN_WEIGHTS.get(token, 0)
+    for phrase, value in _BRAZIL_EMAIL_RECOVERY_PHRASES:
+        if phrase in lowered:
+            score += value
+    return score
+
+
+def _is_fetchable_recovery_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    path = str(parsed.path or "").lower()
+    if not parsed.scheme or not parsed.netloc:
+        return False
+    return not path.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".pdf", ".zip"))
 
 
 def _should_fetch_email_overflow_after_primary_fetch(
