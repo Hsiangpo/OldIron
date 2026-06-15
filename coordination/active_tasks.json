@@ -1,27 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-06-15T16:39:30Z",
-  "tasks": [
-    {
-      "task_id": "oldironcrawler-brazil-opened-timeout-20260616",
-      "status": "in_progress",
-      "machine": "local-windows",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [
-        "OldIronCrawler/src/oldironcrawler",
-        "OldIronCrawler/tests"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-15T16:39:30Z",
-      "last_heartbeat_at": "2026-06-15T16:39:30Z",
-      "notes": "Optimize Brazil opened-without-email and timeout handling from desktop rerun."
-    }
-  ]
+  "updated_at": "2026-06-15T17:38:56Z",
+  "tasks": []
 }
