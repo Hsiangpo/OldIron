@@ -1,28 +1,5 @@
 {
   "version": 1,
-  "updated_at": "2026-06-15T13:35:55Z",
-  "tasks": [
-    {
-      "task_id": "oldironcrawler-packaged-root-fix-20260615",
-      "status": "in_progress",
-      "machine": "local-windows",
-      "agent": "codex",
-      "change_class": "site_local",
-      "base_branch": "main",
-      "working_branch": "main",
-      "scope": [
-        "OldIronCrawler"
-      ],
-      "planned_files": [
-        "OldIronCrawler/run.py",
-        "OldIronCrawler/src/oldironcrawler/bootstrap.py",
-        "OldIronCrawler/tests"
-      ],
-      "shared_lock_ids": [],
-      "github_ref": "not-created",
-      "started_at": "2026-06-15T13:35:55Z",
-      "last_heartbeat_at": "2026-06-15T13:35:55Z",
-      "notes": "Fix packaged OldIronCrawler EXE startup reading .env from bundle temp instead of desktop package directory."
-    }
-  ]
+  "updated_at": "2026-06-15T13:47:55Z",
+  "tasks": []
 }
