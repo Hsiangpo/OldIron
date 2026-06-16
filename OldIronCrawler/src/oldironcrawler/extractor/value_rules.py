@@ -59,6 +59,7 @@ _EMAIL_WEIGHTS = {
     "fale": 16,
     "faleconosco": 24,
     "form": 10,
+    "guideline": 12,
     "hakkimizda": 6,
     "datenschutz": 12,
     "impressum": 10,
@@ -269,6 +270,7 @@ _EMAIL_HARD_LIMIT = 32
 _EMAIL_FAMILY_TARGET = 6
 _LINK_HINT_FRAGMENT_PREFIX = "oi-link-"
 _REP_POSITIVE_LEARN_CAP = 10
+_EMAIL_POSITIVE_LEARN_CAP = 18
 _REP_PERSON_DETAIL_FINAL_BONUS = 8
 _LEARNING_STOP_TOKENS = {
     "and",
@@ -328,7 +330,10 @@ class UrlCandidate:
 
     @property
     def email_final_score(self) -> int:
-        return self.email_rule_score + self.email_learn_score
+        capped_email_learn_score = self.email_learn_score
+        if capped_email_learn_score > _EMAIL_POSITIVE_LEARN_CAP:
+            capped_email_learn_score = _EMAIL_POSITIVE_LEARN_CAP
+        return self.email_rule_score + capped_email_learn_score
 
 
 def build_candidates(
@@ -427,7 +432,59 @@ def select_email_urls(candidates: list[UrlCandidate]) -> list[str]:
             strong_families.add(family_key)
         if len(urls) >= _EMAIL_HARD_LIMIT:
             break
-    return urls
+    return _ensure_japan_recruit_email_url(urls, ordered)
+
+
+def _ensure_japan_recruit_email_url(urls: list[str], ordered: list[UrlCandidate]) -> list[str]:
+    recruit = _pick_japan_recruit_candidate(ordered, set(urls))
+    if recruit is None:
+        return urls
+    if len(urls) < _EMAIL_HARD_LIMIT:
+        return [*urls, recruit.url]
+    replace_index = _weakest_replaceable_email_index(urls, ordered)
+    if replace_index < 0:
+        return urls
+    updated = list(urls)
+    updated[replace_index] = recruit.url
+    return updated
+
+
+def _pick_japan_recruit_candidate(
+    ordered: list[UrlCandidate],
+    selected: set[str],
+) -> UrlCandidate | None:
+    for candidate in ordered:
+        if candidate.url in selected:
+            continue
+        if candidate.email_final_score <= 0:
+            continue
+        if _is_japan_recruit_email_candidate(candidate):
+            return candidate
+    return None
+
+
+def _is_japan_recruit_email_candidate(candidate: UrlCandidate) -> bool:
+    domain = urlparse(candidate.url).netloc.lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    if not domain.endswith(".jp"):
+        return False
+    tokens = set(candidate.tokens)
+    return bool(tokens.intersection({"career", "careers", "jobs", "recruit", "saiyo"}))
+
+
+def _weakest_replaceable_email_index(urls: list[str], ordered: list[UrlCandidate]) -> int:
+    candidate_map = {candidate.url: candidate for candidate in ordered}
+    weakest_index = -1
+    weakest_score = 10**9
+    for index, url in enumerate(urls):
+        candidate = candidate_map.get(url)
+        if candidate is None or _is_japan_recruit_email_candidate(candidate):
+            continue
+        if candidate.email_final_score < weakest_score:
+            weakest_score = candidate.email_final_score
+            weakest_index = index
+    return weakest_index
 
 
 def build_fetch_plan(
@@ -679,6 +736,7 @@ def _path_phrase_bonus(url: str, *, kind: str) -> int:
             ("ouvidoria", 14),
             ("/profissionais", 18),
             ("privacy-policy", 6),
+            ("recruit/guideline", 18),
             ("recruit/form", 10),
             ("relacoes-com-investidores", 18),
             ("telefon-e-posta", 22),

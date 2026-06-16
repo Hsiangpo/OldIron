@@ -56,11 +56,12 @@ _IGNORE_LOCAL_PARTS = {
     "youremail", "email", "noreply", "no-reply", "donotreply", "do-not-reply",
 }
 _PLACEHOLDER_EXACT_PARTS = {
-    "aaa", "aaaa", "beispiel", "dummy", "example", "exemplo", "hogehoge", "hoge", "name", "sample",
+    "aaa", "aaaa", "abc123", "beispiel", "dummy", "example", "exemplo", "hogehoge", "hoge", "name", "sample",
     "test", "xxx", "xxxx", "xxxxx", "yourdomain", "yourdmain",
 }
 _PLACEHOLDER_DOMAIN_WORDS = {"aaa", "beispiel", "dominio", "dummy", "email", "example", "exemplo", "sample", "test", "yourdomain", "yourdmain"}
 _PLACEHOLDER_EXACT_DOMAINS = {"doe.com"}
+_PLACEHOLDER_EXACT_EMAILS = {"tarou@mail.com"}
 _PLACEHOLDER_STEM_WORDS = {"beispiel", "dummy", "email", "example", "exemplo", "name", "sample", "test"}
 _EMAIL_PRIORITY_LOCAL_PARTS = {
     "contact", "customer", "hello", "help", "hr", "info", "inquiry", "office",
@@ -379,6 +380,8 @@ def _email_appears_inside_url_token(text: str, email: str) -> bool:
 
 def _is_placeholder_email(email: str) -> bool:
     value = str(email or "").strip().lower()
+    if value in _PLACEHOLDER_EXACT_EMAILS:
+        return True
     if "@" not in value:
         return True
     local, domain = value.split("@", 1)

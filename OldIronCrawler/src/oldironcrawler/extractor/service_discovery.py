@@ -52,6 +52,27 @@ _BRAZIL_EMAIL_RECOVERY_PHRASES = (
     ("/autorizacoes", 70),
     ("/cadastro", 55),
 )
+_JAPAN_EMAIL_RECOVERY_TOKEN_WEIGHTS = {
+    "contact": 130,
+    "inquiry": 130,
+    "mailform": 125,
+    "form": 105,
+    "otoiawase": 120,
+    "toiawase": 120,
+    "site": 90,
+    "support": 70,
+    "recruit": 55,
+    "saiyo": 55,
+}
+_JAPAN_EMAIL_RECOVERY_PHRASES = (
+    ("/contact", 130),
+    ("/inquiry", 130),
+    ("/mailform", 125),
+    ("/site/", 120),
+    ("/form", 105),
+    ("/support", 70),
+    ("/recruit", 55),
+)
 _DISCOVERY_REP_STRONG_TOKENS = {
     "board",
     "chair",
@@ -332,7 +353,7 @@ def _select_email_recovery_urls(
     *,
     limit: int,
 ) -> list[str]:
-    if limit <= 0 or not _is_brazil_recovery_scope(website, discovered_urls):
+    if limit <= 0 or not _is_email_recovery_scope(website, discovered_urls):
         return []
     blocked = _selected_fetch_keys(fetch_plan, page_map)
     scored: list[tuple[int, int, str]] = []
@@ -343,7 +364,7 @@ def _select_email_recovery_urls(
             continue
         if not _is_same_registrable_site(website, value):
             continue
-        score = _score_brazil_email_recovery_url(value)
+        score = _score_email_recovery_url(website, value)
         if score > 0:
             scored.append((-score, order, value))
         elif _is_fetchable_recovery_url(value):
@@ -366,10 +387,12 @@ def _selected_fetch_keys(fetch_plan: dict[str, list[str]], page_map: dict[str, o
     return {canonicalize_target_url(str(url or "").strip()) for url in selected_urls if str(url or "").strip()}
 
 
-def _is_brazil_recovery_scope(website: str, discovered_urls: list[str]) -> bool:
+def _is_email_recovery_scope(website: str, discovered_urls: list[str]) -> bool:
     site_domain = extract_registrable_domain(website)
     if site_domain.endswith(".br"):
         return True
+    if site_domain.endswith(".jp"):
+        return any(_score_japan_email_recovery_url(url) > 0 for url in discovered_urls)
     return any(_score_brazil_email_recovery_url(url) > 0 for url in discovered_urls)
 
 
@@ -385,6 +408,29 @@ def _score_brazil_email_recovery_url(url: str) -> int:
     for token in extract_path_tokens(url):
         score += _BRAZIL_EMAIL_RECOVERY_TOKEN_WEIGHTS.get(token, 0)
     for phrase, value in _BRAZIL_EMAIL_RECOVERY_PHRASES:
+        if phrase in lowered:
+            score += value
+    return score
+
+
+def _score_email_recovery_url(website: str, url: str) -> int:
+    site_domain = extract_registrable_domain(website)
+    if site_domain.endswith(".br"):
+        return _score_brazil_email_recovery_url(url)
+    if site_domain.endswith(".jp"):
+        return _score_japan_email_recovery_url(url)
+    return _score_brazil_email_recovery_url(url)
+
+
+def _score_japan_email_recovery_url(url: str) -> int:
+    lowered = str(url or "").strip().lower()
+    tokens = extract_path_tokens(url)
+    if "sitemap" in tokens:
+        return 0
+    score = 0
+    for token in tokens:
+        score += _JAPAN_EMAIL_RECOVERY_TOKEN_WEIGHTS.get(token, 0)
+    for phrase, value in _JAPAN_EMAIL_RECOVERY_PHRASES:
         if phrase in lowered:
             score += value
     return score

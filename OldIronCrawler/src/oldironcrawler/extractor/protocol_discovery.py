@@ -55,6 +55,19 @@ _VALUE_ANCHOR_PHRASES = (
     ("trabalhe conosco", "trabalhe-conosco"),
     ("e posta", "email"),
 )
+_UNICODE_VALUE_ANCHOR_PHRASES = (
+    ("お問い合わせ", "contact"),
+    ("お問合せ", "contact"),
+    ("お問合わせ", "contact"),
+    ("問い合わせ", "contact"),
+    ("問合せ", "contact"),
+    ("お問い合せ", "contact"),
+    ("メール", "mail"),
+    ("採用", "recruit"),
+    ("求人", "recruit"),
+    ("エントリー", "recruit"),
+    ("資料請求", "contact"),
+)
 _VALUE_ANCHOR_TOKENS = {
     "atendimento",
     "career",
@@ -428,6 +441,10 @@ def _add_anchor_hint_fragment(url: str, anchor_text: str) -> str:
 
 
 def _pick_anchor_value_hint(anchor_text: str) -> str:
+    unicode_text = _normalize_unicode_anchor_text(anchor_text)
+    for phrase, hint in _UNICODE_VALUE_ANCHOR_PHRASES:
+        if phrase in unicode_text:
+            return hint
     normalized = _normalize_anchor_text(anchor_text)
     if not normalized:
         return ""
@@ -438,6 +455,12 @@ def _pick_anchor_value_hint(anchor_text: str) -> str:
         if token in _VALUE_ANCHOR_TOKENS:
             return token
     return ""
+
+
+def _normalize_unicode_anchor_text(anchor_text: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", html.unescape(str(anchor_text or "")))
+    normalized = unicodedata.normalize("NFKC", text)
+    return re.sub(r"\s+", "", normalized).strip().lower()
 
 
 def _normalize_anchor_text(anchor_text: str) -> str:

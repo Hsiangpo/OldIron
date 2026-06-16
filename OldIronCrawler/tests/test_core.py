@@ -2074,6 +2074,56 @@ def test_select_email_urls_uses_value_anchor_text_for_query_only_links() -> None
     assert any(url.startswith("https://taluinsaat.com/?page_id=33") for url in email_urls)
 
 
+def test_select_email_urls_uses_japanese_contact_anchor_text_for_generic_paths() -> None:
+    html_text = """
+    <html>
+      <body>
+        <a href="/site/">お問い合わせ</a>
+        <a href="/products/">商品情報</a>
+      </body>
+    </html>
+    """
+
+    discovered = extract_same_site_links(html_text, "https://example.co.jp/", limit=10)
+    candidates = build_candidates("https://example.co.jp", discovered, {}, {})
+
+    email_urls = select_email_urls(candidates)
+
+    assert any(url.startswith("https://example.co.jp/site/") for url in email_urls)
+
+
+def test_select_email_urls_keeps_japanese_recruit_page_when_learning_scores_are_noisy() -> None:
+    discovered = [
+        *(f"https://example.co.jp/division{index}/contact/" for index in range(40)),
+        "https://example.co.jp/company/recruit/",
+    ]
+    noisy_email_learning = {
+        "contact": 60,
+    }
+
+    candidates = build_candidates("https://example.co.jp", discovered, {}, noisy_email_learning)
+    email_urls = select_email_urls(candidates)
+
+    assert "https://example.co.jp/company/recruit/" in email_urls
+
+
+def test_select_email_urls_prefers_japanese_recruit_guideline_page() -> None:
+    discovered = [
+        *(f"https://example.co.jp/division{index}/contact/" for index in range(40)),
+        "https://example.co.jp/recruit/",
+        "https://example.co.jp/recruit/about/",
+        "https://example.co.jp/recruit/guideline/",
+    ]
+    noisy_email_learning = {
+        "contact": 60,
+    }
+
+    candidates = build_candidates("https://example.co.jp", discovered, {}, noisy_email_learning)
+    email_urls = select_email_urls(candidates)
+
+    assert "https://example.co.jp/recruit/guideline/" in email_urls
+
+
 def test_select_email_urls_prioritizes_brazil_privacy_over_news_atendimento() -> None:
     candidates = build_candidates(
         "https://example.com.br",

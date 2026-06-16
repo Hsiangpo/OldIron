@@ -659,8 +659,8 @@ def test_page_fetch_pool_batch_timeout_includes_queue_wait() -> None:
         pool.close()
 
 
-def test_discovery_homepage_timeout_cap_stays_short() -> None:
-    assert 3.5 <= protocol_module._DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS <= 4.0
+def test_discovery_homepage_timeout_cap_stays_bounded() -> None:
+    assert 7.5 <= protocol_module._DISCOVERY_HOMEPAGE_TIMEOUT_CAP_SECONDS <= 8.0
 
 
 def test_discovery_homepage_uses_httpx_fast_path(monkeypatch) -> None:
@@ -695,6 +695,26 @@ def test_discovery_homepage_httpx_fast_path_has_hard_timeout(monkeypatch) -> Non
         client.close()
 
     assert time.monotonic() - started < 0.1
+
+
+def test_discovery_homepage_budget_allows_moderately_slow_homepages(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig(timeout_seconds=75.0, max_retries=0))
+    captured_timeouts: list[float] = []
+
+    def fake_fetch(_url: str, timeout_seconds: float) -> str:
+        captured_timeouts.append(timeout_seconds)
+        return "<html><a href='/contact/'>お問い合わせ</a></html>"
+
+    monkeypatch.setattr(client, "_fetch_discovery_homepage_httpx", fake_fetch)
+
+    try:
+        html_text = client._fetch_discovery_homepage(object(), "https://example.co.jp")
+    finally:
+        client.close()
+
+    assert html_text
+    assert captured_timeouts
+    assert captured_timeouts[0] >= 8.0
 
 
 def test_extract_same_site_links_handles_large_unclosed_anchor_markup_quickly() -> None:
