@@ -19,7 +19,12 @@ if str(SRC_DIR) not in sys.path:
 from oldironcrawler.app import _raise_nofile_soft_limit
 from oldironcrawler import challenge_solver as challenge_module
 from oldironcrawler.extractor.company_rules import extract_company_name_fallback
-from oldironcrawler.extractor.email_rules import collect_emails_for_pages, normalize_email_candidate
+from oldironcrawler.extractor.email_rules import (
+    collect_emails_for_pages,
+    extract_frontend_email_asset_urls,
+    extract_frontend_lazy_asset_urls,
+    normalize_email_candidate,
+)
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_phones
 from oldironcrawler.extractor.protocol.content import truncate_html
 from oldironcrawler.extractor import llm_client as llm_module
@@ -3786,6 +3791,115 @@ def test_email_rules_drop_portuguese_placeholder_examples() -> None:
     assert emails == ["meta@metassessoria.com"]
 
 
+def test_email_rules_drop_portuguese_company_placeholder_email() -> None:
+    emails, _page_hits = collect_emails_for_pages(
+        "https://trustimage.com.br",
+        [
+            (
+                "https://trustimage.com.br/assets/Footer.js",
+                """
+                <script>
+                  const real = "contato@trustimage.com.br";
+                  const placeholder = "voce@empresa.com.br";
+                </script>
+                """,
+            )
+        ],
+    )
+
+    assert emails == ["contato@trustimage.com.br"]
+
+
+def test_email_rules_drop_offsite_javascript_library_author_email() -> None:
+    html_text = '<script>/*! GSAP */ const support = "jack@greensock.com";</script>'
+
+    emails, _page_hits = collect_emails_for_pages(
+        "https://www.ja-zcf.co.jp/miyazaki",
+        [("https://www.ja-zcf.co.jp/miyazaki", html_text)],
+    )
+
+    assert emails == []
+
+
+def test_email_rules_keep_same_site_email_for_domain_that_is_noise_elsewhere() -> None:
+    html_text = "<main>Contact support at jack@greensock.com</main>"
+
+    emails, _page_hits = collect_emails_for_pages(
+        "https://greensock.com",
+        [("https://greensock.com/contact", html_text)],
+    )
+
+    assert emails == ["jack@greensock.com"]
+
+
+def test_email_rules_keep_real_emails_from_frontend_app_data() -> None:
+    html_text = """
+    <html><body>
+      <script id="__NEXT_DATA__" type="application/json">
+        {"generic_error":"Something went wrong. Please try again or email us at contato@sciensa.com."}
+      </script>
+      <main><h1>Contact</h1></main>
+    </body></html>
+    """
+
+    emails, sources = collect_emails_for_pages("https://sciensa.ai", [("https://sciensa.ai/contact", html_text)])
+
+    assert emails == ["contato@sciensa.com"]
+    assert sources == {"https://sciensa.ai/contact": ["contato@sciensa.com"]}
+
+
+def test_frontend_email_asset_urls_include_lazy_same_site_chunks() -> None:
+    html_text = '<html><script type="module" src="/assets/index-CBqWXQO8.js"></script></html>'
+    main_js = 'const __vite__mapDeps=(m=["assets/Footer-BCdGZBWc.js"])=>m; import(`./Footer-BCdGZBWc.js`)'
+    footer_js = 'href:`mailto:contato@trustimage.com.br`,children:`contato@trustimage.com.br`'
+
+    main_assets = extract_frontend_email_asset_urls(html_text, "https://trustimage.com.br/", limit=4)
+    lazy_assets = extract_frontend_lazy_asset_urls(main_js, main_assets[0], limit=4)
+    emails, sources = collect_emails_for_pages(
+        "https://trustimage.com.br",
+        [(lazy_assets[0], footer_js)],
+    )
+
+    assert main_assets == ["https://trustimage.com.br/assets/index-CBqWXQO8.js"]
+    assert lazy_assets == ["https://trustimage.com.br/assets/Footer-BCdGZBWc.js"]
+    assert emails == ["contato@trustimage.com.br"]
+    assert sources == {"https://trustimage.com.br/assets/Footer-BCdGZBWc.js": ["contato@trustimage.com.br"]}
+
+
+def test_frontend_asset_recovery_fetches_lazy_js_chunks() -> None:
+    page_map = {
+        "https://trustimage.com.br/": HtmlPage(
+            url="https://trustimage.com.br/",
+            html='<html><script type="module" src="/assets/index-CBqWXQO8.js"></script></html>',
+        )
+    }
+    assets = {
+        "https://trustimage.com.br/assets/index-CBqWXQO8.js": (
+            "import(`./Footer-BCdGZBWc.js`).then(module => module.Footer)"
+        ),
+        "https://trustimage.com.br/assets/Footer-BCdGZBWc.js": (
+            'href:`mailto:contato@trustimage.com.br`,children:`contato@trustimage.com.br`'
+        ),
+    }
+    metrics = SiteStageMetrics()
+
+    emails, sources, recovered_pages = service_email_recovery_module.recover_frontend_asset_emails_if_needed(
+        SimpleNamespace(),
+        "https://trustimage.com.br",
+        page_map,
+        metrics,
+        [],
+        fetch_text_func=lambda url: assets.get(url, ""),
+    )
+
+    assert emails == ["contato@trustimage.com.br"]
+    assert sources == {"https://trustimage.com.br/assets/Footer-BCdGZBWc.js": ["contato@trustimage.com.br"]}
+    assert recovered_pages[-1] == (
+        "https://trustimage.com.br/assets/Footer-BCdGZBWc.js",
+        assets["https://trustimage.com.br/assets/Footer-BCdGZBWc.js"],
+    )
+
+
 def test_email_rules_drop_site_typo_domain_and_obfuscated_noise() -> None:
     emails, _page_hits = collect_emails_for_pages(
         "https://fglp.co.uk",
@@ -4214,6 +4328,8 @@ def test_common_probe_urls_include_turkey_brazil_japan_value_paths() -> None:
     assert "https://example.com.tr/tr/iletisim" in turkey_urls
     assert "https://example.com.tr/tr/bize-ulasin" in turkey_urls
     assert "https://example.com.br/pt/contato" in brazil_urls
+    assert "https://example.com.br/contacto" in brazil_urls
+    assert "https://example.com.br/es/contacto" in brazil_urls
     assert "https://example.com.br/fale-conosco" in brazil_urls
     assert "https://example.com.br/Home/Contato" in brazil_urls
     assert "https://example.com.br/politica-de-privacidade" in brazil_urls
@@ -4230,6 +4346,22 @@ def test_common_probe_urls_include_turkey_brazil_japan_value_paths() -> None:
     assert "https://example.co.jp/commitment/global-expansion" in japan_urls
     assert japan_urls.index("https://example.co.jp/shop/pages/order.aspx") < 24
     assert japan_urls.index("https://example.co.jp/commitment/global-expansion") < 24
+
+
+def test_select_email_urls_includes_spanish_contacto_paths() -> None:
+    candidates = build_candidates(
+        "https://example.com.br",
+        [
+            "https://www.mobimaxlatam.com/es/contacto/",
+            "https://www.mobimaxlatam.com/es/socios/",
+        ],
+        {},
+        {},
+    )
+
+    selected = select_email_urls(candidates)
+
+    assert "https://www.mobimaxlatam.com/es/contacto/" in selected
 
 
 def test_common_probe_urls_prioritize_country_local_value_paths() -> None:

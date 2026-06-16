@@ -13,6 +13,7 @@ _LOCALE_EMAIL_PHRASES = {
     "/tr": ("bize-ulasin", "hakkimizda", "iletisim", "insan-kaynaklari", "kariyer", "kurumsal", "kvkk"),
     "/pt": ("atendimento", "contato", "fale-conosco", "faleconosco", "lgpd", "ouvidoria", "privacidade"),
     "/br": ("atendimento", "contato", "fale-conosco", "faleconosco", "lgpd", "ouvidoria", "privacidade"),
+    "/es": ("atendimento", "contacto", "contato", "fale-conosco", "faleconosco", "lgpd", "ouvidoria", "privacidade"),
     "/ja": ("contact", "inquiry", "mailform", "otoiawase", "recruit/form", "toiawase"),
     "/jp": ("contact", "inquiry", "mailform", "otoiawase", "recruit/form", "toiawase"),
     "/en": ("contact", "contact-us", "inquiry", "mailform", "privacy", "support"),
@@ -106,6 +107,7 @@ def _build_country_root_priority_email_probe_urls(website: str) -> list[str]:
     elif host.endswith(".br") or ".com.br" in host:
         paths = (
             "/contato",
+            "/contacto",
             "/fale-conosco",
             "/faleconosco",
             "/atendimento",

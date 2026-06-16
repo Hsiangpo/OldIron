@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from oldironcrawler.extractor.protocol.content import (
     decode_response_text as _decode_response_text,
-    extract_meta_refresh_url as _extract_meta_refresh_url,
+    extract_homepage_html_redirect_url as _extract_homepage_html_redirect_url,
     extract_same_site_html_redirect_url as _extract_same_site_html_redirect_url,
     raise_if_challenge_page as _raise_if_challenge_page,
     truncate_html as _truncate_html,
@@ -80,7 +80,7 @@ def _fetch_normalized_discovery_homepage(
 ) -> str:
     response = fetch_direct(start_url, timeout_seconds)
     html_text = normalize_response(start_url, response)
-    target_url = _extract_meta_refresh_url(html_text, start_url, allow_cross_site=True)
+    target_url = _extract_homepage_html_redirect_url(html_text, start_url)
     if not target_url:
         target_url = _extract_same_site_html_redirect_url(html_text, start_url)
     if not target_url or target_url == start_url:

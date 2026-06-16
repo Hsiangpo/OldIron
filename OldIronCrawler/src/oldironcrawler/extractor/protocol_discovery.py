@@ -20,11 +20,11 @@ _SKIP_EXTENSIONS = {
 }
 _RELATED_SUBDOMAIN_HOST_TOKENS = {
     "about", "atendimento", "career", "careers", "company", "contact", "contato",
-    "help", "inquiry", "jobs", "leadership", "people", "support", "team",
+    "contacto", "help", "inquiry", "jobs", "leadership", "people", "support", "team",
 }
 _RELATED_SUBDOMAIN_PATH_TOKENS = {
     "about", "atendimento", "board", "career", "careers", "company", "contact",
-    "contato", "director", "executive", "fale", "founder", "governance",
+    "contacto", "contato", "director", "executive", "fale", "founder", "governance",
     "iletisim", "inquiry", "jobs", "leadership", "management", "officers",
     "ouvidoria", "people", "president", "privacy", "support", "team", "terms",
 }
@@ -96,6 +96,7 @@ _VALUE_ANCHOR_TOKENS = {
     "career",
     "careers",
     "contact",
+    "contacto",
     "contato",
     "email",
     "fale",
@@ -144,6 +145,7 @@ _COMMON_VALUE_PATHS = (
     "/iletisim/index.html",
     "/bize-ulasin",
     "/contato",
+    "/contacto",
     "/Contato",
     "/Home/Contato",
     "/home/Contato",
@@ -238,6 +240,7 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/iletisim", 76),
     ("/bize-ulasin", 70),
     ("/fale-conosco", 70),
+    ("/contacto", 69),
     ("/contato", 68),
     ("/contact-company", 76),
     ("/contact-recruit", 74),
@@ -285,6 +288,7 @@ _DISCOVERY_PRIORITY_PHRASES = (
 )
 _BRAZIL_SPECULATIVE_PATH_WEIGHTS = (
     ("contato", 190),
+    ("contacto", 188),
     ("fale-conosco", 185),
     ("home/faleconosco", 154),
     ("home/contato", 154),
@@ -765,6 +769,7 @@ def _speculative_common_path_family(url: str, *, include_locale: bool = True) ->
         ("inquiry", ("inquiry",)),
         ("mailform", ("mailform",)),
         ("contact", ("contact",)),
+        ("contacto", ("contacto",)),
         ("privacy", ("privacidade", "politica-de-privacidade", "politica-privacidade", "privacy")),
     ):
         if any(token in normalized for token in tokens):
@@ -797,14 +802,21 @@ def _score_speculative_common_value_url(start_url: str, url: str) -> int:
 
 def _score_country_path(path: str, weights: tuple[tuple[str, int], ...]) -> int:
     for fragment, weight in weights:
-        if fragment in path:
+        if _path_matches_weight_fragment(path, fragment):
             return weight
     return 0
 
 
+def _path_matches_weight_fragment(path: str, fragment: str) -> bool:
+    return bool(fragment) and (
+        re.search(rf"(?<![a-z0-9]){re.escape(fragment)}(?![a-z0-9])", path) is not None
+        if re.fullmatch(r"[a-z0-9]+", fragment) else fragment in path
+    )
+
+
 def _score_locale_prefix(path: str, host: str) -> int:
     prefix = path.split("/", 1)[0]
-    if (host.endswith(".br") or ".com.br" in host) and prefix not in {"pt", "br", "en"}:
+    if (host.endswith(".br") or ".com.br" in host) and prefix not in {"pt", "br", "es", "en"}:
         return 12
     if prefix == "pt" and (host.endswith(".br") or ".com.br" in host):
         return 8
@@ -816,6 +828,8 @@ def _score_locale_prefix(path: str, host: str) -> int:
         return 8
     if prefix in {"br", "jp"}:
         return 4
+    if prefix == "es" and (host.endswith(".br") or ".com.br" in host):
+        return 6
     if prefix == "en":
         return 2
     return 6
@@ -843,7 +857,7 @@ def _infer_common_locale_prefixes(host: str) -> list[str]:
     if lowered.endswith(".tr") or ".com.tr" in lowered:
         return ["/tr", "/en"]
     if lowered.endswith(".br") or ".com.br" in lowered:
-        return ["/pt", "/br", "/en"]
+        return ["/pt", "/br", "/es", "/en"]
     if lowered.endswith(".jp") or ".co.jp" in lowered:
         return ["/ja", "/jp", "/en"]
     return []

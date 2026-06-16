@@ -5,6 +5,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import unquote
+from urllib.parse import urljoin
 from urllib.parse import urlparse
 
 
@@ -12,6 +13,8 @@ _EMAIL_RE = re.compile(r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})", re.IGNORECA
 _CFEMAIL_RE = re.compile(r"data-cfemail=[\"']([0-9a-fA-F]+)[\"']", re.IGNORECASE)
 _INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad\u2060]")
 _SCRIPT_BLOCK_RE = re.compile(r"(?is)<(script|style|template)\b[^>]*>.*?</\1>")
+_SCRIPT_SRC_RE = re.compile(r"(?is)<script\b[^>]*\bsrc\s*=\s*[\"']([^\"']+\.js(?:\?[^\"']*)?)[\"'][^>]*>")
+_JS_CHUNK_REF_RE = re.compile(r"(?i)[\"'`]((?:\.{1,2}/|/)?[a-z0-9_./-]+\.js(?:\?[^\"'`]*)?)[\"'`]")
 _OBFUSCATED_EMAIL_HINT_RE = re.compile(
     r"(?is)[a-z0-9._%+\-]{2,}\s*(?:\[at\]|\(at\)|\bat\b|arroba)\s*"
     r"[a-z0-9.\-\s\[\]\(\)]{2,}(?:\[dot\]|\(dot\)|\bdot\b|\.)\s*[a-z]{2,}"
@@ -59,7 +62,10 @@ _PLACEHOLDER_EXACT_PARTS = {
     "aaa", "aaaa", "abc123", "beispiel", "dummy", "example", "exemplo", "hogehoge", "hoge", "name", "sample",
     "test", "xxx", "xxxx", "xxxxx", "yourdomain", "yourdmain",
 }
-_PLACEHOLDER_DOMAIN_WORDS = {"aaa", "beispiel", "dominio", "dummy", "email", "example", "exemplo", "sample", "test", "yourdomain", "yourdmain"}
+_PLACEHOLDER_DOMAIN_WORDS = {
+    "aaa", "beispiel", "dominio", "dummy", "email", "empresa", "example", "exemplo", "sample", "test",
+    "yourdomain", "yourdmain",
+}
 _PLACEHOLDER_EXACT_DOMAINS = {"doe.com"}
 _PLACEHOLDER_EXACT_EMAILS = {"tarou@mail.com"}
 _PLACEHOLDER_STEM_WORDS = {"beispiel", "dummy", "email", "example", "exemplo", "name", "sample", "test"}
@@ -74,6 +80,12 @@ _FREE_MAIL_DOMAINS = {
     "proton.me", "protonmail.com", "yahoo.co.jp", "yahoo.com", "yahoo.com.br",
 }
 _OFFSITE_ALWAYS_DROP_LOCAL_PARTS = {"found", "posted", "profile", "webmaster", "website"}
+_OFFSITE_ALWAYS_DROP_DOMAINS = {
+    "blivesta.com",
+    "greensock.com",
+    "ranadesign.com",
+    "webinlet.com",
+}
 
 
 @dataclass
@@ -273,6 +285,76 @@ def extract_same_domain_emails_from_embedded_content(website: str, raw_html: str
     return _prioritize_emails(found)
 
 
+def extract_emails_from_embedded_content(website: str, raw_html: str) -> list[str]:
+    html_text = str(raw_html or "")
+    if not html_text.strip():
+        return []
+    if not has_email_evidence_hint(html_text):
+        return []
+    normalized = html.unescape(html_text)
+    normalized = normalized.replace("%40", "@").replace("%2E", ".")
+    normalized = re.sub(r"(?i)\s*(?:\[at\]|\(at\))\s*|\s+at\s+", "@", normalized)
+    normalized = re.sub(r"(?i)\s*(?:\[dot\]|\(dot\))\s*|\s+dot\s+", ".", normalized)
+    found: list[str] = []
+    for match in _EMAIL_RE.findall(normalized):
+        email = normalize_email_candidate(match)
+        if email and email not in found:
+            found.append(email)
+    return _prioritize_emails(filter_emails_for_website(website, found))
+
+
+def extract_frontend_email_asset_urls(html_text: str, page_url: str, *, limit: int = 4) -> list[str]:
+    return _extract_same_site_js_urls(_SCRIPT_SRC_RE.findall(str(html_text or "")), page_url, limit=limit)
+
+
+def extract_frontend_lazy_asset_urls(js_text: str, asset_url: str, *, limit: int = 4) -> list[str]:
+    return _extract_same_site_js_urls(_JS_CHUNK_REF_RE.findall(str(js_text or "")), asset_url, limit=limit)
+
+
+def _extract_same_site_js_urls(raw_urls: Iterable[str], base_url: str, *, limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    base_host = _normalize_asset_host(urlparse(str(base_url or "")).netloc)
+    if not base_host:
+        return []
+    for raw_url in raw_urls:
+        value = html.unescape(str(raw_url or "").strip())
+        if not value or value.startswith(("data:", "javascript:", "mailto:", "tel:")):
+            continue
+        absolute = _resolve_frontend_asset_url(base_url, value)
+        parsed = urlparse(absolute)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        if _normalize_asset_host(parsed.netloc) != base_host:
+            continue
+        normalized = parsed._replace(fragment="").geturl()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _normalize_asset_host(host: str) -> str:
+    value = str(host or "").strip().lower().split("@")[-1].split(":", 1)[0]
+    return value[4:] if value.startswith("www.") else value
+
+
+def _resolve_frontend_asset_url(base_url: str, value: str) -> str:
+    parsed_base = urlparse(str(base_url or ""))
+    clean_value = str(value or "").strip()
+    first_part = clean_value.split("/", 1)[0].strip().lower()
+    base_parts = [part for part in (parsed_base.path or "").split("/") if part]
+    if first_part and base_parts and first_part == base_parts[-2 if len(base_parts) >= 2 else 0].lower():
+        origin = parsed_base._replace(path="/", params="", query="", fragment="").geturl()
+        return urljoin(origin, clean_value)
+    return urljoin(base_url, clean_value)
+
+
 def collect_emails_for_pages(website: str, pages: list[tuple[str, str]]) -> tuple[list[str], dict[str, list[str]]]:
     collected: list[str] = []
     page_hits: dict[str, list[str]] = {}
@@ -280,6 +362,12 @@ def collect_emails_for_pages(website: str, pages: list[tuple[str, str]]) -> tupl
         if not has_email_evidence_hint(html_text):
             continue
         page_emails = extract_emails_from_html(html_text)
+        embedded_emails = extract_emails_from_embedded_content(website, html_text)
+        if _has_direct_same_domain_email(website, embedded_emails):
+            embedded_emails = [email for email in embedded_emails if email_matches_website(website, email)]
+        for email in embedded_emails:
+            if email not in page_emails:
+                page_emails.append(email)
         if not _has_direct_same_domain_email(website, page_emails):
             embedded_same_domain = extract_same_domain_emails_from_embedded_content(website, html_text)
             for email in embedded_same_domain:
@@ -448,6 +536,8 @@ def _should_keep_offsite_email(email: str, has_same_domain_email: bool) -> bool:
     if not registrable_domain:
         return False
     if domain.startswith("www."):
+        return False
+    if registrable_domain in _OFFSITE_ALWAYS_DROP_DOMAINS:
         return False
     if registrable_domain in _FREE_MAIL_DOMAINS:
         return True

@@ -21,6 +21,8 @@ SCRIPT_LOCATION_RE = re.compile(
     r"(?:window\.)?location\.replace\(\s*['\"]([^'\"]+)['\"]",
     re.IGNORECASE,
 )
+SCRIPT_STYLE_BLOCK_RE = re.compile(r"(?is)<(script|style|template)\b[^>]*>.*?</\1>")
+TAG_RE = re.compile(r"(?is)<[^>]+>")
 HTML_SIGNAL_PATTERNS = (
     re.compile(r"<h[1-4][^>]*>.*?</h[1-4]>", re.IGNORECASE | re.DOTALL),
     re.compile(
@@ -137,7 +139,20 @@ def extract_same_site_html_redirect_url(html_text: str, source_url: str) -> str:
 
 
 def extract_same_site_script_location_url(html_text: str, source_url: str) -> str:
+    return extract_script_location_url(html_text, source_url, allow_cross_site=False)
+
+
+def extract_homepage_html_redirect_url(html_text: str, source_url: str) -> str:
+    target_url = extract_meta_refresh_url(html_text, source_url, allow_cross_site=True)
+    if target_url:
+        return target_url
+    return extract_script_location_url(html_text, source_url, allow_cross_site=True)
+
+
+def extract_script_location_url(html_text: str, source_url: str, *, allow_cross_site: bool = False) -> str:
     if detect_challenge_kind(html_text):
+        return ""
+    if allow_cross_site and not _looks_like_redirect_shell(html_text):
         return ""
     for match in SCRIPT_LOCATION_RE.finditer(str(html_text or "")):
         raw_target = next((group for group in match.groups() if group), "")
@@ -145,6 +160,8 @@ def extract_same_site_script_location_url(html_text: str, source_url: str) -> st
         if not target or target.startswith(("#", "javascript:", "mailto:", "tel:")):
             continue
         target_url = urljoin(source_url, target)
+        if allow_cross_site:
+            return target_url if _is_supported_refresh_target(target_url) else ""
         if _is_same_site_refresh_target(source_url, target_url):
             return target_url
     return ""
@@ -170,6 +187,19 @@ def _normalize_refresh_host(host: str) -> str:
     if value.startswith("www."):
         return value[4:]
     return value
+
+
+def _looks_like_redirect_shell(html_text: str) -> bool:
+    text = str(html_text or "")
+    if not text.strip() or len(text) > 20000:
+        return False
+    if SCRIPT_LOCATION_RE.search(text) is None:
+        return False
+    visible_source = SCRIPT_STYLE_BLOCK_RE.sub(" ", text)
+    visible_text = TAG_RE.sub(" ", html.unescape(visible_source))
+    visible_text = re.sub(r"\s+", " ", visible_text).strip()
+    link_count = len(ANCHOR_TAG_RE.findall(text))
+    return len(visible_text) <= 360 and link_count <= 2
 
 
 def _collect_signal_html_windows(text: str, max_chars: int) -> str:

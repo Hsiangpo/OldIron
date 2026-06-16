@@ -186,6 +186,49 @@ def test_protocol_fetch_html_follows_same_site_meta_refresh() -> None:
     client.close()
 
 
+def test_discovery_homepage_follows_cross_site_script_redirect_shell(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+    calls: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, url: str, html_text: str) -> None:
+            self.url = url
+            self.status_code = 200
+            self.headers = {"Content-Type": "text/html"}
+            self.text = html_text
+            self.content = html_text.encode("utf-8")
+
+        def close(self) -> None:
+            return None
+
+    def fake_fetch_direct(url: str, _timeout_seconds: float):
+        calls.append(url)
+        if url == "http://old.example.br":
+            return FakeResponse(
+                url,
+                """
+                <html><head><title>Redirect</title>
+                <script>window.location.href = "https://new.example.com";</script>
+                </head><body><p>Redirecting</p></body></html>
+                """,
+            )
+        return FakeResponse(
+            url,
+            "<html><body><a href='/es/contacto/'>Contacto</a> contact@new.example.com</body></html>",
+        )
+
+    monkeypatch.setattr(client, "_fetch_discovery_homepage_httpx_direct", fake_fetch_direct)
+
+    try:
+        result = client.discover_primary_urls("http://old.example.br", limit=20)
+    finally:
+        client.close()
+
+    assert calls == ["http://old.example.br", "https://new.example.com"]
+    assert "contact@new.example.com" in result.homepage_html
+    assert "https://new.example.com/es/contacto/" in result.urls
+
+
 def test_protocol_fetch_html_uses_www_fallback_after_dns_failure() -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
     calls: list[str] = []

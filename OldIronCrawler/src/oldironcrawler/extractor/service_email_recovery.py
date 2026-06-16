@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import httpx
 import time
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from oldironcrawler.extractor.discovery_fallback import _select_common_email_probe_urls
-from oldironcrawler.extractor.email_rules import collect_emails_for_pages
+from oldironcrawler.extractor.email_rules import (
+    collect_emails_for_pages,
+    extract_frontend_email_asset_urls,
+    extract_frontend_lazy_asset_urls,
+)
 from oldironcrawler.extractor.page_pool import PageFetchPool
+from oldironcrawler.extractor.protocol.httpx_client import build_httpx_client_kwargs
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages
 from oldironcrawler.extractor.protocol_client import HtmlPage, SiteProtocolClient
 from oldironcrawler.extractor.service_discovery import (
@@ -24,6 +30,10 @@ _COMMON_RECOVERY_PROBE_LIMIT = 8
 _COMMON_RECOVERY_FIRST_BATCH = 2
 _COMMON_RECOVERY_BATCH_SIZE = 4
 _SLOW_EMPTY_INITIAL_FETCH_RECOVERY_CUTOFF_MS = 8000
+_FRONTEND_ASSET_INITIAL_LIMIT = 3
+_FRONTEND_ASSET_TOTAL_LIMIT = 6
+_FRONTEND_ASSET_TIMEOUT_SECONDS = 4.0
+_FRONTEND_ASSET_MAX_CHARS = 600000
 
 
 def fetch_fast_common_email_pages_if_needed(
@@ -208,6 +218,15 @@ def recover_email_pages_if_needed(
         )
     if emails:
         return emails, email_sources, phones, email_rule_pages
+    emails, email_sources, email_rule_pages = recover_frontend_asset_emails_if_needed(
+        protocol,
+        website,
+        page_map,
+        metrics,
+        email_rule_pages,
+    )
+    if emails:
+        return emails, email_sources, phones, email_rule_pages
     if _should_try_common_recovery_first(website):
         return emails, email_sources, phones, email_rule_pages
     return _recover_from_common_probe_pages(
@@ -219,6 +238,109 @@ def recover_email_pages_if_needed(
         metrics,
         collect_phone_enabled=collect_phone_enabled,
     )
+
+
+def recover_frontend_asset_emails_if_needed(
+    protocol: SiteProtocolClient,
+    website: str,
+    page_map: dict[str, object],
+    metrics: SiteStageMetrics,
+    email_rule_pages: list[tuple[str, str]],
+    *,
+    fetch_text_func=None,
+) -> tuple[list[str], dict[str, list[str]], list[tuple[str, str]]]:
+    started_fetch = time.monotonic()
+    asset_pages = _fetch_frontend_email_asset_pages(
+        protocol,
+        list(page_map.values()),
+        fetch_text_func=fetch_text_func,
+    )
+    metrics.fetch_pages_ms += int(round((time.monotonic() - started_fetch) * 1000))
+    if not asset_pages:
+        return [], {}, email_rule_pages
+    recovered_pages = [(page.url, page.html) for page in asset_pages]
+    started_rule = time.monotonic()
+    emails, sources = collect_emails_for_pages(website, recovered_pages)
+    metrics.email_rule_ms += int(round((time.monotonic() - started_rule) * 1000))
+    if not emails:
+        return [], {}, email_rule_pages
+    return emails, sources, [*email_rule_pages, *recovered_pages]
+
+
+def _fetch_frontend_email_asset_pages(
+    protocol: SiteProtocolClient,
+    source_pages: list[object],
+    *,
+    fetch_text_func=None,
+) -> list[HtmlPage]:
+    fetch_text = fetch_text_func or (lambda url: _fetch_frontend_asset_text(protocol, url))
+    asset_urls = _select_initial_frontend_asset_urls(source_pages)
+    pages: list[HtmlPage] = []
+    seen = set(asset_urls)
+    lazy_urls: list[str] = []
+    for url in asset_urls:
+        text = fetch_text(url)
+        if not text:
+            continue
+        pages.append(HtmlPage(url=url, html=text))
+        for lazy_url in extract_frontend_lazy_asset_urls(text, url, limit=_FRONTEND_ASSET_TOTAL_LIMIT):
+            if lazy_url not in seen:
+                seen.add(lazy_url)
+                lazy_urls.append(lazy_url)
+            if len(seen) >= _FRONTEND_ASSET_TOTAL_LIMIT:
+                break
+        if len(seen) >= _FRONTEND_ASSET_TOTAL_LIMIT:
+            break
+    for url in lazy_urls[: max(_FRONTEND_ASSET_TOTAL_LIMIT - len(pages), 0)]:
+        text = fetch_text(url)
+        if text:
+            pages.append(HtmlPage(url=url, html=text))
+    return pages
+
+
+def _select_initial_frontend_asset_urls(source_pages: list[object]) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+    for page in source_pages:
+        page_url = str(getattr(page, "url", "") or "")
+        html_text = str(getattr(page, "html", "") or "")
+        for asset_url in extract_frontend_email_asset_urls(
+            html_text,
+            page_url,
+            limit=_FRONTEND_ASSET_INITIAL_LIMIT,
+        ):
+            if asset_url in seen:
+                continue
+            seen.add(asset_url)
+            selected.append(asset_url)
+            if len(selected) >= _FRONTEND_ASSET_INITIAL_LIMIT:
+                return selected
+    return selected
+
+
+def _fetch_frontend_asset_text(protocol: SiteProtocolClient, url: str) -> str:
+    config = getattr(protocol, "_config", None)
+    timeout_seconds = min(float(getattr(config, "timeout_seconds", 10.0) or 10.0), _FRONTEND_ASSET_TIMEOUT_SECONDS)
+    default_headers = dict(getattr(config, "default_headers", {}) or {})
+    proxy_url = str(getattr(config, "proxy_url", "") or "")
+    client_kwargs = build_httpx_client_kwargs(default_headers, proxy_url, timeout_seconds)
+    try:
+        with httpx.Client(**client_kwargs) as client:
+            response = client.get(url, timeout=timeout_seconds)
+    except Exception:  # noqa: BLE001
+        client_kwargs["verify"] = False
+        try:
+            with httpx.Client(**client_kwargs) as client:
+                response = client.get(url, timeout=timeout_seconds)
+        except Exception:  # noqa: BLE001
+            return ""
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    if status_code != 200:
+        return ""
+    content_type = str(response.headers.get("Content-Type", "") or "").lower()
+    if content_type and not any(token in content_type for token in ("javascript", "ecmascript", "text/plain")):
+        return ""
+    return str(response.text or "")[:_FRONTEND_ASSET_MAX_CHARS]
 
 
 def _should_try_common_recovery_first(website: str) -> bool:
