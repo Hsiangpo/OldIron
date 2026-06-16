@@ -104,6 +104,10 @@ def detect_challenge_kind(html_text: str) -> str:
 
 
 def extract_same_site_meta_refresh_url(html_text: str, source_url: str) -> str:
+    return extract_meta_refresh_url(html_text, source_url, allow_cross_site=False)
+
+
+def extract_meta_refresh_url(html_text: str, source_url: str, *, allow_cross_site: bool = False) -> str:
     if detect_challenge_kind(html_text):
         return ""
     match = META_REFRESH_RE.search(str(html_text or ""))
@@ -113,6 +117,8 @@ def extract_same_site_meta_refresh_url(html_text: str, source_url: str) -> str:
     if target_match is None:
         return ""
     target_url = urljoin(source_url, html.unescape(str(target_match.group(1) or "").strip()))
+    if allow_cross_site:
+        return target_url if _is_supported_refresh_target(target_url) else ""
     if not _is_same_site_refresh_target(source_url, target_url):
         return ""
     return target_url
@@ -142,11 +148,16 @@ def extract_same_site_script_location_url(html_text: str, source_url: str) -> st
 def _is_same_site_refresh_target(source_url: str, target_url: str) -> bool:
     source = urlparse(str(source_url or ""))
     target = urlparse(str(target_url or ""))
-    if target.scheme not in {"http", "https"}:
+    if not _is_supported_refresh_target(target_url):
         return False
     source_host = _normalize_refresh_host(source.netloc)
     target_host = _normalize_refresh_host(target.netloc)
     return bool(source_host and source_host == target_host)
+
+
+def _is_supported_refresh_target(target_url: str) -> bool:
+    target = urlparse(str(target_url or ""))
+    return target.scheme in {"http", "https"} and bool(target.netloc)
 
 
 def _normalize_refresh_host(host: str) -> str:

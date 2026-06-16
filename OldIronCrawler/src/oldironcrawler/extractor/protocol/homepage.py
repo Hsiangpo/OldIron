@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import html
+import re
 import threading
 from collections.abc import Callable
+from urllib.parse import urlparse
 
 from oldironcrawler.extractor.protocol.content import (
     decode_response_text as _decode_response_text,
+    extract_meta_refresh_url as _extract_meta_refresh_url,
     extract_same_site_html_redirect_url as _extract_same_site_html_redirect_url,
     raise_if_challenge_page as _raise_if_challenge_page,
     truncate_html as _truncate_html,
@@ -14,6 +18,8 @@ from oldironcrawler.extractor.protocol.fallbacks import (
     build_host_fallback_urls as _build_host_fallback_urls,
     is_supported_response as _is_supported_response,
 )
+
+_HEAD_OPEN_RE = re.compile(r"(<head\b[^>]*>)", re.IGNORECASE)
 
 
 def fetch_discovery_homepage_with_host_fallback(
@@ -74,10 +80,12 @@ def _fetch_normalized_discovery_homepage(
 ) -> str:
     response = fetch_direct(start_url, timeout_seconds)
     html_text = normalize_response(start_url, response)
-    target_url = _extract_same_site_html_redirect_url(html_text, start_url)
+    target_url = _extract_meta_refresh_url(html_text, start_url, allow_cross_site=True)
+    if not target_url:
+        target_url = _extract_same_site_html_redirect_url(html_text, start_url)
     if not target_url or target_url == start_url:
         return html_text
-    redirected = normalize_response(target_url, fetch_direct(target_url, timeout_seconds))
+    redirected = normalize_response(start_url, fetch_direct(target_url, timeout_seconds))
     return redirected if redirected.strip() else html_text
 
 
@@ -100,7 +108,7 @@ def normalize_discovery_homepage_response(start_url: str, response: object, *, m
     if not _is_supported_response(start_url, content_type):
         return ""
     _raise_if_challenge_page(start_url, response_text)
-    return response_text
+    return _inject_final_url_base(response_text, start_url, response)
 
 
 def _response_text_for_discovery(response: object) -> str:
@@ -108,3 +116,17 @@ def _response_text_for_discovery(response: object) -> str:
     if content is not None:
         return _decode_response_text(response)
     return str(getattr(response, "text", "") or "")
+
+
+def _inject_final_url_base(html_text: str, start_url: str, response: object) -> str:
+    final_url = str(getattr(response, "url", "") or "").strip()
+    if not final_url or final_url == start_url:
+        return html_text
+    parsed = urlparse(final_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return html_text
+    base_tag = f'<base href="{html.escape(final_url, quote=True)}">'
+    lowered_head = html_text[:500].lower()
+    if "<head" in lowered_head:
+        return _HEAD_OPEN_RE.sub(lambda match: f"{match.group(1)}{base_tag}", html_text, count=1)
+    return f"{base_tag}{html_text}"

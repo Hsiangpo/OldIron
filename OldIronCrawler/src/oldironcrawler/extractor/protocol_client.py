@@ -859,8 +859,16 @@ class SiteProtocolClient:
         )
 
     def _fetch_discovery_homepage_httpx_direct(self, start_url: str, timeout_seconds: float) -> object:
-        with httpx.Client(**_build_httpx_client_kwargs(self._config.default_headers, self._config.proxy_url, timeout_seconds)) as client:
-            return client.get(start_url, timeout=timeout_seconds)
+        client_kwargs = _build_httpx_client_kwargs(self._config.default_headers, self._config.proxy_url, timeout_seconds)
+        try:
+            with httpx.Client(**client_kwargs) as client:
+                return client.get(start_url, timeout=timeout_seconds)
+        except Exception as exc:  # noqa: BLE001
+            if not _should_try_http_fallback(start_url, str(exc or "").lower()):
+                raise
+            client_kwargs["verify"] = False
+            with httpx.Client(**client_kwargs) as client:
+                return client.get(start_url, timeout=timeout_seconds)
 
     def _normalize_discovery_homepage_response(self, start_url: str, response: object) -> str:
         return _normalize_discovery_homepage_response(

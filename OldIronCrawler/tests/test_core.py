@@ -1367,6 +1367,43 @@ def test_protocol_client_discovery_homepage_follows_script_location_redirect(mon
     assert calls == ["http://example.com", "http://example.com/index.php"]
 
 
+def test_protocol_client_discovery_homepage_retries_without_tls_verify(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str, content_type: str = "text/html") -> None:
+            self.status_code = status_code
+            self.text = text
+            self.headers = {"Content-Type": content_type}
+            self.content = text.encode("utf-8")
+
+    client_kwargs: list[dict[str, object]] = []
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs) -> None:
+            client_kwargs.append(kwargs)
+            self._verify = kwargs.get("verify", True)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def get(self, url: str, timeout: float):
+            assert url == "https://example.com"
+            if self._verify is not False:
+                raise RuntimeError("[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate")
+            return FakeResponse(200, "<html>insecure discovery ok</html>")
+
+    monkeypatch.setattr(protocol_module.httpx, "Client", FakeHttpxClient)
+    client = SiteProtocolClient(SiteProtocolConfig())
+
+    html = client._fetch_discovery_homepage_httpx("https://example.com", 10.0)
+
+    assert "insecure discovery ok" in html
+    assert any(kwargs.get("verify", True) is True for kwargs in client_kwargs)
+    assert client_kwargs[-1]["verify"] is False
+
+
 def test_protocol_client_falls_back_to_httpx_on_dns_thread_error() -> None:
     class FakeHttpxResponse:
         def __init__(self, status_code: int, text: str, content_type: str = "text/html") -> None:
@@ -2329,6 +2366,93 @@ def test_extract_same_site_links_uses_canonical_host_for_redirected_homepage() -
     discovered = extract_same_site_links(html_text, "http://greenfood.com", limit=10)
 
     assert "https://greenfood.se/privacy-policy" in discovered
+
+
+def test_protocol_client_discovery_homepage_uses_http_redirect_final_url(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str, url: str, content_type: str = "text/html") -> None:
+            self.status_code = status_code
+            self.text = text
+            self.url = url
+            self.headers = {"Content-Type": content_type}
+            self.content = text.encode("utf-8")
+
+    class FakeHttpxClient:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def get(self, url: str, timeout: float):
+            assert url == "http://old.example/service"
+            return FakeResponse(
+                200,
+                "<html><HEAD data-page='home'></HEAD><body><a href='/contact'>Contact</a></body></html>",
+                "https://new.example/",
+            )
+
+    monkeypatch.setattr(protocol_module.httpx, "Client", FakeHttpxClient)
+    client = SiteProtocolClient(SiteProtocolConfig())
+
+    html = client._fetch_discovery_homepage_httpx("http://old.example/service", 10.0)
+    discovered = extract_same_site_links(html, "http://old.example/service", limit=10)
+
+    assert "https://new.example/contact" in discovered
+
+
+def test_protocol_client_discovery_homepage_follows_cross_site_meta_refresh(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str, url: str, content_type: str = "text/html") -> None:
+            self.status_code = status_code
+            self.text = text
+            self.url = url
+            self.headers = {"Content-Type": content_type}
+            self.content = text.encode("utf-8")
+
+    calls: list[str] = []
+
+    class FakeHttpxClient:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def get(self, url: str, timeout: float):
+            calls.append(url)
+            if url == "http://old.example/service":
+                return FakeResponse(
+                    200,
+                    """
+                    <html><head>
+                    <meta http-equiv="refresh" content="0;URL=https://new.example/">
+                    </head><body>Moved</body></html>
+                    """,
+                    "http://old.example/service",
+                )
+            if url == "https://new.example/":
+                return FakeResponse(
+                    200,
+                    "<html><body><a href='/contact'>Contact</a></body></html>",
+                    "https://new.example/",
+                )
+            raise AssertionError(url)
+
+    monkeypatch.setattr(protocol_module.httpx, "Client", FakeHttpxClient)
+    client = SiteProtocolClient(SiteProtocolConfig())
+
+    html = client._fetch_discovery_homepage_httpx("http://old.example/service", 10.0)
+    discovered = extract_same_site_links(html, "http://old.example/service", limit=10)
+
+    assert calls == ["http://old.example/service", "https://new.example/"]
+    assert "https://new.example/contact" in discovered
 
 
 def test_select_email_urls_keeps_japanese_company_group_page() -> None:

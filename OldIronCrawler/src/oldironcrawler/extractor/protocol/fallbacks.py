@@ -12,9 +12,12 @@ def should_try_http_fallback(url: str, lowered_error: str) -> bool:
     return any(
         token in lowered_error
         for token in (
+            "certificate verify failed",
+            "certificate_verify_failed",
             "ssl certificate",
             "certificate has expired",
             "certificate subject name",
+            "unable to get local issuer certificate",
         )
     )
 
