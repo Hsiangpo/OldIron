@@ -782,8 +782,6 @@ def _normalize_website(value: str) -> str:
         return ""
     if " " in host or "." not in host:
         return ""
-    if host.startswith("www."):
-        host = host[4:]
     path = str(parsed.path or "").strip()
     normalized = f"{parsed.scheme or 'https'}://{host}{path}"
     return normalized.rstrip("/") or ""
@@ -792,9 +790,11 @@ def _normalize_website(value: str) -> str:
 def _build_dedupe_key(website: str) -> str:
     parsed = urlparse(website)
     host = str(parsed.netloc or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
     path = str(parsed.path or "").strip()
     if host and path not in {"", "/"}:
-        return website.lower()
+        return f"{parsed.scheme or 'https'}://{host}{path}".lower().rstrip("/")
     if host:
         return host
     return website.lower()

@@ -69,6 +69,37 @@ def test_txt_loader_dedupes_by_full_website_then_domain(tmp_path: Path) -> None:
     ]
 
 
+def test_txt_loader_preserves_www_host_for_fetching(tmp_path: Path) -> None:
+    input_file = tmp_path / "sites.txt"
+    input_file.write_text("http://www.hokuren.or.jp/\n", encoding="utf-8")
+
+    rows = load_websites(input_file)
+
+    assert [row.website for row in rows] == ["http://www.hokuren.or.jp"]
+
+
+def test_txt_loader_dedupes_www_and_root_without_rewriting_first_url(tmp_path: Path) -> None:
+    input_file = tmp_path / "sites.txt"
+    input_file.write_text(
+        "\n".join(
+            [
+                "http://www.hokuren.or.jp/",
+                "http://hokuren.or.jp/",
+                "http://www.hokuren.or.jp/contact",
+                "http://hokuren.or.jp/contact",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rows = load_websites(input_file)
+
+    assert [row.website for row in rows] == [
+        "http://www.hokuren.or.jp",
+        "http://www.hokuren.or.jp/contact",
+    ]
+
+
 def test_choose_input_file_accepts_exact_filename(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "工作簿1.xlsx"
     target.write_text("", encoding="utf-8")
