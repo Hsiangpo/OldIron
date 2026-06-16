@@ -55,6 +55,7 @@ from oldironcrawler.extractor.protocol.sitemap import discover_sitemap_urls as _
 from oldironcrawler.extractor.protocol_discovery import (
     build_common_probe_urls as _build_common_probe_urls,
     extract_registrable_domain as _extract_registrable_domain,
+    extract_japan_official_shop_probe_urls as _extract_japan_official_shop_probe_urls,
     extract_same_org_seed_urls as _extract_same_org_seed_urls,
     extract_same_site_links as _extract_same_site_links,
     has_homepage_value_links as _has_homepage_value_links,
@@ -825,6 +826,8 @@ class SiteProtocolClient:
                 return speculative_urls, ""
             raise _normalize_homepage_open_error(start_url, homepage_error) from homepage_error
         homepage_links = _extract_same_site_links(homepage_html, start_url, limit=limit) if homepage_html else []
+        shop_probe_urls = _extract_japan_official_shop_probe_urls(homepage_html, start_url, limit=8) if homepage_html else []
+        homepage_links = _merge_unique_urls(homepage_links, shop_probe_urls, limit=limit)
         if homepage_html and _has_homepage_value_links(start_url, homepage_links):
             return homepage_links, homepage_html
         guessed_urls = self._probe_common_value_urls(session, start_url, limit=limit)

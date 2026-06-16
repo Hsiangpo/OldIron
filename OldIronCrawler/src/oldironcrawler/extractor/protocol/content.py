@@ -10,6 +10,7 @@ CHARSET_RE = re.compile(r"charset\s*=\s*[\"']?\s*([a-zA-Z0-9._-]+)", re.IGNORECA
 HTML_META_CHARSET_RE = re.compile(br"<meta[^>]+charset=[\"']?\s*([a-zA-Z0-9._-]+)", re.IGNORECASE)
 XML_ENCODING_RE = re.compile(br"<\?xml[^>]+encoding=[\"']\s*([a-zA-Z0-9._-]+)", re.IGNORECASE)
 EMAIL_SIGNAL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+ANCHOR_TAG_RE = re.compile(r"<a\b[^>]*>.*?</a>", re.IGNORECASE | re.DOTALL)
 META_REFRESH_RE = re.compile(
     r"<meta\b[^>]*http-equiv\s*=\s*['\"]?\s*refresh\s*['\"]?[^>]*>",
     re.IGNORECASE | re.DOTALL,
@@ -45,14 +46,16 @@ TEXT_HINTS = ("text/html", "application/xhtml+xml", "application/xml", "text/xml
 def truncate_html(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
+    value_links = _collect_value_link_tags(text, max(max_chars // 4, 1))
     head_keep = max(max_chars // 3, 1)
     tail_keep = max(max_chars // 3, 1)
-    middle_budget = max(max_chars - head_keep - tail_keep - 96, 0)
+    middle_budget = max(max_chars - len(value_links) - head_keep - tail_keep - 96, 0)
     middle = _collect_signal_html_windows(text, middle_budget)
+    parts = [value_links] if value_links else []
     if middle:
-        parts = [middle, "\n<!-- 页面内容过长已截断，已保留中部重点片段 -->\n", text[:head_keep]]
+        parts.extend([middle, "\n<!-- 页面内容过长已截断，已保留中部重点片段 -->\n", text[:head_keep]])
     else:
-        parts = [text[:head_keep]]
+        parts.append(text[:head_keep])
     parts.extend(["\n<!-- 页面内容过长已截断 -->\n", text[-tail_keep:]])
     return "".join(parts)[:max_chars]
 
@@ -150,6 +153,8 @@ def _collect_signal_html_windows(text: str, max_chars: int) -> str:
 def _find_html_signal_windows(text: str) -> list[tuple[int, int]]:
     windows: list[tuple[int, int]] = []
     for pattern in HTML_SIGNAL_PATTERNS:
+        if pattern is EMAIL_SIGNAL_RE and "@" not in text:
+            continue
         for match in pattern.finditer(text):
             start = max(match.start() - 900, 0)
             end = min(match.end() + 1600, len(text))
@@ -157,6 +162,57 @@ def _find_html_signal_windows(text: str) -> list[tuple[int, int]]:
             if len(windows) >= 24:
                 return windows
     return windows
+
+
+def _collect_value_link_tags(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    tags: list[str] = []
+    used = 0
+    for match in ANCHOR_TAG_RE.finditer(str(text or "")):
+        tag = match.group(0)
+        if not _is_value_link_tag(tag):
+            continue
+        clean = tag.strip()
+        if not clean or clean in tags:
+            continue
+        next_used = used + len(clean) + 1
+        if next_used > max_chars:
+            break
+        tags.append(clean)
+        used = next_used
+        if len(tags) >= 24:
+            break
+    if not tags:
+        return ""
+    return "<nav data-oldiron-value-links='1'>" + "\n".join(tags) + "</nav>\n"
+
+
+def _is_value_link_tag(tag: str) -> bool:
+    value = html.unescape(str(tag or "")).lower()
+    value = value.replace("%e3%81%8a%e5%95%8f%e5%90%88%e3%81%9b", "お問合せ")
+    return any(
+        token in value
+        for token in (
+            "shop-pro.jp",
+            "contact",
+            "inquiry",
+            "mailform",
+            "privacy",
+            "recruit",
+            "tokutei",
+            "お問い合わせ",
+            "お問合せ",
+            "問い合わせ",
+            "問合せ",
+            "特定商取引",
+            "通信販売",
+            "個人情報",
+            "プライバシー",
+            "採用",
+            "メール",
+        )
+    )
 
 
 def _merge_html_signal_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:

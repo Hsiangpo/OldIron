@@ -22,6 +22,17 @@ _RELATED_SUBDOMAIN_PATH_TOKENS = {
     "iletisim", "inquiry", "jobs", "leadership", "management", "officers",
     "ouvidoria", "people", "president", "privacy", "support", "team", "terms",
 }
+_JAPAN_OFFICIAL_SHOP_HOST_SUFFIXES = (
+    "shop-pro.jp",
+)
+_JAPAN_OFFICIAL_SHOP_VALUE_QUERIES = (
+    "mode=f6",
+    "mode=f9",
+    "mode=sk",
+)
+_JAPAN_OFFICIAL_SHOP_VALUE_PATHS = (
+    "/customer/inquiries/new",
+)
 _SUBDOMAIN_SCAN_PAGE_TOKENS = {
     "about", "atendimento", "contact", "contato", "company", "help", "iletisim",
     "inquiry", "people", "privacy", "support", "team",
@@ -245,6 +256,10 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/shop/pages/order.aspx", 28),
     ("/order.aspx", 26),
     ("/tokutei", 24),
+    ("mode=f6", 34),
+    ("mode=f9", 32),
+    ("mode=sk", 30),
+    ("/customer/inquiries/", 28),
     ("/ouvidoria", 24),
     ("/atendimento", 22),
     ("/politica-de-privacidade", 24),
@@ -397,6 +412,72 @@ def extract_same_site_links(html_text: str, page_url: str, *, limit: int) -> lis
     if len(collected) <= limit:
         return collected
     return prioritize_discovery_urls(page_url, collected, limit=limit)
+
+
+def extract_japan_official_shop_probe_urls(html_text: str, page_url: str, *, limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    page_host = (urlparse(page_url).netloc or "").strip().lower()
+    if not _is_japan_company_host(page_host):
+        return []
+    seeds = _extract_japan_official_shop_seed_urls(html_text, page_url, limit=limit)
+    result: list[str] = []
+    seen: set[str] = set()
+    for seed in seeds:
+        parsed = urlparse(seed)
+        for query in _JAPAN_OFFICIAL_SHOP_VALUE_QUERIES:
+            value = parsed._replace(query=query, fragment="").geturl()
+            if value not in seen:
+                seen.add(value)
+                result.append(value)
+                if len(result) >= limit:
+                    return result
+        for path in _JAPAN_OFFICIAL_SHOP_VALUE_PATHS:
+            value = parsed._replace(path=path, query="", fragment="").geturl()
+            if value not in seen:
+                seen.add(value)
+                result.append(value)
+                if len(result) >= limit:
+                    return result
+    return result
+
+
+def _extract_japan_official_shop_seed_urls(html_text: str, page_url: str, *, limit: int) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_href, _anchor_text in _iter_anchor_links(html_text):
+        href = html.unescape(raw_href).strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        absolute = urljoin(page_url, href)
+        parsed = urlparse(absolute)
+        host = (parsed.netloc or "").strip().lower()
+        if parsed.scheme not in {"http", "https"} or not _is_japan_official_shop_host(host):
+            continue
+        seed = _normalize_japan_official_shop_seed_url(parsed)
+        if seed and seed not in seen:
+            seen.add(seed)
+            result.append(seed)
+            if len(result) >= limit:
+                break
+    return result
+
+
+def _normalize_japan_official_shop_seed_url(parsed) -> str:
+    path = "/"
+    return normalize_discovery_url(parsed._replace(path=path, query="", fragment="").geturl())
+
+
+def _is_japan_company_host(host: str) -> bool:
+    lowered = str(host or "").strip().lower()
+    return lowered.endswith(".jp") or ".co.jp" in lowered
+
+
+def _is_japan_official_shop_host(host: str) -> bool:
+    lowered = str(host or "").strip().lower()
+    if lowered.startswith("www."):
+        lowered = lowered[4:]
+    return any(lowered == suffix or lowered.endswith(f".{suffix}") for suffix in _JAPAN_OFFICIAL_SHOP_HOST_SUFFIXES)
 
 
 def _iter_anchor_links(html_text: str) -> list[tuple[str, str]]:

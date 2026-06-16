@@ -21,6 +21,7 @@ from oldironcrawler import challenge_solver as challenge_module
 from oldironcrawler.extractor.company_rules import extract_company_name_fallback
 from oldironcrawler.extractor.email_rules import collect_emails_for_pages
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_phones
+from oldironcrawler.extractor.protocol.content import truncate_html
 from oldironcrawler.extractor import llm_client as llm_module
 from oldironcrawler.extractor import protocol_client as protocol_module
 from oldironcrawler.extractor import protocol_runtime as protocol_runtime_module
@@ -31,7 +32,7 @@ from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtrac
 from oldironcrawler.extractor.page_pool import PageFetchPool, PageFetchPoolConfig
 from oldironcrawler.extractor.protocol_client import ProtocolPermanentError, ProtocolTemporaryError, SiteProtocolClient, SiteProtocolConfig
 from oldironcrawler.extractor.protocol_client import HtmlPage
-from oldironcrawler.extractor.protocol_discovery import extract_same_site_links
+from oldironcrawler.extractor.protocol_discovery import extract_japan_official_shop_probe_urls, extract_same_site_links
 from oldironcrawler.extractor.umbraco_people import UmbracoBio, maybe_build_umbraco_people_page
 from oldironcrawler.extractor.service import _build_site_protocol_config, _collect_email_rule_pages, _discover_value_snapshot, _merge_page_targets, _normalize_llm_result
 from oldironcrawler.extractor.service import DiscoverySnapshot, SiteProfileService
@@ -76,6 +77,53 @@ def test_txt_loader_preserves_www_host_for_fetching(tmp_path: Path) -> None:
     rows = load_websites(input_file)
 
     assert [row.website for row in rows] == ["http://www.hokuren.or.jp"]
+
+
+def test_japan_official_shop_probe_urls_include_colorme_contact_pages() -> None:
+    html = """
+    <html><body>
+      <a href="https://mitsuse.shop-pro.jp/">公式オンラインショップ</a>
+      <a href="https://example.com/contact">ignore external non-shop</a>
+    </body></html>
+    """
+
+    urls = extract_japan_official_shop_probe_urls(html, "https://www.yokoo.co.jp", limit=8)
+
+    assert "https://mitsuse.shop-pro.jp/?mode=f6" in urls
+    assert "https://mitsuse.shop-pro.jp/?mode=f9" in urls
+    assert "https://mitsuse.shop-pro.jp/?mode=sk" in urls
+    assert "https://example.com/contact" not in urls
+
+
+def test_select_email_urls_includes_japan_official_shop_value_pages() -> None:
+    website = "https://www.yokoo.co.jp"
+    candidates = build_candidates(
+        website,
+        [
+            "https://mitsuse.shop-pro.jp/?mode=f6",
+            "https://mitsuse.shop-pro.jp/?mode=f9",
+        ],
+        {},
+        {},
+    )
+
+    selected = select_email_urls(candidates)
+
+    assert "https://mitsuse.shop-pro.jp/?mode=f6" in selected
+    assert "https://mitsuse.shop-pro.jp/?mode=f9" in selected
+
+
+def test_truncate_html_preserves_japan_value_anchor_tags() -> None:
+    anchor_html = (
+        '<a href="https://mitsuse.shop-pro.jp/">公式オンラインショップ</a>'
+        '<a href="/お問合せ">お問合せ</a>'
+    )
+    html = "<html><body>" + ("x" * 50_000) + anchor_html + ("y" * 50_000) + "</body></html>"
+
+    truncated = truncate_html(html, 10_000)
+
+    assert "mitsuse.shop-pro.jp" in truncated
+    assert "/お問合せ" in truncated
 
 
 def test_txt_loader_dedupes_www_and_root_without_rewriting_first_url(tmp_path: Path) -> None:
