@@ -102,6 +102,7 @@ class RuntimeStore:
                     input_name TEXT NOT NULL,
                     fingerprint TEXT NOT NULL,
                     total_count INTEGER NOT NULL DEFAULT 0,
+                    result_version TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -173,7 +174,16 @@ class RuntimeStore:
             self._ensure_site_text_columns(conn)
             self._ensure_site_search_columns(conn)
             self._ensure_site_metrics_columns(conn)
+            self._ensure_job_meta_columns(conn)
             self._backfill_result_cache(conn)
+
+    def _ensure_job_meta_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(job_meta)").fetchall()
+        }
+        if "result_version" not in existing:
+            conn.execute("ALTER TABLE job_meta ADD COLUMN result_version TEXT NOT NULL DEFAULT ''")
 
     def _ensure_site_text_columns(self, conn: sqlite3.Connection) -> None:
         existing = {
@@ -312,6 +322,102 @@ class RuntimeStore:
                 """
             )
             return True
+
+    def reset_stale_missing_field_results(
+        self,
+        result_version: str,
+        *,
+        collect_email_enabled: bool,
+        collect_phone_enabled: bool,
+        collect_company_name_enabled: bool,
+        extract_representative_enabled: bool,
+        search_representative_enabled: bool,
+    ) -> int:
+        version = str(result_version or "").strip()
+        if not version:
+            return 0
+        with self._write_lock, self._connect() as conn:
+            meta = conn.execute("SELECT result_version FROM job_meta WHERE id = 1").fetchone()
+            if meta is None:
+                return 0
+            if str(meta["result_version"] or "") == version:
+                return 0
+            rows = conn.execute(
+                """
+                SELECT id,
+                       dedupe_key,
+                       status,
+                       last_error,
+                       company_name,
+                       representative,
+                       emails,
+                       phones,
+                       searched_representative
+                FROM sites
+                WHERE status IN ('done', 'dropped')
+                """
+            ).fetchall()
+            reset_ids = [
+                int(row["id"])
+                for row in rows
+                if _should_reset_stale_missing_row(
+                    row,
+                    collect_email_enabled=collect_email_enabled,
+                    collect_phone_enabled=collect_phone_enabled,
+                    collect_company_name_enabled=collect_company_name_enabled,
+                    extract_representative_enabled=extract_representative_enabled,
+                    search_representative_enabled=search_representative_enabled,
+                )
+            ]
+            if reset_ids:
+                placeholders = ",".join("?" for _ in reset_ids)
+                conn.execute(
+                    f"""
+                    DELETE FROM site_result_cache
+                    WHERE dedupe_key IN (
+                        SELECT dedupe_key
+                        FROM sites
+                        WHERE id IN ({placeholders})
+                    )
+                    """,
+                    reset_ids,
+                )
+                conn.execute(
+                    f"""
+                    UPDATE sites
+                    SET status = 'pending',
+                        retry_count = 0,
+                        last_error = '',
+                        company_name = '',
+                        representative = '',
+                        emails = '',
+                        phones = '',
+                        searched_representative = '',
+                        searched_representative_evidence_url = '',
+                        searched_representative_confidence = '',
+                        evidence_url = '',
+                        evidence_quote = '',
+                        discover_ms = 0,
+                        llm_pick_ms = 0,
+                        fetch_pages_ms = 0,
+                        llm_extract_ms = 0,
+                        ai_email_ms = 0,
+                        search_rep_ms = 0,
+                        email_rule_ms = 0,
+                        company_rule_ms = 0,
+                        discovered_url_count = 0,
+                        rep_url_count = 0,
+                        email_url_count = 0,
+                        target_url_count = 0,
+                        fetched_page_count = 0,
+                        started_at = '',
+                        finished_at = ''
+                    WHERE id IN ({placeholders})
+                    """,
+                    reset_ids,
+                )
+            conn.execute("UPDATE job_meta SET result_version = ? WHERE id = 1", (version,))
+            return len(reset_ids)
 
     def _clear_result_cache_for_current_job(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -740,6 +846,56 @@ class RuntimeStore:
         )
 
 
+def _should_reset_stale_missing_row(
+    row: sqlite3.Row,
+    *,
+    collect_email_enabled: bool,
+    collect_phone_enabled: bool,
+    collect_company_name_enabled: bool,
+    extract_representative_enabled: bool,
+    search_representative_enabled: bool,
+) -> bool:
+    if not _row_missing_requested_field(
+        row,
+        collect_email_enabled=collect_email_enabled,
+        collect_phone_enabled=collect_phone_enabled,
+        collect_company_name_enabled=collect_company_name_enabled,
+        extract_representative_enabled=extract_representative_enabled,
+        search_representative_enabled=search_representative_enabled,
+    ):
+        return False
+    status = str(row["status"] or "")
+    if status == "done":
+        return True
+    return status == "dropped" and _is_refreshable_terminal_error(str(row["last_error"] or ""))
+
+
+def _row_missing_requested_field(
+    row: sqlite3.Row,
+    *,
+    collect_email_enabled: bool,
+    collect_phone_enabled: bool,
+    collect_company_name_enabled: bool,
+    extract_representative_enabled: bool,
+    search_representative_enabled: bool,
+) -> bool:
+    checks = (
+        (collect_email_enabled, "emails"),
+        (collect_phone_enabled, "phones"),
+        (collect_company_name_enabled, "company_name"),
+        (extract_representative_enabled, "representative"),
+        (search_representative_enabled, "searched_representative"),
+    )
+    return any(enabled and not str(row[column] or "").strip() for enabled, column in checks)
+
+
+def _is_refreshable_terminal_error(error_text: str) -> bool:
+    lowered = str(error_text or "").strip().lower()
+    if not lowered:
+        return True
+    return any(token in lowered for token in _REFRESHABLE_TERMINAL_ERROR_HINTS)
+
+
 def _connection_is_alive(conn: sqlite3.Connection) -> bool:
     try:
         conn.execute("SELECT 1")
@@ -756,6 +912,17 @@ def _close_connection_quietly(conn: sqlite3.Connection) -> None:
 
 
 _METRIC_COLUMNS = tuple(field.name for field in fields(SiteStageMetrics))
+_REFRESHABLE_TERMINAL_ERROR_HINTS = (
+    "empty_page_batch",
+    "page_batch_timeout",
+    "site_deadline_exceeded",
+    "site_open_timeout",
+    "request_timeout",
+    "请求超时",
+    "目标页请求后没有拿到",
+    "operation timed out",
+    "timed out after",
+)
 _FAST_FAIL_TLS_ERROR_HINTS = (
     "tls connect error",
     "tlsv1_alert",

@@ -18,6 +18,7 @@ from oldironcrawler.runtime.store import RuntimeStore
 DEFAULT_SITE_CONCURRENCY = 32
 MAX_SITE_CONCURRENCY = 32
 DEFAULT_SITE_TIMEOUT_SECONDS = 180
+RESULT_REFRESH_VERSION = "2026-06-17-email-recovery"
 
 
 @dataclass
@@ -245,7 +246,10 @@ def _run_session_with_llm_recovery(
         )
         store.reset_running_tasks()
         rerun_reset = store.reset_completed_job_for_rerun()
+        refreshed_stale = _reset_stale_missing_results_if_supported(store, config)
         progress = store.progress()
+        if refreshed_stale:
+            print(f"检测到采集策略已更新，已重跑 {refreshed_stale} 个旧的缺字段结果。", flush=True)
         if rerun_reset:
             print(f"检测到 {input_path.name} 上次已经跑完，本次已重置后重新跑。", flush=True)
         db_path = getattr(store, "_db_path", getattr(store, "db_path", ""))
@@ -262,6 +266,22 @@ def _run_session_with_llm_recovery(
         except (LlmConfigurationError, LlmTemporaryError) as exc:
             current_key = _recover_runtime_llm_key(current_key, exc)
             key_already_validated = False
+
+
+def _reset_stale_missing_results_if_supported(store: RuntimeStore, config: AppConfig) -> int:
+    reset_method = getattr(store, "reset_stale_missing_field_results", None)
+    if not callable(reset_method):
+        return 0
+    return int(
+        reset_method(
+            RESULT_REFRESH_VERSION,
+            collect_email_enabled=config.collect_email_enabled,
+            collect_phone_enabled=config.collect_phone_enabled,
+            collect_company_name_enabled=config.collect_company_name_enabled,
+            extract_representative_enabled=config.extract_representative_enabled,
+            search_representative_enabled=config.search_representative_enabled,
+        ) or 0
+    )
 
 
 def _recover_runtime_llm_key(current_key: str, exc: Exception) -> str:

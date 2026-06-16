@@ -524,6 +524,59 @@ def test_reset_completed_job_clears_terminal_result_cache_for_fresh_rerun(tmp_pa
     assert store.load_cached_outcome("b.com") is None
 
 
+def test_stale_missing_email_results_are_reset_once_for_new_strategy(tmp_path: Path) -> None:
+    db_path = tmp_path / "runtime.sqlite3"
+    store = RuntimeStore(db_path)
+    rows = [
+        ImportedWebsite(input_index=1, raw_website="a.com", website="https://a.com", dedupe_key="a.com"),
+        ImportedWebsite(input_index=2, raw_website="b.com", website="https://b.com", dedupe_key="b.com"),
+        ImportedWebsite(input_index=3, raw_website="c.com", website="https://c.com", dedupe_key="c.com"),
+        ImportedWebsite(input_index=4, raw_website="d.com", website="https://d.com", dedupe_key="d.com"),
+        ImportedWebsite(input_index=5, raw_website="e.com", website="https://e.com", dedupe_key="e.com"),
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    tasks = [store.claim_next_site() for _ in rows]
+    assert all(task is not None for task in tasks)
+
+    store.mark_done(tasks[0].id, SiteResult(company_name="", representative="", emails="", website="https://a.com"))
+    store.mark_done(
+        tasks[1].id,
+        SiteResult(company_name="", representative="", emails="sales@b.com", website="https://b.com"),
+    )
+    assert store.mark_failed(tasks[2].id, "empty_page_batch: https://c.com/contact") == "dropped"
+    assert store.mark_dropped(tasks[3].id, "[Errno 11001] getaddrinfo failed") is True
+    store.mark_done(tasks[4].id, SiteResult(company_name="", representative="", emails="", website="https://e.com"))
+
+    reset_count = store.reset_stale_missing_field_results(
+        "email-strategy-test",
+        collect_email_enabled=True,
+        collect_phone_enabled=False,
+        collect_company_name_enabled=False,
+        extract_representative_enabled=False,
+        search_representative_enabled=False,
+    )
+
+    assert reset_count == 3
+    assert store.progress() == {"pending": 3, "running": 0, "done": 1, "failed_temp": 0, "dropped": 1, "total": 5}
+    assert store.load_cached_outcome("a.com") is None
+    assert store.load_cached_outcome("c.com") is None
+    assert store.load_cached_outcome("e.com") is None
+    assert store.load_cached_outcome("b.com") is not None
+    assert store.load_cached_outcome("d.com") is not None
+
+    second_reset = store.reset_stale_missing_field_results(
+        "email-strategy-test",
+        collect_email_enabled=True,
+        collect_phone_enabled=False,
+        collect_company_name_enabled=False,
+        extract_representative_enabled=False,
+        search_representative_enabled=False,
+    )
+
+    assert second_reset == 0
+    assert store.progress()["pending"] == 3
+
+
 def test_runtime_store_delivery_rows_include_phones(tmp_path: Path) -> None:
     store = RuntimeStore(tmp_path / "runtime.sqlite3")
     rows = [ImportedWebsite(input_index=1, raw_website="a.com", website="https://a.com", dedupe_key="a.com")]
