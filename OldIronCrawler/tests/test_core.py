@@ -26,6 +26,7 @@ from oldironcrawler.extractor import llm_client as llm_module
 from oldironcrawler.extractor import protocol_client as protocol_module
 from oldironcrawler.extractor import protocol_runtime as protocol_runtime_module
 from oldironcrawler.extractor import service as service_module
+from oldironcrawler.extractor import service_discovery as service_discovery_module
 from oldironcrawler.extractor import shell_page as shell_page_module
 from oldironcrawler.challenge_solver import CloudflareFallbackResult, CapSolverResult
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtractionResult, LlmTemporaryError, WebsiteLlmClient
@@ -3540,6 +3541,84 @@ def test_email_rules_drop_address_like_local_part_noise() -> None:
     )
 
     assert emails == ["info@blueoceanservicesuk.com", "admin@blueoceanservicesuk.com"]
+
+
+def test_japan_email_recovery_fetches_important_info_page_after_slow_primary_fetch() -> None:
+    website = "https://www.yokohamaueki.co.jp"
+    contact_url = f"{website}/contact"
+    privacy_url = f"{website}/privacypolicy.html"
+    info_url = f"{website}/info/important/720"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocol:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            return [HtmlPage(url=info_url, html="<html>メールでのお問合せ： info@bio-le.com</html>") for url in urls if url == info_url]
+
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": [website],
+        "email_primary_urls": [contact_url, privacy_url],
+        "email_overflow_urls": [],
+        "all_primary_urls": [website, contact_url, privacy_url],
+    }
+    page_map = {
+        website: HtmlPage(url=website, html="<html>home</html>"),
+        contact_url: HtmlPage(url=contact_url, html="<html>contact form</html>"),
+        privacy_url: HtmlPage(url=privacy_url, html="<html>privacy</html>"),
+    }
+
+    pages, _elapsed_ms = service_discovery_module._fetch_email_recovery_pages(
+        FakeProtocol(),
+        website,
+        [website, contact_url, privacy_url, info_url],
+        fetch_plan,
+        page_map,
+        page_concurrency=4,
+        page_pool=None,
+        primary_fetch_ms=29_000,
+    )
+
+    assert fetch_calls == [[info_url]]
+    assert [page.url for page in pages] == [info_url]
+
+
+def test_japan_email_recovery_fetches_news_other_page_after_slow_primary_fetch() -> None:
+    website = "https://gaf.co.jp"
+    recruit_url = f"{website}/recruit/"
+    news_url = f"{website}/news/other/p248/"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocol:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            return [HtmlPage(url=news_url, html="<html>広報担当 e-mail：kawashimaay@agri-foods.com</html>") for url in urls if url == news_url]
+
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": [website],
+        "email_primary_urls": [recruit_url],
+        "email_overflow_urls": [],
+        "all_primary_urls": [website, recruit_url],
+    }
+    page_map = {
+        website: HtmlPage(url=website, html="<html>home</html>"),
+        recruit_url: HtmlPage(url=recruit_url, html="<html>recruit form</html>"),
+    }
+
+    pages, _elapsed_ms = service_discovery_module._fetch_email_recovery_pages(
+        FakeProtocol(),
+        website,
+        [website, recruit_url, news_url],
+        fetch_plan,
+        page_map,
+        page_concurrency=4,
+        page_pool=None,
+        primary_fetch_ms=18_000,
+    )
+
+    assert fetch_calls == [[news_url]]
+    assert [page.url for page in pages] == [news_url]
 
 
 def test_value_rules_split_representative_and_email_targets() -> None:

@@ -29,6 +29,7 @@ _DISCOVERY_EMAIL_ONLY_FAMILY_TARGET = 2
 _EMAIL_PRIMARY_FAST_PROBE_LIMIT = 1
 _EMAIL_RECOVERY_LIMIT = 6
 _EMAIL_RECOVERY_MAX_PRIMARY_FETCH_MS = 8000
+_EMAIL_RECOVERY_SLOW_FETCH_SCORE_MIN = 100
 _BRAZIL_EMAIL_RECOVERY_TOKEN_WEIGHTS = {
     "advogado": 120,
     "advogados": 130,
@@ -63,6 +64,9 @@ _JAPAN_EMAIL_RECOVERY_TOKEN_WEIGHTS = {
     "support": 70,
     "recruit": 55,
     "saiyo": 55,
+    "important": 80,
+    "info": 35,
+    "news": 30,
 }
 _JAPAN_EMAIL_RECOVERY_PHRASES = (
     ("/contact", 130),
@@ -72,6 +76,9 @@ _JAPAN_EMAIL_RECOVERY_PHRASES = (
     ("/form", 105),
     ("/support", 70),
     ("/recruit", 55),
+    ("/info/important/", 120),
+    ("/info/news", 65),
+    ("/news/other/", 115),
 )
 _DISCOVERY_REP_STRONG_TOKENS = {
     "board",
@@ -323,7 +330,7 @@ def _fetch_email_recovery_pages(
     page_pool: PageFetchPool | None,
     primary_fetch_ms: int,
 ) -> tuple[list, int]:
-    if not page_map or primary_fetch_ms >= _EMAIL_RECOVERY_MAX_PRIMARY_FETCH_MS:
+    if not page_map:
         return [], 0
     recovery_urls = _select_email_recovery_urls(
         website,
@@ -334,6 +341,8 @@ def _fetch_email_recovery_pages(
     )
     if not recovery_urls:
         return [], 0
+    if primary_fetch_ms >= _EMAIL_RECOVERY_MAX_PRIMARY_FETCH_MS and not _has_slow_fetch_recovery_signal(website, recovery_urls):
+        return [], 0
     try:
         return _fetch_pages_with_elapsed(
             protocol.fetch_pages,
@@ -343,6 +352,10 @@ def _fetch_email_recovery_pages(
         )
     except Exception:  # noqa: BLE001
         return [], 0
+
+
+def _has_slow_fetch_recovery_signal(website: str, recovery_urls: list[str]) -> bool:
+    return any(_score_email_recovery_url(website, url) >= _EMAIL_RECOVERY_SLOW_FETCH_SCORE_MIN for url in recovery_urls)
 
 
 def _select_email_recovery_urls(
