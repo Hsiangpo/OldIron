@@ -2044,6 +2044,10 @@ def test_select_email_urls_includes_turkey_brazil_japan_value_pages() -> None:
         ("https://x.com.br", "https://x.com.br/fale-conosco"),
         ("https://x.co.jp", "https://x.co.jp/inquiry/"),
         ("https://x.co.jp", "https://x.co.jp/recruit/form/"),
+        ("https://x.co.jp", "https://x.co.jp/commitment/global-expansion/"),
+        ("https://x.co.jp", "https://x.co.jp/shop/pages/order.aspx"),
+        ("https://x.co.jp", "https://x.co.jp/privacy/"),
+        ("https://x.co.jp", "https://x.co.jp/forest/index.html"),
     ]
 
     for start_url, value_url in cases:
@@ -2121,6 +2125,27 @@ def test_select_email_urls_uses_japanese_contact_anchor_text_for_generic_paths()
     email_urls = select_email_urls(candidates)
 
     assert any(url.startswith("https://example.co.jp/site/") for url in email_urls)
+
+
+def test_select_email_urls_uses_japanese_business_anchor_text_for_generic_paths() -> None:
+    html_text = """
+    <html>
+      <body>
+        <a href="/commitment/">海外への展開</a>
+        <a href="/shop/pages/order.aspx">特定商取引法に基づく表記</a>
+        <a href="/privacy/">個人情報について</a>
+      </body>
+    </html>
+    """
+
+    discovered = extract_same_site_links(html_text, "https://example.co.jp/", limit=10)
+    candidates = build_candidates("https://example.co.jp", discovered, {}, {})
+
+    email_urls = select_email_urls(candidates)
+
+    assert "https://example.co.jp/commitment/#oi-link-global" in email_urls
+    assert "https://example.co.jp/shop/pages/order.aspx#oi-link-order" in email_urls
+    assert "https://example.co.jp/privacy/#oi-link-privacy" in email_urls
 
 
 def test_select_email_urls_keeps_japanese_recruit_page_when_learning_scores_are_noisy() -> None:
@@ -3508,6 +3533,13 @@ def test_common_probe_urls_include_turkey_brazil_japan_value_paths() -> None:
     assert "https://example.co.jp/ja/inquiry" in japan_urls
     assert "https://example.co.jp/inquiry" in japan_urls
     assert "https://example.co.jp/recruit/form" in japan_urls
+    assert "https://example.co.jp/shop/pages/order.aspx" in japan_urls
+    assert "https://example.co.jp/order.aspx" in japan_urls
+    assert "https://example.co.jp/privacy" in japan_urls
+    assert "https://example.co.jp/global-expansion" in japan_urls
+    assert "https://example.co.jp/commitment/global-expansion" in japan_urls
+    assert japan_urls.index("https://example.co.jp/shop/pages/order.aspx") < 24
+    assert japan_urls.index("https://example.co.jp/commitment/global-expansion") < 24
 
 
 def test_common_probe_urls_prioritize_country_local_value_paths() -> None:

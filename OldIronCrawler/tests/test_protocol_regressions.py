@@ -623,7 +623,61 @@ def test_fetch_pages_passes_batch_deadline_to_page_pool_requests() -> None:
     assert captured_deadlines[0] - started <= 9.0
 
 
-def test_page_fetch_pool_batch_timeout_includes_queue_wait() -> None:
+def test_fetch_pages_page_pool_request_deadline_starts_after_dispatch() -> None:
+    pool = PageFetchPool(PageFetchPoolConfig(worker_count=1, per_host_limit=1))
+    slow_client = SiteProtocolClient(SiteProtocolConfig(timeout_seconds=30.0, page_batch_timeout_seconds=0.2))
+    fast_client = SiteProtocolClient(SiteProtocolConfig(timeout_seconds=30.0, page_batch_timeout_seconds=0.05))
+    captured_remaining: list[float] = []
+
+    def slow_fetch_page_optional(
+        url: str,
+        *,
+        timeout_seconds: float | None = None,
+        request_deadline_monotonic: float | None = None,
+    ):
+        time.sleep(0.08)
+        return SimpleNamespace(url=url, html="<html>slow</html>")
+
+    def fast_fetch_page_optional(
+        url: str,
+        *,
+        timeout_seconds: float | None = None,
+        request_deadline_monotonic: float | None = None,
+    ):
+        assert request_deadline_monotonic is not None
+        captured_remaining.append(request_deadline_monotonic - time.monotonic())
+        return SimpleNamespace(url=url, html="<html>fast</html>")
+
+    slow_client._fetch_page_optional = slow_fetch_page_optional
+    fast_client._fetch_page_optional = fast_fetch_page_optional
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            slow = executor.submit(
+                slow_client.fetch_pages,
+                ["https://slow.example/contact"],
+                max_workers=1,
+                page_pool=pool,
+            )
+            time.sleep(0.01)
+            fast = executor.submit(
+                fast_client.fetch_pages,
+                ["https://fast.example/contact"],
+                max_workers=1,
+                page_pool=pool,
+            )
+
+            assert [page.url for page in fast.result(timeout=1.0)] == ["https://fast.example/contact"]
+            assert [page.url for page in slow.result(timeout=1.0)] == ["https://slow.example/contact"]
+    finally:
+        slow_client.close()
+        fast_client.close()
+        pool.close()
+
+    assert captured_remaining
+    assert 0.03 <= captured_remaining[0] <= 0.06
+
+
+def test_page_fetch_pool_batch_timeout_starts_after_first_dispatch() -> None:
     pool = PageFetchPool(PageFetchPoolConfig(worker_count=1, per_host_limit=1))
     try:
         def fetch_one(url: str):
@@ -648,12 +702,7 @@ def test_page_fetch_pool_batch_timeout_includes_queue_wait() -> None:
                 batch_timeout_seconds=0.05,
             )
 
-            try:
-                second.result(timeout=1.0)
-            except TimeoutError as exc:
-                assert "page_batch_timeout" in str(exc)
-            else:
-                raise AssertionError("queued batch should not wait for a slow batch to release the worker")
+            assert [page.url for page in second.result(timeout=1.0)] == ["https://fast.example/contact"]
             assert [page.url for page in first.result(timeout=1.0)] == ["https://slow.example/contact"]
     finally:
         pool.close()

@@ -1956,7 +1956,7 @@ def test_site_profile_service_skips_email_overflow_when_representative_page_emai
     store.close()
 
 
-def test_page_fetch_pool_batch_timeout_starts_while_waiting_for_slot() -> None:
+def test_page_fetch_pool_batch_timeout_starts_after_waiting_for_slot() -> None:
     pool = PageFetchPool(PageFetchPoolConfig(worker_count=1, per_host_limit=1))
     started = threading.Event()
     release = threading.Event()
@@ -1986,24 +1986,23 @@ def test_page_fetch_pool_batch_timeout_starts_while_waiting_for_slot() -> None:
     assert started.wait(timeout=0.3)
 
     begin = time.monotonic()
+    release_timer = threading.Timer(0.08, release.set)
     try:
-        try:
-            pool.fetch_pages(
-                urls=["https://b.example/queued"],
-                fetch_one=lambda url: HtmlPage(url=url, html="<html>queued</html>"),
-                deadline_monotonic=time.monotonic() + 1.0,
-                batch_timeout_seconds=0.05,
-            )
-        except TimeoutError:
-            pass
-        else:
-            raise AssertionError("queued batch should time out before a worker is free")
+        release_timer.start()
+        queued_pages = pool.fetch_pages(
+            urls=["https://b.example/queued"],
+            fetch_one=lambda url: HtmlPage(url=url, html="<html>queued</html>"),
+            deadline_monotonic=time.monotonic() + 1.0,
+            batch_timeout_seconds=0.05,
+        )
     finally:
+        release_timer.cancel()
         release.set()
         thread.join(timeout=1.0)
         pool.close()
 
-    assert time.monotonic() - begin < 0.2
+    assert [page.url for page in queued_pages] == ["https://b.example/queued"]
+    assert 0.05 <= time.monotonic() - begin < 0.2
 
 
 def _build_service_config() -> SimpleNamespace:

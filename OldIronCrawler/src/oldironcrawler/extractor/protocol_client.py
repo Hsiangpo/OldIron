@@ -65,6 +65,21 @@ from oldironcrawler.extractor.protocol_discovery import (
 )
 from oldironcrawler.extractor.protocol_runtime import configure_protocol_runtime, get_probe_executor, request_slot
 
+
+def _resolve_page_pool_deadline(site_deadline_monotonic: float | None, batch_timeout_seconds: float) -> float:
+    if site_deadline_monotonic is not None:
+        return site_deadline_monotonic
+    queue_wait_seconds = min(max(float(batch_timeout_seconds or 0.0) * 4, 1.0), 60.0)
+    return time.monotonic() + queue_wait_seconds
+
+
+def _resolve_page_pool_request_deadline(batch_timeout_seconds: float, site_deadline_monotonic: float | None) -> float:
+    deadline = time.monotonic() + max(float(batch_timeout_seconds or 0.0), 0.01)
+    if site_deadline_monotonic is None:
+        return deadline
+    return min(deadline, site_deadline_monotonic)
+
+
 class SiteProtocolClient:
     def __init__(self, config: SiteProtocolConfig) -> None:
         self._config = config
@@ -141,15 +156,21 @@ class SiteProtocolClient:
         if self._config.deadline_monotonic is not None:
             deadline = min(deadline, self._config.deadline_monotonic)
         if page_pool is not None and filtered:
-            batch_deadline = deadline
+            pool_deadline = _resolve_page_pool_deadline(
+                self._config.deadline_monotonic,
+                batch_timeout_seconds,
+            )
             pages = page_pool.fetch_pages(
                 urls=filtered,
                 fetch_one=lambda url: self._call_fetch_page_optional(
                     url,
                     timeout_seconds=_cap_page_fetch_timeout(self._config.timeout_seconds, batch_timeout_seconds),
-                    request_deadline_monotonic=batch_deadline,
+                    request_deadline_monotonic=_resolve_page_pool_request_deadline(
+                        batch_timeout_seconds,
+                        self._config.deadline_monotonic,
+                    ),
                 ),
-                deadline_monotonic=batch_deadline,
+                deadline_monotonic=pool_deadline,
                 batch_timeout_seconds=batch_timeout_seconds,
             )
             if pages:
