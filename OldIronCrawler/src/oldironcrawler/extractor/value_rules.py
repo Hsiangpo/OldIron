@@ -763,7 +763,22 @@ def _path_phrase_bonus(url: str, *, kind: str) -> int:
         ):
             if phrase in lowered:
                 score += value
+        score += _japanese_company_info_email_bonus(url)
     return score
+
+
+def _japanese_company_info_email_bonus(url: str) -> int:
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.netloc or "").lower()
+    if not (host.endswith(".jp") or ".co.jp" in host):
+        return 0
+    path = (parsed.path or "").rstrip("/").lower()
+    for phrase, value in (
+        ("/company/group", 20),
+    ):
+        if phrase in path:
+            return value
+    return 0
 
 
 def _locale_mismatch_penalty(start_url: str, candidate_url: str) -> int:

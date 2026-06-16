@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from oldironcrawler.extractor.protocol.content import (
     decode_response_text as _decode_response_text,
+    extract_same_site_html_redirect_url as _extract_same_site_html_redirect_url,
     raise_if_challenge_page as _raise_if_challenge_page,
     truncate_html as _truncate_html,
 )
@@ -42,7 +43,12 @@ def fetch_discovery_homepage_httpx(
 
     def worker() -> None:
         try:
-            result["response"] = fetch_direct(start_url, timeout_seconds)
+            result["html"] = _fetch_normalized_discovery_homepage(
+                start_url,
+                timeout_seconds,
+                fetch_direct=fetch_direct,
+                normalize_response=normalize_response,
+            )
         except BaseException as exc:  # noqa: BLE001
             result["error"] = exc
 
@@ -56,7 +62,23 @@ def fetch_discovery_homepage_httpx(
         raise error
     if isinstance(error, BaseException):
         raise ProtocolTemporaryError(str(error)) from error
-    return normalize_response(start_url, result.get("response"))
+    return str(result.get("html") or "")
+
+
+def _fetch_normalized_discovery_homepage(
+    start_url: str,
+    timeout_seconds: float,
+    *,
+    fetch_direct: Callable[[str, float], object],
+    normalize_response: Callable[[str, object], str],
+) -> str:
+    response = fetch_direct(start_url, timeout_seconds)
+    html_text = normalize_response(start_url, response)
+    target_url = _extract_same_site_html_redirect_url(html_text, start_url)
+    if not target_url or target_url == start_url:
+        return html_text
+    redirected = normalize_response(target_url, fetch_direct(target_url, timeout_seconds))
+    return redirected if redirected.strip() else html_text
 
 
 def normalize_discovery_homepage_response(start_url: str, response: object, *, max_html_chars: int) -> str:

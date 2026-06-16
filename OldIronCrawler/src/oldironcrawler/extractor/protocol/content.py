@@ -16,6 +16,11 @@ META_REFRESH_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 META_REFRESH_URL_RE = re.compile(r"\burl\s*=\s*['\"]?([^'\";>]+)", re.IGNORECASE)
+SCRIPT_LOCATION_RE = re.compile(
+    r"(?:window\.)?location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]|"
+    r"(?:window\.)?location\.replace\(\s*['\"]([^'\"]+)['\"]",
+    re.IGNORECASE,
+)
 HTML_SIGNAL_PATTERNS = (
     re.compile(r"<h[1-4][^>]*>.*?</h[1-4]>", re.IGNORECASE | re.DOTALL),
     re.compile(
@@ -111,6 +116,27 @@ def extract_same_site_meta_refresh_url(html_text: str, source_url: str) -> str:
     if not _is_same_site_refresh_target(source_url, target_url):
         return ""
     return target_url
+
+
+def extract_same_site_html_redirect_url(html_text: str, source_url: str) -> str:
+    target_url = extract_same_site_meta_refresh_url(html_text, source_url)
+    if target_url:
+        return target_url
+    return extract_same_site_script_location_url(html_text, source_url)
+
+
+def extract_same_site_script_location_url(html_text: str, source_url: str) -> str:
+    if detect_challenge_kind(html_text):
+        return ""
+    for match in SCRIPT_LOCATION_RE.finditer(str(html_text or "")):
+        raw_target = next((group for group in match.groups() if group), "")
+        target = html.unescape(str(raw_target or "").strip())
+        if not target or target.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        target_url = urljoin(source_url, target)
+        if _is_same_site_refresh_target(source_url, target_url):
+            return target_url
+    return ""
 
 
 def _is_same_site_refresh_target(source_url: str, target_url: str) -> bool:

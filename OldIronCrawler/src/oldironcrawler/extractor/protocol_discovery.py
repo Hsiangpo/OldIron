@@ -5,6 +5,12 @@ import re
 import unicodedata
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
+from oldironcrawler.extractor.protocol.discovery.link_base import (
+    allowed_link_hosts,
+    link_host_allowed,
+    pick_relative_link_base_url,
+)
+
 _SKIP_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp",
     ".css", ".js", ".woff", ".woff2", ".ttf", ".eot",
@@ -249,6 +255,7 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/contact-us", 32),
     ("/contact", 24),
     ("/company/privacy", 36),
+    ("/company/group", 34),
     ("/privacy", 30),
     ("/commitment/global-expansion", 30),
     ("/global-expansion", 24),
@@ -312,6 +319,7 @@ _JAPAN_SPECULATIVE_PATH_WEIGHTS = (
     ("overseas", 160),
     ("tokutei", 160),
     ("recruit/form", 112),
+    ("company/group", 108),
     ("privacy", 96),
     ("form", 104),
     ("contact", 92),
@@ -393,7 +401,8 @@ def extract_same_site_links(html_text: str, page_url: str, *, limit: int) -> lis
     base_host = (urlparse(page_url).netloc or "").strip().lower()
     if not base_host:
         return []
-    join_base = _pick_relative_link_base_url(html_text, page_url)
+    join_base = pick_relative_link_base_url(html_text, page_url)
+    allowed_hosts = allowed_link_hosts(base_host, join_base)
     collected: list[str] = []
     seen: set[str] = set()
     for raw_href, anchor_text in _iter_anchor_links(html_text):
@@ -403,7 +412,7 @@ def extract_same_site_links(html_text: str, page_url: str, *, limit: int) -> lis
         absolute = urljoin(join_base, href)
         parsed = urlparse(absolute)
         link_host = (parsed.netloc or "").strip().lower()
-        if not link_host or not (link_host == base_host or link_host.endswith(f".{base_host}") or base_host.endswith(f".{link_host}")):
+        if not link_host or not link_host_allowed(link_host, allowed_hosts):
             continue
         normalized = normalize_discovery_url(_add_anchor_hint_fragment(absolute, anchor_text))
         if normalized not in seen and is_supported_url(normalized):
@@ -500,47 +509,6 @@ def _extract_anchor_body_hint(html_text: str, start_index: int) -> str:
     if next_anchor_index >= 0:
         end_index = min(end_index, next_anchor_index)
     return html_text[start_index : min(end_index, start_index + 500)]
-
-
-def _pick_relative_link_base_url(html_text: str, page_url: str) -> str:
-    directory_base_url = _ensure_directory_base_url(page_url)
-    parsed = urlparse(directory_base_url)
-    base_host = (parsed.netloc or "").strip().lower()
-    dominant_host = _pick_dominant_www_pair_host(html_text, base_host)
-    if not dominant_host:
-        return directory_base_url
-    return parsed._replace(netloc=dominant_host).geturl()
-
-
-def _ensure_directory_base_url(page_url: str) -> str:
-    parsed = urlparse(page_url)
-    path = str(parsed.path or "")
-    if not path or path.endswith("/"):
-        return page_url
-    last_segment = path.rsplit("/", 1)[-1]
-    if "." in last_segment:
-        return page_url
-    return parsed._replace(path=f"{path}/").geturl()
-
-
-def _pick_dominant_www_pair_host(html_text: str, base_host: str) -> str:
-    counts: dict[str, int] = {}
-    for raw_href, _anchor_text in _iter_anchor_links(html_text):
-        parsed = urlparse(str(raw_href or "").strip())
-        host = (parsed.netloc or "").strip().lower()
-        if not host or not _is_www_pair(base_host, host):
-            continue
-        counts[host] = counts.get(host, 0) + 1
-    if not counts:
-        return ""
-    host, count = max(counts.items(), key=lambda item: (item[1], item[0]))
-    return host if count >= 2 else ""
-
-
-def _is_www_pair(left: str, right: str) -> bool:
-    if not left or not right or left == right:
-        return False
-    return left == f"www.{right}" or right == f"www.{left}"
 
 
 def _add_anchor_hint_fragment(url: str, anchor_text: str) -> str:

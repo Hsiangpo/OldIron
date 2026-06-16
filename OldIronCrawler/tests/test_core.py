@@ -1292,6 +1292,81 @@ def test_protocol_client_falls_back_to_www_on_connection_closed() -> None:
     assert "www ok" in html
 
 
+def test_protocol_client_follows_same_site_script_location_redirect() -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str, content_type: str = "text/html") -> None:
+            self.status_code = status_code
+            self.headers = {"Content-Type": content_type}
+            self.content = text.encode("utf-8")
+
+        def close(self) -> None:
+            return None
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        def get(self, url: str, timeout: float):
+            self.urls.append(url)
+            if url == "http://example.com":
+                return FakeResponse(
+                    200,
+                    """
+                    <html><head><script>
+                    window.location.href = './index.php';
+                    </script></head><body></body></html>
+                    """,
+                )
+            if url == "http://example.com/index.php":
+                return FakeResponse(200, "<html><a href='/contact'>real ok</a></html>")
+            raise AssertionError(url)
+
+    client = SiteProtocolClient(SiteProtocolConfig())
+    session = FakeSession()
+
+    html = client._fetch_html(session, "http://example.com", required=True)
+
+    assert "real ok" in html
+    assert session.urls == ["http://example.com", "http://example.com/index.php"]
+
+
+def test_protocol_client_discovery_homepage_follows_script_location_redirect(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str, content_type: str = "text/html") -> None:
+            self.status_code = status_code
+            self.text = text
+            self.headers = {"Content-Type": content_type}
+            self.content = text.encode("utf-8")
+
+    calls: list[str] = []
+
+    class FakeHttpxClient:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def get(self, url: str, timeout: float):
+            calls.append(url)
+            if url == "http://example.com":
+                return FakeResponse(200, "<script>window.location.href = './index.php';</script>")
+            if url == "http://example.com/index.php":
+                return FakeResponse(200, "<html><a href='/contact'>real homepage</a></html>")
+            raise AssertionError(url)
+
+    monkeypatch.setattr(protocol_module.httpx, "Client", FakeHttpxClient)
+    client = SiteProtocolClient(SiteProtocolConfig())
+
+    html = client._fetch_discovery_homepage_httpx("http://example.com", 10.0)
+
+    assert "real homepage" in html
+    assert calls == ["http://example.com", "http://example.com/index.php"]
+
+
 def test_protocol_client_falls_back_to_httpx_on_dns_thread_error() -> None:
     class FakeHttpxResponse:
         def __init__(self, status_code: int, text: str, content_type: str = "text/html") -> None:
@@ -2215,6 +2290,61 @@ def test_extract_same_site_links_keeps_late_japanese_privacy_email_page() -> Non
     discovered = extract_same_site_links(html_text, "https://example.co.jp/", limit=80)
 
     assert any(url.startswith("https://example.co.jp/company/privacy/") for url in discovered)
+
+
+def test_extract_same_site_links_keeps_late_japanese_company_group_page() -> None:
+    product_links = "\n".join(
+        f'<a href="/product/{index}/">product {index}</a>'
+        for index in range(90)
+    )
+    html_text = f"""
+    <html>
+      <body>
+        {product_links}
+        <footer>
+          <a href="/company/group/">group companies</a>
+        </footer>
+      </body>
+    </html>
+    """
+
+    discovered = extract_same_site_links(html_text, "https://example.co.jp/", limit=80)
+
+    assert any(url.startswith("https://example.co.jp/company/group/") for url in discovered)
+
+
+def test_extract_same_site_links_uses_canonical_host_for_redirected_homepage() -> None:
+    html_text = """
+    <html>
+      <head>
+        <link rel="canonical" href="https://greenfood.se/" />
+      </head>
+      <body>
+        <a href="/contact">Contact</a>
+        <a href="/privacy-policy">Privacy Policy</a>
+      </body>
+    </html>
+    """
+
+    discovered = extract_same_site_links(html_text, "http://greenfood.com", limit=10)
+
+    assert "https://greenfood.se/privacy-policy" in discovered
+
+
+def test_select_email_urls_keeps_japanese_company_group_page() -> None:
+    discovered = [
+        "https://example.co.jp/category/news/",
+        "https://example.co.jp/company/about/",
+        "https://example.co.jp/company/overview/",
+        "https://example.co.jp/company/group/",
+        "https://example.co.jp/contact/",
+        "https://example.co.jp/privacy/",
+    ]
+
+    candidates = build_candidates("https://example.co.jp", discovered, {}, {})
+    email_urls = select_email_urls(candidates)
+
+    assert "https://example.co.jp/company/group/" in email_urls
 
 
 def test_select_email_urls_keeps_japanese_recruit_page_when_learning_scores_are_noisy() -> None:

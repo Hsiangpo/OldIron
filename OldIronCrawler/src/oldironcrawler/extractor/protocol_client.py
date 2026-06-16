@@ -22,7 +22,7 @@ from oldironcrawler.extractor.protocol.content import (
     decode_bytes as _decode_bytes,
     decode_response_text as _decode_response_text,
     detect_challenge_kind as _detect_challenge_kind,
-    extract_same_site_meta_refresh_url as _extract_same_site_meta_refresh_url,
+    extract_same_site_html_redirect_url as _extract_same_site_html_redirect_url,
     raise_if_challenge_page as _raise_if_challenge_page,
     truncate_html as _truncate_html,
 )
@@ -520,7 +520,7 @@ class SiteProtocolClient:
         html_text: str,
         **kwargs,
     ) -> str | None:
-        target_url = _extract_same_site_meta_refresh_url(html_text, url)
+        target_url = _extract_same_site_html_redirect_url(html_text, url)
         if not target_url or target_url == url:
             return None
         redirected = self._fetch_html(session, target_url, required=False, max_retries_override=0, meta_refresh_depth=1, **kwargs)
