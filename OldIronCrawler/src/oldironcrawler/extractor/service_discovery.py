@@ -467,7 +467,8 @@ def _should_fetch_email_overflow_after_primary_fetch(
     if not email_overflow_urls:
         return False
     emails, _page_hits = collect_emails_for_pages(website, primary_email_rule_pages)
-    if emails:
+    site_domain = extract_registrable_domain(website)
+    if emails and not site_domain.endswith(".br"):
         return False
     same_domain_count = len(analyze_email_set(website, emails).same_domain_emails)
     return same_domain_count < email_stop_same_domain_count

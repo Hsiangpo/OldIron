@@ -55,7 +55,12 @@ def truncate_html(text: str, max_chars: int) -> str:
     head_keep = max(max_chars // 3, 1)
     tail_keep = max(max_chars // 3, 1)
     middle_budget = max(max_chars - len(value_links) - head_keep - tail_keep - 96, 0)
-    middle = _collect_signal_html_windows(text, middle_budget)
+    email_middle = _collect_email_signal_html_windows(text, middle_budget)
+    middle = _join_signal_summaries(
+        email_middle,
+        _collect_signal_html_windows(text, max(middle_budget - len(email_middle), 0)),
+        max_chars=middle_budget,
+    )
     parts = [value_links] if value_links else []
     if middle:
         parts.extend([middle, "\n<!-- 页面内容过长已截断，已保留中部重点片段 -->\n", text[:head_keep]])
@@ -171,6 +176,17 @@ def _collect_signal_html_windows(text: str, max_chars: int) -> str:
     if max_chars <= 0:
         return ""
     windows = _merge_html_signal_windows(_find_html_signal_windows(text))
+    return _render_signal_html_windows(text, windows, max_chars)
+
+
+def _collect_email_signal_html_windows(text: str, max_chars: int) -> str:
+    if max_chars <= 0 or "@" not in text:
+        return ""
+    windows = _merge_html_signal_windows(_find_email_signal_windows(text), limit=80)
+    return _render_signal_html_windows(text, windows, max_chars)
+
+
+def _render_signal_html_windows(text: str, windows: list[tuple[int, int]], max_chars: int) -> str:
     if not windows:
         return ""
     lines: list[str] = []
@@ -185,6 +201,24 @@ def _collect_signal_html_windows(text: str, max_chars: int) -> str:
         if len(summary) >= max_chars:
             return summary[:max_chars]
     return _render_signal_summary(lines)[:max_chars]
+
+
+def _join_signal_summaries(first: str, second: str, *, max_chars: int) -> str:
+    parts = [part for part in (first, second) if part]
+    if not parts or max_chars <= 0:
+        return ""
+    return "\n".join(parts)[:max_chars]
+
+
+def _find_email_signal_windows(text: str) -> list[tuple[int, int]]:
+    windows: list[tuple[int, int]] = []
+    for match in EMAIL_SIGNAL_RE.finditer(text):
+        start = max(match.start() - 900, 0)
+        end = min(match.end() + 1600, len(text))
+        windows.append((start, end))
+        if len(windows) >= 80:
+            break
+    return windows
 
 
 def _find_html_signal_windows(text: str) -> list[tuple[int, int]]:
@@ -252,7 +286,7 @@ def _is_value_link_tag(tag: str) -> bool:
     )
 
 
-def _merge_html_signal_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
+def _merge_html_signal_windows(windows: list[tuple[int, int]], *, limit: int = 8) -> list[tuple[int, int]]:
     if not windows:
         return []
     ordered = sorted(windows)
@@ -265,7 +299,7 @@ def _merge_html_signal_windows(windows: list[tuple[int, int]]) -> list[tuple[int
         merged.append((start, end))
         start, end = next_start, next_end
     merged.append((start, end))
-    return merged[:8]
+    return merged[:limit]
 
 
 def _extract_signal_lines(fragment: str) -> list[str]:

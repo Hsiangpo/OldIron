@@ -149,6 +149,8 @@ def normalize_email_candidate(value: object) -> str:
         return ""
     if local in _IGNORE_LOCAL_PARTS:
         return ""
+    if _looks_like_date_version_artifact(local, domain):
+        return ""
     suffix = domain.rsplit(".", 1)[-1] if "." in domain else ""
     if suffix in _BAD_EMAIL_TLDS:
         return ""
@@ -557,3 +559,11 @@ def _local_part_looks_like_address_noise(local: str) -> bool:
     if separator_count >= 4 and digit_count >= 2:
         return True
     return any(word in text for word in address_words) and separator_count >= 2
+
+
+def _looks_like_date_version_artifact(local: str, domain: str) -> bool:
+    local_text = str(local or "").strip().lower()
+    domain_text = str(domain or "").strip().lower()
+    if not re.fullmatch(r"\d{4}[-_.]\d{1,2}[-_.]\d{1,2}", local_text):
+        return False
+    return re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){2,}\.[a-z]{2,}", domain_text) is not None

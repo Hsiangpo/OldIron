@@ -19,7 +19,7 @@ if str(SRC_DIR) not in sys.path:
 from oldironcrawler.app import _raise_nofile_soft_limit
 from oldironcrawler import challenge_solver as challenge_module
 from oldironcrawler.extractor.company_rules import extract_company_name_fallback
-from oldironcrawler.extractor.email_rules import collect_emails_for_pages
+from oldironcrawler.extractor.email_rules import collect_emails_for_pages, normalize_email_candidate
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_phones
 from oldironcrawler.extractor.protocol.content import truncate_html
 from oldironcrawler.extractor import llm_client as llm_module
@@ -112,6 +112,17 @@ def test_select_email_urls_includes_japan_official_shop_value_pages() -> None:
 
     assert "https://mitsuse.shop-pro.jp/?mode=f6" in selected
     assert "https://mitsuse.shop-pro.jp/?mode=f9" in selected
+
+
+def test_select_email_urls_prioritizes_brazil_people_contact_page_over_lgpd_page() -> None:
+    website = "https://prolik.com.br"
+    people_url = f"{website}/quem#oi-link-contato"
+    lgpd_url = f"{website}/lgpd-politica-externa-de-privacidade-e-protecao-de-dados-pessoais/"
+    candidates = build_candidates(website, [lgpd_url, people_url], {}, {})
+
+    selected = select_email_urls(candidates)
+
+    assert selected.index(people_url) < selected.index(lgpd_url)
 
 
 def test_truncate_html_preserves_japan_value_anchor_tags() -> None:
@@ -3543,6 +3554,10 @@ def test_email_rules_drop_address_like_local_part_noise() -> None:
     assert emails == ["info@blueoceanservicesuk.com", "admin@blueoceanservicesuk.com"]
 
 
+def test_normalize_email_candidate_rejects_date_version_artifact() -> None:
+    assert normalize_email_candidate("2021-07-21@16.50.22.mp") == ""
+
+
 def test_japan_email_recovery_fetches_important_info_page_after_slow_primary_fetch() -> None:
     website = "https://www.yokohamaueki.co.jp"
     contact_url = f"{website}/contact"
@@ -4091,6 +4106,52 @@ def test_truncate_html_keeps_middle_email_signal() -> None:
 
     assert len(shortened) <= 250000
     assert "info@example.com" in shortened
+
+
+def test_truncate_html_prioritizes_email_signal_over_many_heading_signals() -> None:
+    leading_links = "".join(f'<a href="/contact-{index}">contact</a>' for index in range(40))
+    heading_noise = "".join(f"<h2>Secao {index}</h2><p>{'A' * 3000}</p>" for index in range(32))
+    email_block = '<p>Email: <a href="mailto:sac@portofinobrasil.com.br">sac@portofinobrasil.com.br</a></p>'
+    html = f"<html><body>{leading_links}{heading_noise}{email_block}{'B' * 20000}</body></html>"
+
+    shortened = protocol_module._truncate_html(html, 20_000)
+    emails, _sources = collect_emails_for_pages("http://portofinobrasil.com.br", [("https://www.portofinobrasil.com.br/", shortened)])
+
+    assert "sac@portofinobrasil.com.br" in shortened
+    assert emails == ["sac@portofinobrasil.com.br"]
+
+
+def test_truncate_html_does_not_cap_many_same_domain_email_signals() -> None:
+    expected = [f"person{index}@prolik.com.br" for index in range(21)]
+    email_blocks = "".join(f"<p>{email}</p>{'A' * 5000}" for email in expected)
+    html = f"<html><body>{email_blocks}</body></html>"
+
+    shortened = protocol_module._truncate_html(html, 30_000)
+    emails, _sources = collect_emails_for_pages("http://prolik.com.br", [("https://prolik.com.br/equipe", shortened)])
+
+    assert emails == expected
+
+
+def test_email_overflow_continues_until_same_domain_email_target_is_met() -> None:
+    should_fetch = service_discovery_module._should_fetch_email_overflow_after_primary_fetch(
+        "http://urbes.com.br",
+        [("https://urbes.com.br/autorizacoes", "<p>autorizacao.transito@urbes.com.br</p>")],
+        ["https://urbes.com.br/lgpd"],
+        email_stop_same_domain_count=2,
+    )
+
+    assert should_fetch is True
+
+
+def test_email_overflow_stops_after_same_domain_email_target_is_met() -> None:
+    should_fetch = service_discovery_module._should_fetch_email_overflow_after_primary_fetch(
+        "http://urbes.com.br",
+        [("https://urbes.com.br/contato", "<p>contato@urbes.com.br lgpd@urbes.com.br</p>")],
+        ["https://urbes.com.br/lgpd"],
+        email_stop_same_domain_count=2,
+    )
+
+    assert should_fetch is False
 
 
 def test_fetch_with_cloudscraper_returns_html_and_cookies(monkeypatch) -> None:
