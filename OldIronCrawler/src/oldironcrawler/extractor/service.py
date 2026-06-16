@@ -570,12 +570,19 @@ class SiteProfileService:
             email_stop_same_domain_count=_get_email_stop_same_domain_count(self._config),
         ):
             return [], 0
-        return _fetch_primary_pages(
-            protocol,
-            remaining_urls,
-            page_concurrency=self._config.page_concurrency,
-            page_pool=self._page_pool,
-        )
+        started = time.monotonic()
+        try:
+            return _fetch_primary_pages(
+                protocol,
+                remaining_urls,
+                page_concurrency=self._config.page_concurrency,
+                page_pool=self._page_pool,
+            )
+        except Exception:  # noqa: BLE001
+            if page_map:
+                elapsed_ms = int(round((time.monotonic() - started) * 1000))
+                return [], elapsed_ms
+            raise
 
     def _time_call(self, metrics: SiteStageMetrics, field_name: str, func):
         started = time.monotonic()

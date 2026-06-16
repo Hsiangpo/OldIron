@@ -8,7 +8,7 @@ from oldironcrawler.extractor.discovery_fallback import _select_common_email_pro
 from oldironcrawler.extractor.email_rules import collect_emails_for_pages
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.phone_rules import collect_phones_for_pages
-from oldironcrawler.extractor.protocol_client import SiteProtocolClient
+from oldironcrawler.extractor.protocol_client import HtmlPage, SiteProtocolClient
 from oldironcrawler.extractor.service_discovery import (
     _collect_primary_email_rule_pages,
     _collect_email_rule_pages,
@@ -127,6 +127,15 @@ def fetch_initial_primary_pages_with_recovery(
         if fallback_pages:
             return fallback_pages, elapsed_ms + fallback_ms
         if should_try_common and not page_map:
+            open_pages, open_ms = _fetch_initial_open_page_recovery_pages(
+                protocol,
+                website,
+                primary_urls,
+            )
+            if open_pages:
+                return _alias_open_recovery_pages_to_primary_urls(open_pages, primary_urls), (
+                    elapsed_ms + max(fallback_ms, 0) + open_ms
+                )
             common_pages, common_ms = fetch_initial_common_email_pages_if_needed(
                 protocol,
                 website,
@@ -263,6 +272,101 @@ def _select_initial_fallback_urls(
         url for url in select_unfetched_primary_urls_func(fetch_plan, page_map)
         if url not in failed_urls
     ]
+
+
+def _fetch_initial_open_page_recovery_pages(
+    protocol: SiteProtocolClient,
+    website: str,
+    primary_urls: list[str],
+) -> tuple[list, int]:
+    probe_urls = _build_initial_open_page_recovery_urls(website, primary_urls)
+    if not probe_urls:
+        return [], 0
+    started = time.monotonic()
+    try:
+        pages = protocol.fetch_pages(
+            probe_urls,
+            max_workers=min(len(probe_urls), _COMMON_RECOVERY_BATCH_SIZE),
+            page_pool=None,
+        )
+    except Exception:  # noqa: BLE001
+        pages = []
+    elapsed_ms = int(round((time.monotonic() - started) * 1000))
+    return [page for page in pages if str(getattr(page, "html", "") or "").strip()], elapsed_ms
+
+
+def _build_initial_open_page_recovery_urls(website: str, primary_urls: list[str]) -> list[str]:
+    failed = {_open_recovery_identity(url) for url in primary_urls if str(url or "").strip()}
+    selected: list[str] = []
+    seen = set(failed)
+    for seed_url in [website, *primary_urls]:
+        parsed = urlparse(str(seed_url or "").strip())
+        if not parsed.scheme or not parsed.netloc:
+            continue
+        for candidate in _iter_initial_open_page_recovery_candidates(parsed):
+            identity = _open_recovery_identity(candidate)
+            if not identity or identity in seen:
+                continue
+            seen.add(identity)
+            selected.append(candidate)
+            if len(selected) >= _COMMON_RECOVERY_BATCH_SIZE:
+                return selected
+    return selected
+
+
+def _alias_open_recovery_pages_to_primary_urls(pages: list, primary_urls: list[str]) -> list:
+    if not pages:
+        return []
+    result = list(pages)
+    first_page = pages[0]
+    html_text = str(getattr(first_page, "html", "") or "")
+    existing = {_open_recovery_identity(str(getattr(page, "url", "") or "")) for page in result}
+    for primary_url in primary_urls:
+        identity = _open_recovery_identity(primary_url)
+        if not identity or identity in existing:
+            continue
+        existing.add(identity)
+        result.append(HtmlPage(url=primary_url, html=html_text))
+    return result
+
+
+def _iter_initial_open_page_recovery_candidates(parsed):
+    host = str(parsed.netloc or "").strip().lower()
+    if not host:
+        return
+    hosts = _dedupe_open_recovery_values([host, _alternate_open_recovery_host(host)])
+    schemes = _dedupe_open_recovery_values(["https", str(parsed.scheme or "").strip().lower(), "http"])
+    path = str(parsed.path or "").strip()
+    root_paths = [""] if not path or path == "/" else ["", path]
+    for scheme in schemes:
+        for origin_host in hosts:
+            for candidate_path in root_paths:
+                yield parsed._replace(scheme=scheme, netloc=origin_host, path=candidate_path, query="", fragment="").geturl()
+
+
+def _alternate_open_recovery_host(host: str) -> str:
+    clean = str(host or "").strip().lower()
+    if not clean:
+        return ""
+    return clean[4:] if clean.startswith("www.") else f"www.{clean}"
+
+
+def _dedupe_open_recovery_values(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        clean = str(value or "").strip().lower()
+        if clean and clean not in result:
+            result.append(clean)
+    return result
+
+
+def _open_recovery_identity(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    host = str(parsed.netloc or "").strip().lower()
+    if not parsed.scheme or not host:
+        return ""
+    path = str(parsed.path or "").strip().rstrip("/")
+    return f"{parsed.scheme.lower()}://{host}{path}"
 
 
 def _should_recover_initial_primary_fetch(

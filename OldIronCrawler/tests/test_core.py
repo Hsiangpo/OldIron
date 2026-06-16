@@ -28,6 +28,7 @@ from oldironcrawler.extractor import discovery_fallback as discovery_fallback_mo
 from oldironcrawler.extractor import protocol_runtime as protocol_runtime_module
 from oldironcrawler.extractor import service as service_module
 from oldironcrawler.extractor import service_discovery as service_discovery_module
+from oldironcrawler.extractor import service_email_recovery as service_email_recovery_module
 from oldironcrawler.extractor import shell_page as shell_page_module
 from oldironcrawler.challenge_solver import CloudflareFallbackResult, CapSolverResult
 from oldironcrawler.extractor.llm_client import LlmConfigurationError, LlmExtractionResult, LlmTemporaryError, WebsiteLlmClient
@@ -1916,6 +1917,109 @@ def test_site_profile_service_recovers_japan_common_email_page_after_empty_initi
     )
     learning_store.close()
     store.close()
+
+
+def test_initial_primary_recovery_fetches_https_home_when_http_home_is_empty() -> None:
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocol:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            if "https://sugi-bee.com" in urls:
+                return [HtmlPage(url="https://sugi-bee.com", html="<html>opened</html>")]
+            raise ProtocolTemporaryError("empty_page_batch: " + ", ".join(urls))
+
+    def fake_primary_fetch(*_args, **_kwargs):
+        raise ProtocolTemporaryError("empty_page_batch: http://sugi-bee.com")
+
+    pages, _elapsed_ms = service_email_recovery_module.fetch_initial_primary_pages_with_recovery(
+        FakeProtocol(),
+        {"all_primary_urls": ["http://sugi-bee.com"], "email_primary_urls": ["http://sugi-bee.com"]},
+        {},
+        ["http://sugi-bee.com"],
+        page_concurrency=4,
+        page_pool=None,
+        cascade_email_primary=True,
+        website="http://sugi-bee.com",
+        discovered_urls=[],
+        fetch_primary_pages_func=fake_primary_fetch,
+        select_unfetched_primary_urls_func=lambda *_args, **_kwargs: [],
+    )
+
+    recovered_urls = [page.url for page in pages]
+    assert "https://sugi-bee.com" in recovered_urls
+    assert "http://sugi-bee.com" in recovered_urls
+    assert any("https://sugi-bee.com" in call for call in fetch_calls)
+
+
+def test_initial_primary_recovery_fetches_root_when_deep_input_page_is_empty() -> None:
+    fetch_calls: list[list[str]] = []
+    website = "https://www.crestfarm.co.jp/recruit/index.html"
+
+    class FakeProtocol:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            if "https://www.crestfarm.co.jp" in urls:
+                return [HtmlPage(url="https://www.crestfarm.co.jp", html="<html>opened</html>")]
+            raise ProtocolTemporaryError("empty_page_batch: " + ", ".join(urls))
+
+    def fake_primary_fetch(*_args, **_kwargs):
+        raise ProtocolTemporaryError(f"empty_page_batch: {website}")
+
+    pages, _elapsed_ms = service_email_recovery_module.fetch_initial_primary_pages_with_recovery(
+        FakeProtocol(),
+        {"all_primary_urls": [website], "email_primary_urls": [website]},
+        {},
+        [website],
+        page_concurrency=4,
+        page_pool=None,
+        cascade_email_primary=True,
+        website=website,
+        discovered_urls=[],
+        fetch_primary_pages_func=fake_primary_fetch,
+        select_unfetched_primary_urls_func=lambda *_args, **_kwargs: [],
+    )
+
+    recovered_urls = [page.url for page in pages]
+    assert "https://www.crestfarm.co.jp" in recovered_urls
+    assert website in recovered_urls
+    assert any("https://www.crestfarm.co.jp" in call for call in fetch_calls)
+
+
+def test_remaining_primary_failure_keeps_existing_open_page() -> None:
+    website = "https://www.crestfarm.co.jp/recruit/index.html"
+    root_url = "https://www.crestfarm.co.jp"
+    contact_url = "https://www.crestfarm.co.jp/contact"
+
+    class FakeProtocol:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            raise ProtocolTemporaryError("empty_page_batch: " + ", ".join(urls))
+
+    service = object.__new__(SiteProfileService)
+    service._config = SimpleNamespace(page_concurrency=4, email_stop_same_domain_count=2)
+    service._page_pool = None
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": [website],
+        "email_primary_urls": [website, contact_url],
+        "email_overflow_urls": [],
+        "all_primary_urls": [website, contact_url],
+    }
+    page_map = {
+        root_url: HtmlPage(url=root_url, html="<html>opened</html>"),
+        website: HtmlPage(url=website, html="<html>opened</html>"),
+    }
+
+    pages, elapsed_ms = service._fetch_remaining_primary_pages_if_needed(
+        FakeProtocol(),
+        website,
+        fetch_plan,
+        page_map,
+        cascade_email_primary=True,
+    )
+
+    assert pages == []
+    assert elapsed_ms >= 0
 
 
 def test_discovery_snapshot_probes_common_paths_when_email_targets_missing() -> None:
