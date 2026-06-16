@@ -1236,6 +1236,77 @@ def test_site_profile_service_fetches_remaining_primary_email_pages_after_fast_m
     store.close()
 
 
+def test_site_profile_service_common_probe_recovers_japan_contact_after_form_miss(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://snowseed.co.jp"
+    support_url = f"{website}/support"
+    privacy_url = f"{website}/privacy"
+    contact_url = f"{website}/contact"
+    recruit_url = f"{website}/recruit"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            html_map = {
+                website: "<html>Home</html>",
+                support_url: "<html>Support form</html>",
+                privacy_url: "<html>Privacy policy</html>",
+                contact_url: "<html>daichi@snowseed.co.jp</html>",
+                recruit_url: "<html>Recruit form</html>",
+            }
+            return [HtmlPage(url=url, html=html_map[url]) for url in urls if url in html_map]
+
+        def close(self) -> None:
+            return None
+
+    class FakeLlmClient:
+        def pick_email_urls(self, **_kwargs):
+            return []
+
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(
+        service_module,
+        "_discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=[support_url, privacy_url, recruit_url],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=[support_url, privacy_url, recruit_url],
+        ),
+    )
+
+    config = _build_service_config()
+    config.extract_representative_enabled = False
+    config.collect_company_name_enabled = False
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    config.email_page_soft_limit = 3
+    config.email_page_hard_limit = 4
+    config.page_total_hard_limit = 6
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+
+    result = service.process(task.id, task.website)
+
+    assert result.result.emails == "daichi@snowseed.co.jp"
+    assert any(contact_url in call for call in fetch_calls)
+    assert [contact_url] in fetch_calls
+    assert all(recruit_url not in call for call in fetch_calls)
+    assert max(len(call) for call in fetch_calls) <= 8
+    learning_store.close()
+    store.close()
+
+
 def test_site_profile_service_fetches_remaining_primary_email_pages_after_fast_timeout(
     tmp_path: Path,
     monkeypatch,

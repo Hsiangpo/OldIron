@@ -602,3 +602,13 @@ def _merge_unique_urls(left: list[str], right: list[str], *, limit: int) -> list
         if len(result) >= limit:
             break
     return result
+
+
+def _merge_page_targets(rep_urls: list[str], email_urls: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for url in [*rep_urls, *email_urls]:
+        if url and url not in seen:
+            seen.add(url)
+            result.append(url)
+    return result

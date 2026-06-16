@@ -187,6 +187,8 @@ _COMMON_VALUE_PATHS = (
     "/insan-kaynaklari",
     "/trabalhe-conosco",
     "/legal-notice",
+    "/company/privacy",
+    "/company/privacy/",
     "/privacy-policy",
     "/privacy/",
     "/privacy",
@@ -235,6 +237,8 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/about", 44),
     ("/contact-us", 32),
     ("/contact", 24),
+    ("/company/privacy", 36),
+    ("/privacy", 30),
     ("/commitment/global-expansion", 30),
     ("/global-expansion", 24),
     ("/overseas", 24),
@@ -375,7 +379,7 @@ def extract_same_site_links(html_text: str, page_url: str, *, limit: int) -> lis
     if not base_host:
         return []
     join_base = _pick_relative_link_base_url(html_text, page_url)
-    result: list[str] = []
+    collected: list[str] = []
     seen: set[str] = set()
     for raw_href, anchor_text in _iter_anchor_links(html_text):
         href = raw_href.strip()
@@ -389,10 +393,10 @@ def extract_same_site_links(html_text: str, page_url: str, *, limit: int) -> lis
         normalized = normalize_discovery_url(_add_anchor_hint_fragment(absolute, anchor_text))
         if normalized not in seen and is_supported_url(normalized):
             seen.add(normalized)
-            result.append(normalized)
-            if len(result) >= limit:
-                break
-    return result
+            collected.append(normalized)
+    if len(collected) <= limit:
+        return collected
+    return prioritize_discovery_urls(page_url, collected, limit=limit)
 
 
 def _iter_anchor_links(html_text: str) -> list[tuple[str, str]]:

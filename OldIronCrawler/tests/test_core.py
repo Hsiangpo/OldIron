@@ -2148,6 +2148,27 @@ def test_select_email_urls_uses_japanese_business_anchor_text_for_generic_paths(
     assert "https://example.co.jp/privacy/#oi-link-privacy" in email_urls
 
 
+def test_extract_same_site_links_keeps_late_japanese_privacy_email_page() -> None:
+    product_links = "\n".join(
+        f'<a href="/product/{index}/">製品{index}</a>'
+        for index in range(90)
+    )
+    html_text = f"""
+    <html>
+      <body>
+        {product_links}
+        <footer>
+          <a href="/company/privacy/">個人情報保護方針</a>
+        </footer>
+      </body>
+    </html>
+    """
+
+    discovered = extract_same_site_links(html_text, "https://example.co.jp/", limit=80)
+
+    assert any(url.startswith("https://example.co.jp/company/privacy/") for url in discovered)
+
+
 def test_select_email_urls_keeps_japanese_recruit_page_when_learning_scores_are_noisy() -> None:
     discovered = [
         *(f"https://example.co.jp/division{index}/contact/" for index in range(40)),
@@ -3535,6 +3556,7 @@ def test_common_probe_urls_include_turkey_brazil_japan_value_paths() -> None:
     assert "https://example.co.jp/recruit/form" in japan_urls
     assert "https://example.co.jp/shop/pages/order.aspx" in japan_urls
     assert "https://example.co.jp/order.aspx" in japan_urls
+    assert "https://example.co.jp/company/privacy" in japan_urls
     assert "https://example.co.jp/privacy" in japan_urls
     assert "https://example.co.jp/global-expansion" in japan_urls
     assert "https://example.co.jp/commitment/global-expansion" in japan_urls

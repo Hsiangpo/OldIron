@@ -37,8 +37,10 @@ def probe_common_email_value_pages(
     protocol: SiteProtocolClient,
     website: str,
     snapshot: Any,
+    *,
+    limit: int = _EMAIL_FALLBACK_PROBE_LIMIT,
 ) -> list[HtmlPage]:
-    probe_urls = _select_common_email_probe_urls(website, snapshot)
+    probe_urls = _select_common_email_probe_urls(website, snapshot, limit=limit)
     if not probe_urls:
         return []
     try:
@@ -54,12 +56,13 @@ def probe_common_email_value_pages(
     return [page for page in pages if str(getattr(page, "html", "") or "").strip()]
 
 
-def _select_common_email_probe_urls(website: str, snapshot: Any) -> list[str]:
+def _select_common_email_probe_urls(website: str, snapshot: Any, *, limit: int = _EMAIL_FALLBACK_PROBE_LIMIT) -> list[str]:
     homepage = _probe_identity_url(website)
     known = {_probe_identity_url(url) for url in [website, *snapshot.urls] if str(url or "").strip()}
     seen = set(known)
     candidates = build_candidates(website, _build_common_email_probe_candidates(website, snapshot.urls), {}, {})
     ordered_urls = [
+        *_build_country_root_priority_email_probe_urls(website),
         *_build_locale_priority_email_probe_urls(website, snapshot.urls),
         *_prioritize_discovered_locale_probe_urls(select_email_urls(candidates), snapshot.urls),
     ]
@@ -70,9 +73,53 @@ def _select_common_email_probe_urls(website: str, snapshot: Any) -> list[str]:
             continue
         seen.add(identity)
         selected.append(url)
-        if len(selected) >= _EMAIL_FALLBACK_PROBE_LIMIT:
+        if len(selected) >= limit:
             break
     return selected
+
+
+def _build_country_root_priority_email_probe_urls(website: str) -> list[str]:
+    parsed = urlparse(str(website or "").strip())
+    host = (parsed.netloc or "").strip().lower()
+    if not parsed.scheme or not host:
+        return []
+    paths: tuple[str, ...]
+    if host.endswith(".jp") or ".co.jp" in host:
+        paths = (
+            "/contact",
+            "/contact/",
+            "/support",
+            "/inquiry",
+            "/mailform",
+            "/company/privacy",
+            "/company/privacy/",
+            "/privacy",
+            "/privacy/",
+            "/shop/pages/order.aspx",
+            "/order.aspx",
+            "/tokutei",
+        )
+    elif host.endswith(".br") or ".com.br" in host:
+        paths = (
+            "/contato",
+            "/fale-conosco",
+            "/faleconosco",
+            "/atendimento",
+            "/ouvidoria",
+            "/politica-de-privacidade",
+            "/privacidade",
+        )
+    elif host.endswith(".tr") or ".com.tr" in host:
+        paths = (
+            "/iletisim",
+            "/iletisim/index.html",
+            "/bize-ulasin",
+            "/kvkk",
+            "/hakkimizda",
+        )
+    else:
+        return []
+    return [parsed._replace(path=path, query="", fragment="").geturl() for path in paths]
 
 
 def _build_common_email_probe_candidates(website: str, discovered_urls: list[str]) -> list[str]:

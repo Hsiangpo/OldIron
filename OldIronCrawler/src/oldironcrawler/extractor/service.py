@@ -4,7 +4,6 @@ from concurrent.futures import Future, TimeoutError as FutureTimeoutError, wait 
 from dataclasses import dataclass
 import threading
 import time
-
 from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.company_rules import clean_company_name_candidate, extract_company_name_fallback
 from oldironcrawler.extractor.discovery_fallback import has_non_homepage_email_target
@@ -27,7 +26,7 @@ from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_
 from oldironcrawler.extractor.protocol_client import SiteProtocolClient, SiteProtocolConfig
 from oldironcrawler.extractor.protocol_runtime import DaemonProbeExecutor
 from oldironcrawler.extractor.representative_search import ActiveRepresentativeSearchResult
-from oldironcrawler.extractor.service_email_recovery import recover_email_pages_if_needed
+from oldironcrawler.extractor.service_email_recovery import fetch_fast_common_email_pages_if_needed, recover_email_pages_if_needed
 from oldironcrawler.extractor.service_discovery import (
     DiscoverySnapshot,
     _build_discovery_snapshot,
@@ -44,6 +43,7 @@ from oldironcrawler.extractor.service_discovery import (
     _get_page_total_hard_limit,
     _get_rep_page_limit,
     _has_enough_discovery_coverage,
+    _merge_page_targets,
     _merge_pages_into_map,
     _merge_unique_urls,
     _plan_fetch_targets,
@@ -174,6 +174,7 @@ class SiteProfileService:
                 discovery.prefetched_pages,
                 metrics,
                 deadline_monotonic,
+                discovered_urls=discovery.urls,
                 need_llm_extract=need_llm_extract,
                 collect_email_enabled=collect_email_enabled,
                 collect_phone_enabled=collect_phone_enabled,
@@ -378,6 +379,7 @@ class SiteProfileService:
         metrics: SiteStageMetrics,
         deadline_monotonic: float | None,
         *,
+        discovered_urls: list[str] | None = None,
         need_llm_extract: bool = True,
         collect_email_enabled: bool = True,
         collect_phone_enabled: bool = True,
@@ -441,12 +443,26 @@ class SiteProfileService:
                 llm_result = LlmExtractionResult(
                     company_name="", representative="", evidence_url="", evidence_quote=""
                 )
+            fast_common_ms, fast_common_hit = fetch_fast_common_email_pages_if_needed(
+                protocol,
+                website,
+                discovered_urls or [],
+                fetch_plan,
+                page_map,
+                cascade_email_primary=cascade_email_primary,
+                collect_email_enabled=collect_email_enabled,
+                proxy_url=self._config.proxy_url,
+                timeout_seconds=self._config.request_timeout_seconds,
+                deadline_monotonic=deadline_monotonic,
+            )
+            primary_fetch_ms += fast_common_ms
             remaining_primary_pages, remaining_fetch_ms = self._fetch_remaining_primary_pages_if_needed(
                 protocol,
                 website,
                 fetch_plan,
                 page_map,
                 cascade_email_primary=cascade_email_primary,
+                skip=fast_common_hit,
             )
             primary_fetch_ms += remaining_fetch_ms
             _merge_pages_into_map(page_map, remaining_primary_pages)
@@ -537,7 +553,10 @@ class SiteProfileService:
         page_map: dict[str, object],
         *,
         cascade_email_primary: bool,
+        skip: bool = False,
     ) -> tuple[list, int]:
+        if skip:
+            return [], 0
         if not cascade_email_primary:
             return [], 0
         remaining_urls = _select_unfetched_primary_urls(fetch_plan, page_map)
@@ -562,14 +581,6 @@ class SiteProfileService:
         finally:
             elapsed_ms = int(round((time.monotonic() - started) * 1000))
             setattr(metrics, field_name, int(getattr(metrics, field_name, 0) or 0) + elapsed_ms)
-def _merge_page_targets(rep_urls: list[str], email_urls: list[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for url in [*rep_urls, *email_urls]:
-        if url and url not in seen:
-            seen.add(url)
-            result.append(url)
-    return result
 def _fetch_initial_primary_pages_with_recovery(
     protocol: SiteProtocolClient,
     fetch_plan: dict[str, list[str]],
