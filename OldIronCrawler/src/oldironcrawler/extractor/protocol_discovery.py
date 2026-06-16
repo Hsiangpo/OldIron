@@ -160,6 +160,13 @@ _COMMON_VALUE_PATHS = (
     "/socios",
     "/ri",
     "/relacoes-com-investidores",
+    "/contact",
+    "/contact/",
+    "/contact.html",
+    "/contact-company",
+    "/contact-company/",
+    "/contact-recruit",
+    "/contact-recruit/",
     "/inquiry",
     "/shop/pages/order.aspx",
     "/commitment/global-expansion",
@@ -195,8 +202,6 @@ _COMMON_VALUE_PATHS = (
     "/company",
     "/ir/contact",
     "/contact-us",
-    "/contact",
-    "/contact.html",
     "/form",
     "/recruit",
     "/recruit/form",
@@ -234,6 +239,10 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/bize-ulasin", 70),
     ("/fale-conosco", 70),
     ("/contato", 68),
+    ("/contact-company", 76),
+    ("/contact-recruit", 74),
+    ("/contact/", 72),
+    ("/contact", 70),
     ("/inquiry", 68),
     ("/contact/form", 66),
     ("/contact/mail", 66),
@@ -253,7 +262,6 @@ _DISCOVERY_PRIORITY_PHRASES = (
     ("/about-us", 56),
     ("/about", 44),
     ("/contact-us", 32),
-    ("/contact", 24),
     ("/company/privacy", 36),
     ("/company/group", 34),
     ("/privacy", 30),
@@ -308,10 +316,11 @@ _TURKEY_SPECULATIVE_PATH_WEIGHTS = (
     ("contact", 60),
 )
 _JAPAN_SPECULATIVE_PATH_WEIGHTS = (
+    ("contact-company", 198),
+    ("contact-recruit", 194),
+    ("contact", 220),
     ("inquiry", 180),
     ("mailform", 172),
-    ("contact/form", 168),
-    ("contact/mail", 166),
     ("shop/pages/order.aspx", 168),
     ("commitment/global-expansion", 168),
     ("order.aspx", 164),
@@ -322,7 +331,6 @@ _JAPAN_SPECULATIVE_PATH_WEIGHTS = (
     ("company/group", 108),
     ("privacy", 96),
     ("form", 104),
-    ("contact", 92),
 )
 _GENERIC_SPECULATIVE_PATH_WEIGHTS = (
     ("contact-us", 120),
@@ -685,7 +693,14 @@ def _prioritize_common_probe_urls(start_url: str, urls: list[str]) -> list[str]:
         for index, url in enumerate(urls)
     ]
     scored.sort()
+    if _is_japan_common_host(urlparse(start_url).netloc):
+        return _diversify_speculative_common_urls(scored, limit=len(scored), include_locale=False)
     return [url for _score, _index, url in scored]
+
+
+def _is_japan_common_host(host: str) -> bool:
+    lowered = str(host or "").strip().lower()
+    return lowered.endswith(".jp") or ".co.jp" in lowered
 
 
 def pick_speculative_common_value_urls(start_url: str, *, limit: int) -> list[str]:
@@ -701,12 +716,17 @@ def pick_speculative_common_value_urls(start_url: str, *, limit: int) -> list[st
     return _diversify_speculative_common_urls(scored, limit=limit)
 
 
-def _diversify_speculative_common_urls(scored: list[tuple[int, int, str]], *, limit: int) -> list[str]:
+def _diversify_speculative_common_urls(
+    scored: list[tuple[int, int, str]],
+    *,
+    limit: int,
+    include_locale: bool = True,
+) -> list[str]:
     picked: list[str] = []
     seen_urls: set[str] = set()
     seen_families: set[str] = set()
     for _, _, url in scored:
-        family = _speculative_common_path_family(url)
+        family = _speculative_common_path_family(url, include_locale=include_locale)
         if family in seen_families:
             continue
         seen_families.add(family)
@@ -723,7 +743,7 @@ def _diversify_speculative_common_urls(scored: list[tuple[int, int, str]], *, li
     return picked
 
 
-def _speculative_common_path_family(url: str) -> str:
+def _speculative_common_path_family(url: str, *, include_locale: bool = True) -> str:
     path = (urlparse(url).path or "").strip("/").lower()
     if not path:
         return ""
@@ -738,14 +758,20 @@ def _speculative_common_path_family(url: str) -> str:
         ("contato", ("contato",)),
         ("iletisim", ("iletisim",)),
         ("bize-ulasin", ("bize-ulasin",)),
+        ("contact-company", ("contact-company",)),
+        ("contact-recruit", ("contact-recruit",)),
+        ("contact-form", ("contact/form", "contact/mail")),
+        ("contact-us", ("contact-us",)),
         ("inquiry", ("inquiry",)),
         ("mailform", ("mailform",)),
         ("contact", ("contact",)),
         ("privacy", ("privacidade", "politica-de-privacidade", "politica-privacidade", "privacy")),
     ):
         if any(token in normalized for token in tokens):
-            return f"{locale}:{family}"
-    return f"{locale}:{normalized}"
+            prefix = f"{locale}:" if include_locale else ""
+            return f"{prefix}{family}"
+    prefix = f"{locale}:" if include_locale else ""
+    return f"{prefix}{normalized}"
 
 
 def _score_speculative_common_value_url(start_url: str, url: str) -> int:
@@ -784,6 +810,8 @@ def _score_locale_prefix(path: str, host: str) -> int:
         return 8
     if prefix == "tr" and (host.endswith(".tr") or ".com.tr" in host):
         return 8
+    if (host.endswith(".jp") or ".co.jp" in host) and prefix not in {"ja", "jp", "en"}:
+        return 12
     if prefix == "ja" and (host.endswith(".jp") or ".co.jp" in host):
         return 8
     if prefix in {"br", "jp"}:

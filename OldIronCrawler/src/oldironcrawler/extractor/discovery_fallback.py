@@ -88,6 +88,10 @@ def _build_country_root_priority_email_probe_urls(website: str) -> list[str]:
         paths = (
             "/contact",
             "/contact/",
+            "/contact-company",
+            "/contact-company/",
+            "/contact-recruit",
+            "/contact-recruit/",
             "/support",
             "/inquiry",
             "/mailform",
@@ -119,7 +123,42 @@ def _build_country_root_priority_email_probe_urls(website: str) -> list[str]:
         )
     else:
         return []
-    return [parsed._replace(path=path, query="", fragment="").geturl() for path in paths]
+    return [
+        parsed._replace(scheme=scheme, netloc=origin_host, path=path, query="", fragment="").geturl()
+        for path in paths
+        for scheme, origin_host in _build_country_probe_origins(parsed.scheme, host)
+    ]
+
+
+def _build_country_probe_origins(scheme: str, host: str) -> list[tuple[str, str]]:
+    clean_scheme = str(scheme or "").strip().lower() or "https"
+    schemes = _dedupe_probe_values(["https", clean_scheme, "http"])
+    if clean_scheme == "https":
+        hosts = _dedupe_probe_values([host, _alternate_probe_host(host)])
+    elif host.startswith("www."):
+        root_host = host[4:]
+        hosts = _dedupe_probe_values([root_host, host])
+    else:
+        hosts = _dedupe_probe_values([f"www.{host}", host])
+    return [(item_scheme, item_host) for item_scheme in schemes for item_host in hosts]
+
+
+def _alternate_probe_host(host: str) -> str:
+    clean = str(host or "").strip().lower()
+    if not clean:
+        return ""
+    if clean.startswith("www."):
+        return clean[4:]
+    return f"www.{clean}"
+
+
+def _dedupe_probe_values(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        clean = str(value or "").strip().lower()
+        if clean and clean not in result:
+            result.append(clean)
+    return result
 
 
 def _build_common_email_probe_candidates(website: str, discovered_urls: list[str]) -> list[str]:

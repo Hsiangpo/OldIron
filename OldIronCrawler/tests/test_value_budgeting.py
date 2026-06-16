@@ -1300,7 +1300,6 @@ def test_site_profile_service_common_probe_recovers_japan_contact_after_form_mis
 
     assert result.result.emails == "daichi@snowseed.co.jp"
     assert any(contact_url in call for call in fetch_calls)
-    assert [contact_url] in fetch_calls
     assert all(recruit_url not in call for call in fetch_calls)
     assert max(len(call) for call in fetch_calls) <= 8
     learning_store.close()

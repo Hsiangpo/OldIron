@@ -48,7 +48,7 @@ _EMAIL_WEIGHTS = {
     "advogados": 14,
     "bize": 8,
     "conosco": 10,
-    "contact": 20,
+    "contact": 40,
     "contato": 24,
     "corporate": 5,
     "kontakt": 22,
@@ -728,10 +728,11 @@ def _path_phrase_bonus(url: str, *, kind: str) -> int:
             ("bize-ulasin", 18),
             ("://ri.", 18),
             ("/advogados", 18),
-            ("contact-us", 14),
+            ("contact-company", 28),
+            ("contact-recruit", 22),
+            ("contact-us", 20),
             ("contact/form", 12),
             ("contact/mail", 12),
-            ("contact/", 6),
             ("datenschutz", 10),
             ("e-posta", 18),
             ("eposta", 18),
@@ -766,8 +767,21 @@ def _path_phrase_bonus(url: str, *, kind: str) -> int:
         ):
             if phrase in lowered:
                 score += value
+        score += _contact_path_email_bonus(url)
         score += _japanese_company_info_email_bonus(url)
     return score
+
+
+def _contact_path_email_bonus(url: str) -> int:
+    path = (urlparse(str(url or "").strip()).path or "").strip("/").lower()
+    if not path:
+        return 0
+    first = path.split("/", 1)[0]
+    if first in {"contact", "contact.html"}:
+        return 24
+    if first in {"contact-company", "contact-recruit", "contact-us"}:
+        return 24
+    return 0
 
 
 def _japanese_company_info_email_bonus(url: str) -> int:

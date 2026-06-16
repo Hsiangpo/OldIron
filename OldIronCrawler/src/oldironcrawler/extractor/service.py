@@ -26,7 +26,7 @@ from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_
 from oldironcrawler.extractor.protocol_client import SiteProtocolClient, SiteProtocolConfig
 from oldironcrawler.extractor.protocol_runtime import DaemonProbeExecutor
 from oldironcrawler.extractor.representative_search import ActiveRepresentativeSearchResult
-from oldironcrawler.extractor.service_email_recovery import fetch_fast_common_email_pages_if_needed, recover_email_pages_if_needed
+from oldironcrawler.extractor.service_email_recovery import fetch_fast_common_email_pages_if_needed, fetch_initial_primary_pages_with_recovery, recover_email_pages_if_needed, _should_recover_initial_primary_fetch
 from oldironcrawler.extractor.service_discovery import (
     DiscoverySnapshot,
     _build_discovery_snapshot,
@@ -65,7 +65,6 @@ _DEFAULT_AI_EMAIL_CONCURRENCY = 32
 _DEFAULT_AI_EMAIL_TIMEOUT_SECONDS = 8.0
 _AI_EMAIL_MERGE_WAIT_HARD_CAP_SECONDS = 0.1
 _AI_EMAIL_LOW_SIGNAL_TIMEOUT_SECONDS = 0.5
-_SLOW_EMPTY_INITIAL_FETCH_RECOVERY_CUTOFF_MS = 8000
 _AI_EMAIL_SEMAPHORE_LOCK = threading.Lock()
 _AI_EMAIL_SEMAPHORE: threading.Semaphore | None = None
 _AI_EMAIL_SEMAPHORE_LIMIT = 0
@@ -402,7 +401,7 @@ class SiteProfileService:
             )
             initial_started = time.monotonic()
             try:
-                primary_pages, primary_fetch_ms = _fetch_initial_primary_pages_with_recovery(
+                primary_pages, primary_fetch_ms = fetch_initial_primary_pages_with_recovery(
                     protocol,
                     fetch_plan,
                     page_map,
@@ -410,6 +409,10 @@ class SiteProfileService:
                     page_concurrency=self._config.page_concurrency,
                     page_pool=self._page_pool,
                     cascade_email_primary=cascade_email_primary,
+                    website=website,
+                    discovered_urls=discovered_urls or [],
+                    fetch_primary_pages_func=_fetch_primary_pages,
+                    select_unfetched_primary_urls_func=_select_unfetched_primary_urls,
                 )
             except Exception:
                 primary_fetch_ms += int(round((time.monotonic() - initial_started) * 1000))
@@ -581,104 +584,6 @@ class SiteProfileService:
         finally:
             elapsed_ms = int(round((time.monotonic() - started) * 1000))
             setattr(metrics, field_name, int(getattr(metrics, field_name, 0) or 0) + elapsed_ms)
-def _fetch_initial_primary_pages_with_recovery(
-    protocol: SiteProtocolClient,
-    fetch_plan: dict[str, list[str]],
-    page_map: dict[str, object],
-    primary_urls: list[str],
-    *,
-    page_concurrency: int,
-    page_pool: PageFetchPool | None,
-    cascade_email_primary: bool,
-) -> tuple[list, int]:
-    if not primary_urls:
-        return [], 0
-    started = time.monotonic()
-    try:
-        return _fetch_primary_pages(
-            protocol,
-            primary_urls,
-            page_concurrency=page_concurrency,
-            page_pool=page_pool,
-        )
-    except Exception as exc:  # noqa: BLE001
-        elapsed_ms = int(round((time.monotonic() - started) * 1000))
-        if not _should_recover_initial_primary_fetch(
-            exc,
-            fetch_plan,
-            page_map,
-            primary_urls,
-            cascade_email_primary=cascade_email_primary,
-            elapsed_ms=elapsed_ms,
-        ):
-            raise
-        failed_urls = set(primary_urls)
-        fallback_urls = [
-            url for url in _select_unfetched_primary_urls(fetch_plan, page_map)
-            if url not in failed_urls
-        ]
-        try:
-            fallback_pages, fallback_ms = _fetch_primary_pages(
-                protocol,
-                fallback_urls,
-                page_concurrency=page_concurrency,
-                page_pool=page_pool,
-            )
-        except Exception:  # noqa: BLE001
-            if page_map:
-                fallback_ms = int(round((time.monotonic() - started) * 1000)) - elapsed_ms
-                return [], elapsed_ms + max(fallback_ms, 0)
-            raise
-        return fallback_pages, elapsed_ms + fallback_ms
-
-def _should_recover_initial_primary_fetch(
-    exc: Exception,
-    fetch_plan: dict[str, list[str]],
-    page_map: dict[str, object],
-    primary_urls: list[str],
-    *,
-    cascade_email_primary: bool,
-    elapsed_ms: int = 0,
-) -> bool:
-    if not cascade_email_primary:
-        return False
-    if not _is_recoverable_initial_fetch_error(exc):
-        return False
-    if page_map:
-        return True
-    if _is_slow_empty_initial_fetch_timeout(exc, elapsed_ms):
-        return False
-    failed_urls = set(primary_urls)
-    remaining_urls = [
-        url for url in _select_unfetched_primary_urls(fetch_plan, page_map)
-        if url not in failed_urls
-    ]
-    return bool(remaining_urls)
-
-def _is_slow_empty_initial_fetch_timeout(exc: Exception, elapsed_ms: int) -> bool:
-    if elapsed_ms < _SLOW_EMPTY_INITIAL_FETCH_RECOVERY_CUTOFF_MS:
-        return False
-    if isinstance(exc, TimeoutError):
-        return True
-    message = str(exc or "").lower()
-    return "timeout" in message or "timed out" in message
-
-def _is_recoverable_initial_fetch_error(exc: Exception) -> bool:
-    if isinstance(exc, TimeoutError):
-        return True
-    message = str(exc or "").lower()
-    return any(
-        token in message
-        for token in (
-            "timeout",
-            "timed out",
-            "empty_page_batch",
-            "temporary",
-            "curl:",
-            "connection",
-        )
-    )
-
 def _start_active_representative_search(
     searcher,
     *,

@@ -24,6 +24,7 @@ from oldironcrawler.extractor.phone_rules import collect_phones_for_pages, join_
 from oldironcrawler.extractor.protocol.content import truncate_html
 from oldironcrawler.extractor import llm_client as llm_module
 from oldironcrawler.extractor import protocol_client as protocol_module
+from oldironcrawler.extractor import discovery_fallback as discovery_fallback_module
 from oldironcrawler.extractor import protocol_runtime as protocol_runtime_module
 from oldironcrawler.extractor import service as service_module
 from oldironcrawler.extractor import service_discovery as service_discovery_module
@@ -1818,6 +1819,105 @@ def test_site_profile_service_skips_llm_when_rep_pages_are_empty(tmp_path: Path,
     store.close()
 
 
+def test_site_profile_service_recovers_japan_common_email_page_after_empty_initial_batch(tmp_path: Path, monkeypatch) -> None:
+    class FakeProtocolClient:
+        fetch_calls: list[list[str]] = []
+
+        def __init__(self, _config) -> None:
+            return None
+
+        def discover_primary_urls(self, website: str, *, limit: int):
+            return SimpleNamespace(
+                urls=[
+                    f"{website}/ja/shop/pages/order.aspx",
+                    f"{website}/ja/commitment/global-expansion",
+                ],
+                homepage_html="",
+            )
+
+        def discover_sitemap_urls(self, website: str, *, limit: int) -> list[str]:
+            return []
+
+        def discover_related_subdomain_urls(self, website: str, *, homepage_html: str, direct_urls: list[str], limit: int) -> list[str]:
+            return []
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            self.fetch_calls.append(list(urls))
+            if any(url.rstrip("/").endswith("/contact") for url in urls):
+                return [
+                    HtmlPage(
+                        url="https://nihonfarm.co.jp/contact/",
+                        html="<html><body>info@nihonfarm.co.jp</body></html>",
+                    )
+                ]
+            raise ProtocolTemporaryError("empty_page_batch: " + ", ".join(urls))
+
+        def close(self) -> None:
+            return None
+
+    class FakeLlmClient:
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+        def extract_company_and_representative(self, **_kwargs):
+            return LlmExtractionResult(company_name="", representative="", evidence_url="", evidence_quote="")
+
+    monkeypatch.setattr("oldironcrawler.extractor.service.SiteProtocolClient", FakeProtocolClient)
+
+    config = SimpleNamespace(
+        request_timeout_seconds=1.0,
+        proxy_url="",
+        capsolver_api_key="",
+        capsolver_api_base_url="https://api.capsolver.com",
+        capsolver_proxy="",
+        capsolver_poll_seconds=3.0,
+        capsolver_max_wait_seconds=40.0,
+        cloudflare_proxy_url="",
+        page_concurrency=4,
+        page_worker_count=4,
+        total_wait_seconds=20.0,
+        discovery_budget_seconds=30.0,
+        rep_page_limit=0,
+        email_page_soft_limit=8,
+        email_page_hard_limit=16,
+        page_total_hard_limit=20,
+        email_stop_same_domain_count=2,
+        collect_email_enabled=True,
+        collect_phone_enabled=False,
+        collect_company_name_enabled=False,
+        extract_representative_enabled=False,
+        ai_email_concurrency=4,
+        ai_email_timeout_seconds=0.1,
+    )
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    learning_store = GlobalLearningStore(tmp_path / "global_learning.sqlite3")
+    store.prepare_job(
+        input_name="sites.txt",
+        fingerprint="abc",
+        rows=[
+            ImportedWebsite(
+                input_index=1,
+                raw_website="https://nihonfarm.co.jp",
+                website="https://nihonfarm.co.jp",
+                dedupe_key="nihonfarm.co.jp",
+            )
+        ],
+    )
+    task = store.claim_next_site()
+
+    assert task is not None
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+    result = service.process(task.id, task.website)
+
+    assert result.result.emails == "info@nihonfarm.co.jp"
+    assert any(
+        any(url.rstrip("/").endswith("/contact") for url in call)
+        for call in FakeProtocolClient.fetch_calls
+    )
+    learning_store.close()
+    store.close()
+
+
 def test_discovery_snapshot_probes_common_paths_when_email_targets_missing() -> None:
     class FakeProtocol:
         def __init__(self) -> None:
@@ -2281,6 +2381,21 @@ def test_select_email_urls_includes_turkey_brazil_japan_value_pages() -> None:
         email_urls = select_email_urls(candidates)
 
         assert value_url in email_urls
+
+
+def test_select_email_urls_prioritizes_japanese_contact_before_commerce_pages() -> None:
+    urls = [
+        "https://x.co.jp/shop/pages/order.aspx",
+        "https://x.co.jp/commitment/global-expansion",
+        "https://x.co.jp/contact/",
+        "https://x.co.jp/contact-company/",
+    ]
+    candidates = build_candidates("https://x.co.jp", urls, {}, {})
+
+    email_urls = select_email_urls(candidates)
+
+    assert email_urls.index("https://x.co.jp/contact/") < email_urls.index("https://x.co.jp/shop/pages/order.aspx")
+    assert email_urls.index("https://x.co.jp/contact-company/") < email_urls.index("https://x.co.jp/shop/pages/order.aspx")
 
 
 def test_select_email_urls_includes_brazil_people_and_investor_pages() -> None:
@@ -4021,6 +4136,31 @@ def test_common_probe_urls_prioritize_country_local_value_paths() -> None:
     assert any("/fale-conosco" in url or "/contato" in url for url in brazil_urls[:8])
     assert any("/iletisim" in url for url in turkey_urls[:8])
     assert any("/inquiry" in url for url in japan_urls[:8])
+
+
+def test_japan_common_probe_prioritizes_contact_in_first_batch() -> None:
+    japan_urls = protocol_module._build_common_probe_urls("https://example.co.jp")
+
+    assert "https://example.co.jp/contact" in japan_urls[:8]
+    assert "https://example.co.jp/contact-company" in japan_urls[:12]
+    assert japan_urls.index("https://example.co.jp/contact") < japan_urls.index("https://example.co.jp/shop/pages/order.aspx")
+
+
+def test_japan_email_recovery_probe_includes_https_www_contact_variants_for_http_inputs() -> None:
+    japan_urls = discovery_fallback_module._select_common_email_probe_urls(
+        "http://example.co.jp",
+        SimpleNamespace(urls=[]),
+        limit=16,
+    )
+    www_input_urls = discovery_fallback_module._select_common_email_probe_urls(
+        "http://www.example.co.jp",
+        SimpleNamespace(urls=[]),
+        limit=16,
+    )
+
+    assert "https://www.example.co.jp/contact" in japan_urls
+    assert "https://www.example.co.jp/contact-company" in japan_urls
+    assert "https://example.co.jp/contact" in www_input_urls
 
 
 def test_brazil_common_probe_prioritizes_root_contato_in_first_batch() -> None:
