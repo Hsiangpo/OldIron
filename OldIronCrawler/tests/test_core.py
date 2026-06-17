@@ -3990,6 +3990,77 @@ def test_pdf_asset_selection_skips_low_signal_report_pdfs() -> None:
     assert selected == []
 
 
+def test_pdf_asset_recovery_uses_parsed_pdf_text_when_raw_bytes_hide_email(monkeypatch) -> None:
+    page_map = {
+        "https://rizaasset.com/privacy": HtmlPage(
+            url="https://rizaasset.com/privacy",
+            html='<html><body><a href="/files/privacy.pdf">Politica</a></body></html>',
+        )
+    }
+    pdf_url = "https://rizaasset.com/files/privacy.pdf"
+    metrics = SiteStageMetrics()
+
+    monkeypatch.setattr(
+        service_email_recovery_module,
+        "_extract_pdf_text_with_parser",
+        lambda _data: "Canal compliance@rizaasset.com",
+    )
+
+    emails, sources, recovered_pages = service_email_recovery_module.recover_pdf_asset_emails_if_needed(
+        SimpleNamespace(),
+        "https://rizaasset.com",
+        page_map,
+        metrics,
+        [],
+        fetch_bytes_func=lambda url: (b"%PDF-1.7\\x00\\x01\\x02" if url == pdf_url else b""),
+    )
+
+    assert emails == ["compliance@rizaasset.com"]
+    assert sources == {pdf_url: ["compliance@rizaasset.com"]}
+    assert recovered_pages[-1] == (pdf_url, "Canal compliance@rizaasset.com")
+
+
+def test_pdf_asset_recovery_falls_back_when_parser_breaks(monkeypatch) -> None:
+    class BrokenPages:
+        def __getitem__(self, _index):
+            raise RuntimeError("broken pdf")
+
+    class BrokenReader:
+        def __init__(self, _stream):
+            self.pages = BrokenPages()
+
+    monkeypatch.setattr(service_email_recovery_module, "PdfReader", BrokenReader)
+
+    text = service_email_recovery_module._decode_pdf_asset_bytes(
+        b"raw compliance@fallback.com"
+    )
+
+    assert "compliance@fallback.com" in text
+
+
+def test_pdf_parser_skips_non_pdf_bytes_without_invoking_reader(monkeypatch) -> None:
+    monkeypatch.setattr(
+        service_email_recovery_module,
+        "PdfReader",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not run")),
+    )
+
+    assert service_email_recovery_module._extract_pdf_text_with_parser(b"<!DOCTYPE html>") == ""
+
+
+def test_pdf_parser_suppresses_stderr_noise(monkeypatch, capsys) -> None:
+    class QuietReader:
+        def __init__(self, _stream, strict=False):
+            import sys
+            print("parser warning", file=sys.stderr)
+            self.pages = []
+
+    monkeypatch.setattr(service_email_recovery_module, "PdfReader", QuietReader)
+
+    assert service_email_recovery_module._extract_pdf_text_with_parser(b"%PDF-1.7") == ""
+    assert capsys.readouterr().err == ""
+
+
 def test_recover_email_pages_fetches_pdf_source_pages_before_pdf_recovery(monkeypatch) -> None:
     conduta_url = "https://tutiplast.com.br/conduta-e-etica/"
     page_map = {

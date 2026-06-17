@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 import html
+from io import BytesIO
+from io import StringIO
 import httpx
 import re
 import time
 from types import SimpleNamespace
 from urllib.parse import urljoin
 from urllib.parse import urlparse
+
+try:
+    from pypdf import PdfReader
+except Exception:  # noqa: BLE001
+    PdfReader = None
 
 from oldironcrawler.extractor.discovery_fallback import _select_common_email_probe_urls
 from oldironcrawler.extractor.email_rules import (
@@ -589,7 +597,43 @@ def _stream_pdf_asset_bytes(client_kwargs: dict, url: str, timeout_seconds: floa
 def _decode_pdf_asset_bytes(data: bytes) -> str:
     if not data:
         return ""
+    parsed_text = _extract_pdf_text_with_parser(data)
+    if parsed_text:
+        return parsed_text[:_PDF_EMAIL_ASSET_TEXT_LIMIT]
     return data.decode("latin1", errors="ignore")[:_PDF_EMAIL_ASSET_TEXT_LIMIT]
+
+
+def _extract_pdf_text_with_parser(data: bytes) -> str:
+    if not data or PdfReader is None:
+        return ""
+    if b"%PDF" not in data[:1024]:
+        return ""
+    stderr_buffer = StringIO()
+    try:
+        with redirect_stderr(stderr_buffer):
+            reader = PdfReader(BytesIO(data), strict=False)
+    except Exception:  # noqa: BLE001
+        return ""
+    parts: list[str] = []
+    pages = getattr(reader, "pages", None)
+    if pages is None:
+        return ""
+    for index in range(25):
+        try:
+            with redirect_stderr(stderr_buffer):
+                page = pages[index]
+        except IndexError:
+            break
+        except Exception:  # noqa: BLE001
+            return ""
+        try:
+            with redirect_stderr(stderr_buffer):
+                text = str(page.extract_text() or "").strip()
+        except Exception:  # noqa: BLE001
+            text = ""
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
 
 
 def _score_pdf_email_source(page_url: str, html_text: str) -> int:
