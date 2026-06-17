@@ -229,7 +229,13 @@ def _build_discovery_snapshot(
     homepage_html: str = "",
     prefetched_pages: list[HtmlPage] | None = None,
 ) -> DiscoverySnapshot:
-    candidates = build_candidates(website, discovered_urls, rep_learned, email_learned)
+    candidates = build_candidates(
+        website,
+        discovered_urls,
+        rep_learned,
+        email_learned,
+        homepage_html=homepage_html,
+    )
     rep_urls, teacher_pool = select_representative_urls(candidates, target_count=rep_target_count)
     email_urls = select_email_urls(candidates)
     return DiscoverySnapshot(

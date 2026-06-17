@@ -132,6 +132,26 @@ def test_select_email_urls_prioritizes_brazil_people_contact_page_over_lgpd_page
     assert selected.index(people_url) < selected.index(lgpd_url)
 
 
+def test_select_email_urls_uses_homepage_locale_hint_for_neutral_brazil_domain() -> None:
+    website = "https://rizaasset.com/home"
+    contato_url = "https://rizaasset.com/contato"
+    iletisim_url = "https://rizaasset.com/iletisim"
+    bize_url = "https://rizaasset.com/bize-ulasin"
+    candidates = build_candidates(
+        website,
+        [bize_url, iletisim_url, contato_url],
+        {},
+        {},
+        homepage_html="<html><body>Politica de Privacidade</body></html>",
+    )
+
+    selected = select_email_urls(candidates)
+
+    assert selected[0] == contato_url
+    assert selected.index(contato_url) < selected.index(iletisim_url)
+    assert selected.index(contato_url) < selected.index(bize_url)
+
+
 def test_truncate_html_preserves_japan_value_anchor_tags() -> None:
     anchor_html = (
         '<a href="https://mitsuse.shop-pro.jp/">公式オンラインショップ</a>'

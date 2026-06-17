@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-06-17T00:19:06Z",
+  "updated_at": "2026-06-17T00:21:11Z",
   "tasks": [
     {
       "task_id": "oldironcrawler-japan-open-email-audit-20260617",
@@ -17,7 +17,7 @@
       "shared_lock_ids": [],
       "github_ref": "not-created",
       "started_at": "2026-06-16T22:02:04Z",
-      "last_heartbeat_at": "2026-06-17T00:19:06Z",
+      "last_heartbeat_at": "2026-06-17T00:21:11Z",
       "notes": "Continue auditing Japan open/no-email cases toward 95% real-open email capture goal."
     }
   ]

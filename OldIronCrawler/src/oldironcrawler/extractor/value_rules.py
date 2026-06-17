@@ -314,6 +314,15 @@ _FAMILY_PREFIX_SKIP_TOKENS = {
     "professional",
     "professionals",
 }
+_PATH_LOCALE_HINTS = {
+    "br": {"atendimento", "contato", "contacto", "conosco", "fale", "faleconosco", "investidores", "lgpd", "ouvidoria", "privacidade", "profissionais", "quem", "relacoes", "socio", "socios", "trabalhe"},
+    "tr": {"bize", "eposta", "hakkimizda", "iletisim", "insan", "kariyer", "kaynaklari", "kurumsal", "kvkk", "ulasin"}, "jp": {"inquiry", "mailform", "otoiawase", "saiyo", "toiawase", "tokutei"},
+    "de": {"datenschutz", "geschaftsfuhrer", "geschaeftsfuehrer", "impressum", "kontakt", "uber", "ueber"},
+}
+_HOMEPAGE_LOCALE_HINTS = {
+    "br": ("politica de privacidade", "fale conosco", "ouvidoria", "relacoes com investidores", "trabalhe conosco"), "tr": ("bize ulasin", "gizlilik", "hakkimizda", "iletisim", "kvkk", "kurumsal"),
+    "jp": ("お問い合わせ", "プライバシー", "メールフォーム", "会社概要", "個人情報", "採用"), "de": ("datenschutz", "impressum", "kontakt", "uber uns", "über uns"),
+}
 
 
 @dataclass
@@ -351,6 +360,8 @@ def build_candidates(
     discovered_urls: list[str],
     rep_learned: dict[str, int],
     email_learned: dict[str, int],
+    *,
+    homepage_html: str = "",
 ) -> list[UrlCandidate]:
     urls: list[str] = []
     for url in [start_url, *discovered_urls]:
@@ -358,6 +369,7 @@ def build_candidates(
         if value and value not in urls:
             urls.append(value)
     candidates: list[UrlCandidate] = []
+    site_locale_family = _infer_site_locale_family(start_url, homepage_html)
     for discovery_order, url in enumerate(urls):
         path_tokens = extract_path_tokens(url)
         trimmed_tokens = _trim_family_tokens(path_tokens)
@@ -376,7 +388,11 @@ def build_candidates(
             email_rule_score += 20
         if is_person_detail_page:
             rep_rule_score += 12
-        locale_penalty = _locale_mismatch_penalty(start_url, url)
+        locale_penalty = _locale_mismatch_penalty(start_url, url) + _site_locale_family_mismatch_penalty(
+            site_locale_family,
+            url,
+            path_tokens,
+        )
         rep_noise_penalty = _rep_noise_penalty(path_tokens, depth, rep_rule_score)
         candidates.append(
             UrlCandidate(
@@ -798,6 +814,75 @@ def _japanese_company_info_email_bonus(url: str) -> int:
         if phrase in path:
             return value
     return 0
+
+
+def _infer_site_locale_family(start_url: str, homepage_html: str) -> str:
+    url_hint = _url_locale_family(start_url)
+    if url_hint:
+        return url_hint
+    hint_text = _normalize_locale_hint_text(homepage_html)
+    if not hint_text:
+        return ""
+    scores = {family: 0 for family in _HOMEPAGE_LOCALE_HINTS}
+    for family, markers in _HOMEPAGE_LOCALE_HINTS.items():
+        for marker in markers:
+            if marker in hint_text:
+                scores[family] += 1
+    best_family = ""
+    best_score = 0
+    for family, score in scores.items():
+        if score > best_score:
+            best_family = family
+            best_score = score
+        elif score == best_score and score > 0:
+            best_family = ""
+    return best_family
+def _normalize_locale_hint_text(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    ascii_variant = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
+    return raw if ascii_variant == raw else f"{raw}\n{ascii_variant}"
+def _site_locale_family_mismatch_penalty(site_locale_family: str, candidate_url: str, path_tokens: list[str]) -> int:
+    if not site_locale_family:
+        return 0
+    candidate_family = _candidate_locale_family(candidate_url, path_tokens)
+    if not candidate_family or candidate_family == site_locale_family:
+        return 0
+    return 24
+def _candidate_locale_family(candidate_url: str, path_tokens: list[str]) -> str:
+    url_hint = _url_locale_family(candidate_url)
+    if url_hint:
+        return url_hint
+    matches = [
+        family
+        for family, locale_tokens in _PATH_LOCALE_HINTS.items()
+        if any(token in locale_tokens for token in path_tokens)
+    ]
+    return matches[0] if len(matches) == 1 else ""
+def _url_locale_family(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host.endswith(".com.br") or host.endswith(".br"):
+        return "br"
+    if host.endswith(".com.tr") or host.endswith(".tr"):
+        return "tr"
+    if host.endswith(".co.jp") or host.endswith(".jp"):
+        return "jp"
+    if host.endswith(".de"):
+        return "de"
+    locale_token = _extract_locale_token_from_url(url)
+    if locale_token in {"br", "pt", "pt-br"}:
+        return "br"
+    if locale_token in {"tr"}:
+        return "tr"
+    if locale_token in {"ja", "jp"}:
+        return "jp"
+    if locale_token in {"de"}:
+        return "de"
+    return ""
 
 
 def _locale_mismatch_penalty(start_url: str, candidate_url: str) -> int:
