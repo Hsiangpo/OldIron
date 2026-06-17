@@ -7,13 +7,13 @@ import random
 import re
 import sys
 import time
-import threading
+import threading, warnings
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from markdownify import MarkdownConverter
 from openai import OpenAI
 
@@ -40,7 +40,7 @@ _REPRESENTATIVE_CONTENT_HINTS = (
     "director", "executive", "founder", "general partner", "impressum", "imprint",
     "leadership", "management", "officer", "our story", "owner", "partner",
     "people", "president", "principal", "profile", "referral", "solicitor",
-    "team", "vice-chancellor", "who we are",
+    "team", "vice-chancellor", "who we are", "代表挨拶", "社長挨拶", "代表取締役", "役員", "トップメッセージ",
 )
 _REPRESENTATIVE_DROP_HINTS = (
     "analytics purposes",
@@ -297,7 +297,7 @@ class WebsiteLlmClient:
             "规则：\n"
             "1. company_name：如果官网明确显示法定名称就用法定名称，否则用品牌名。若 imprint/impressum/legal notice 页面写了法定主体，则优先采用该法定主体，不要被首页品牌名带偏。\n"
             "2. representative：只返回一个最高负责人，只接受真人姓名，不接受部门、团队名、品牌名、职位名本身。\n"
-            "3. 优先级从高到低参考：CEO > Managing Director > President > Chief Executive > Vice-Chancellor > Managing Partner > Director。\n"
+            "3. 优先级从高到低参考：CEO > Managing Director > President/代表取締役/社長 > Chief Executive > Vice-Chancellor > Managing Partner > Director/取締役。\n"
             "4. 如果静态领导页里没有 CEO / Managing Director / President / Chief Executive，但明确列出了 Founder / Co-Founder / Owner，可以返回 Founder / Co-Founder / Owner 中最核心的一人。\n"
             "5. 如果给定页面里同时有静态领导页和新闻/奖项/报道/活动页，只采信静态领导页，不要被新闻引语误导。\n"
             "6. 新闻稿或报道里的 Chair、Founder、发言人、受访者，默认不算最高负责人，除非静态领导页也能佐证。\n"
@@ -308,7 +308,7 @@ class WebsiteLlmClient:
             "11. 如果官网明确写出多个并列最高负责人，例如 general partners、co-founders、founding directors、joint owners、兄弟共同经营者，也不要留空。你必须从中挑一个你判断更高、或在页面上更核心的人名返回；如果完全分不出高低，就返回最先被正式列出的那个人。\n"
             "12. 如果没有正式 CEO/Director 头衔，但官网在静态 about/contact/profile/referrals/team/imprint 页面里清楚地把某个自然人作为主要对外联系人、创始人、principal solicitor、founding director、核心合伙人、核心服务负责人，也可以返回该自然人。\n"
             "13. 如果页面里只有普通员工、顾问、项目联系人、销售联系人、门店联系人，没有明确最高负责人或核心代表人，就返回空。\n"
-            "14. evidence_url 必须尽量指向 about/team/leadership/management/board/governance/profile/contact/referrals/imprint/impressum 这类静态页面；如果只给新闻页而存在静态领导页，视为错误。\n"
+            "14. evidence_url 必须尽量指向 about/team/leadership/management/board/governance/profile/contact/referrals/imprint/impressum/代表挨拶/トップメッセージ/役員 这类静态页面；如果只给新闻页而存在静态领导页，视为错误。\n"
             "15. 对律师事务所、会计师事务所、咨询公司这类专业服务站点，principal solicitor、founding director、named partner 这类角色可以视为最高负责人或核心代表人。\n"
             "16. 如果站点没有正式管理层页，但存在单独的人物详情页，并且该人物与公司主体、同域名邮箱、对外服务描述直接关联，也可以返回该自然人。\n"
             "17. 页面标题、OG 标题、meta description 里的姓名和头衔也算官网明确内容；如果这些头部信号与静态人物页/联系页一致，可以作为有效证据。\n"
@@ -434,7 +434,9 @@ class WebsiteLlmClient:
             if not html_text.strip():
                 result.append({"url": url, "content": ""})
                 continue
-            soup = BeautifulSoup(html_text, "lxml")
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+                soup = BeautifulSoup(html_text, "lxml")
             head_signals = _extract_head_signal_lines(soup)
             for tag in soup.find_all(remove_tags):
                 tag.decompose()

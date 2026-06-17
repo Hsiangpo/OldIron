@@ -4,8 +4,10 @@ from concurrent.futures import Future
 import sys
 import threading
 import time
+import warnings
 from pathlib import Path
 
+from bs4 import XMLParsedAsHTMLWarning
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -88,6 +90,18 @@ def test_llm_client_disables_sdk_internal_retries() -> None:
         assert getattr(client._client, "max_retries", None) == 0
     finally:
         client.close()
+
+
+def test_convert_pages_to_markdown_suppresses_xml_parser_warning() -> None:
+    client = object.__new__(WebsiteLlmClient)
+    xml_text = "<?xml version='1.0'?><urlset><url><loc>https://example.co.jp/contact</loc></url></urlset>"
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        pages = client._convert_pages_to_markdown([{"url": "https://example.co.jp/sitemap.xml", "html": xml_text}])
+
+    assert pages[0]["content"]
+    assert not [item for item in captured if issubclass(item.category, XMLParsedAsHTMLWarning)]
 
 
 def test_extract_emails_from_pages_parses_and_dedupes(monkeypatch) -> None:

@@ -600,6 +600,8 @@ def _decode_pdf_asset_bytes(data: bytes) -> str:
     parsed_text = _extract_pdf_text_with_parser(data)
     if parsed_text:
         return parsed_text[:_PDF_EMAIL_ASSET_TEXT_LIMIT]
+    if b"%PDF" in data[:1024]:
+        return ""
     return data.decode("latin1", errors="ignore")[:_PDF_EMAIL_ASSET_TEXT_LIMIT]
 
 

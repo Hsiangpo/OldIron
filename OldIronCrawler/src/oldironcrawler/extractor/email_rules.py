@@ -82,7 +82,9 @@ _FREE_MAIL_DOMAINS = {
 _OFFSITE_ALWAYS_DROP_LOCAL_PARTS = {"found", "posted", "profile", "webmaster", "website"}
 _OFFSITE_ALWAYS_DROP_DOMAINS = {
     "blivesta.com",
+    "gserviceaccount.com",
     "greensock.com",
+    "mypapit.net",
     "ranadesign.com",
     "webinlet.com",
 }

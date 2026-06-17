@@ -1888,6 +1888,68 @@ def test_site_profile_service_recovers_japan_emails_from_unselected_contact_page
     store.close()
 
 
+def test_site_profile_service_recovers_japan_shop_privacy_email_after_form_miss(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    website = "https://www.ichikawaen.co.jp"
+    contact_url = f"{website}/shop/contact/contact.aspx"
+    privacy_url = f"{website}/shop/pg/1privacy/"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocolClient:
+        def __init__(self, _config) -> None:
+            return None
+
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            html_map = {
+                website: "<html>Home</html>",
+                contact_url: "<html>Contact form only</html>",
+                privacy_url: "<html>Mail ocha@ichikawaen.co.jp</html>",
+            }
+            return [HtmlPage(url=url, html=html_map[url]) for url in urls if url in html_map]
+
+        def close(self) -> None:
+            return None
+
+    class FakeLlmClient:
+        def pick_email_urls(self, **_kwargs):
+            return []
+
+        def extract_emails_from_pages(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(service_module, "SiteProtocolClient", FakeProtocolClient)
+    monkeypatch.setattr(
+        service_module,
+        "_discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=[website, contact_url],
+            candidates=[],
+            rep_urls=[],
+            teacher_pool=[],
+            email_urls=[contact_url],
+            homepage_html="<html>Home</html>",
+        ),
+    )
+
+    config = _build_service_config()
+    config.collect_email_enabled = True
+    config.collect_phone_enabled = False
+    config.collect_company_name_enabled = False
+    config.extract_representative_enabled = False
+    store, learning_store, task = _prepare_service_task(tmp_path, website=website)
+    service = SiteProfileService(config, store, learning_store, FakeLlmClient(), page_pool=None)
+
+    result = service.process(task.id, task.website)
+
+    assert result.result.emails == "ocha@ichikawaen.co.jp"
+    assert any(privacy_url in urls for urls in fetch_calls)
+    learning_store.close()
+    store.close()
+
+
 def test_split_emails_drops_common_doe_placeholder_address() -> None:
     assert split_emails(["john@doe.com", "jane@doe.com", "contato@acme.com.br"]) == [
         "contato@acme.com.br"

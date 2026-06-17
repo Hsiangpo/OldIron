@@ -1888,6 +1888,26 @@ def test_prepare_representative_pages_keeps_top_page_full_when_budget_tight() ->
     assert len(prepared[1]["content"]) < len(lower_page["content"])
 
 
+def test_prepare_representative_pages_prioritizes_japanese_leader_terms() -> None:
+    page = {
+        "url": "https://example.co.jp/company/message.html",
+        "content": "\n".join(
+            [
+                "沿革",
+                "製品情報",
+                "代表挨拶",
+                "代表取締役社長 山田 太郎",
+                "地域農業に貢献します。",
+            ]
+        ),
+    }
+
+    prepared = llm_module._prepare_representative_pages([page])
+
+    assert "代表取締役社長 山田 太郎" in prepared[0]["content"]
+    assert prepared[0]["content"].startswith("--- 重点片段 ---")
+
+
 def test_collect_emails_for_pages_falls_back_to_same_domain_embedded_emails() -> None:
     html_text = """
     <html>
@@ -2704,6 +2724,25 @@ def test_select_urls_include_german_impressum_and_kontakt() -> None:
     assert "https://atlas.de/impressum" in rep_urls
     assert "https://atlas.de/kontakt" in rep_urls
     assert "https://atlas.de/kontakt" in email_urls
+
+
+def test_select_representative_urls_include_japanese_message_and_officer_pages() -> None:
+    website = "https://example.co.jp"
+    message_url = "https://example.co.jp/%E4%BB%A3%E8%A1%A8%E6%8C%A8%E6%8B%B6/"
+    officers_url = "https://example.co.jp/%E5%BD%B9%E5%93%A1/"
+    news_url = "https://example.co.jp/news/message.html"
+    candidates = build_candidates(
+        website,
+        [news_url, message_url, officers_url],
+        {},
+        {},
+    )
+
+    rep_urls, _teacher_pool = select_representative_urls(candidates, target_count=3)
+
+    assert message_url in rep_urls
+    assert officers_url in rep_urls
+    assert news_url not in rep_urls
 
 
 def test_select_email_urls_includes_turkey_brazil_japan_value_pages() -> None:
@@ -4066,6 +4105,32 @@ def test_email_rules_keep_same_site_email_for_domain_that_is_noise_elsewhere() -
     assert emails == ["jack@greensock.com"]
 
 
+def test_email_rules_drop_offsite_service_account_and_form_vendor_noise() -> None:
+    emails, _page_hits = collect_emails_for_pages(
+        "https://kaneko-pc.jp",
+        [
+            (
+                "https://kaneko-pc.jp/assets/app.js",
+                """
+                const serviceAccount = "firebase-adminsdk-fbsvc@tohokuseed.iam.gserviceaccount.com";
+                const formVendor = "info@mypapit.net";
+                """,
+            )
+        ],
+    )
+
+    assert emails == []
+
+
+def test_email_rules_keep_same_site_email_for_form_vendor_domain() -> None:
+    emails, _page_hits = collect_emails_for_pages(
+        "https://mypapit.net",
+        [("https://mypapit.net/contact", "<main>Contact info@mypapit.net</main>")],
+    )
+
+    assert emails == ["info@mypapit.net"]
+
+
 def test_email_rules_keep_real_emails_from_frontend_app_data() -> None:
     html_text = """
     <html><body>
@@ -4250,6 +4315,16 @@ def test_pdf_asset_recovery_falls_back_when_parser_breaks(monkeypatch) -> None:
     )
 
     assert "compliance@fallback.com" in text
+
+
+def test_pdf_asset_decoder_does_not_scan_pdf_binary_when_parser_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(service_email_recovery_module, "PdfReader", None)
+
+    text = service_email_recovery_module._decode_pdf_asset_bytes(
+        b"%PDF-1.7\nstream\nk@h.qq r@kk.sz\nendstream"
+    )
+
+    assert text == ""
 
 
 def test_pdf_parser_skips_non_pdf_bytes_without_invoking_reader(monkeypatch) -> None:
@@ -4978,6 +5053,16 @@ def test_japan_email_recovery_probe_includes_https_www_contact_variants_for_http
     assert "https://www.example.co.jp/contact" in japan_urls
     assert "https://www.example.co.jp/contact-company" in japan_urls
     assert "https://example.co.jp/contact" in www_input_urls
+
+
+def test_japan_email_recovery_probe_prioritizes_shop_privacy_page() -> None:
+    urls = discovery_fallback_module._select_common_email_probe_urls(
+        "https://www.ichikawaen.co.jp",
+        SimpleNamespace(urls=["https://www.ichikawaen.co.jp/shop/contact/contact.aspx"]),
+        limit=8,
+    )
+
+    assert "https://www.ichikawaen.co.jp/shop/pg/1privacy/" in urls
 
 
 def test_common_email_probe_prioritizes_japanese_shop_order_page_on_neutral_domain() -> None:

@@ -597,7 +597,7 @@ def extract_path_tokens(url: str) -> list[str]:
         decoded = re.sub(r"\.[a-z0-9]{2,5}$", "", unquote(part).strip().lower())
         for token in re.split(r"[\W_]+", decoded, flags=re.UNICODE):
             for clean in _expand_composite_token(token):
-                if len(clean) < 3:
+                if len(clean) < 3 and clean.isascii():
                     continue
                 if clean not in tokens:
                     tokens.append(clean)
@@ -704,7 +704,7 @@ def _should_stop_email_selection(score: int, strong_families: set[str]) -> bool:
 
 
 def _path_phrase_bonus(url: str, *, kind: str) -> int:
-    lowered = str(url or "").lower()
+    lowered = unquote(str(url or "")).lower()
     score = 0
     for phrase, value in (
         ("discount-partners", -22),
@@ -728,6 +728,10 @@ def _path_phrase_bonus(url: str, *, kind: str) -> int:
             ("impressum", 20),
             ("institucional", 12),
             ("kontakt", 18),
+            ("代表挨拶", 26),
+            ("社長挨拶", 26),
+            ("トップメッセージ", 24),
+            ("役員", 22),
             ("kurumsal", 14),
             ("leadership-team", 18),
             ("management-team", 16),
