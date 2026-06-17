@@ -420,11 +420,14 @@ def _load_input_rows(config: AppConfig, input_path: Path):
     llm = _build_llm_client(config)
     try:
         collect_company = bool(getattr(config, "collect_company_name_enabled", False))
+        collect_representative = bool(getattr(config, "extract_representative_enabled", False))
         return load_websites(
             input_path,
             website_column_picker=llm.pick_website_column,
             collect_company_name_enabled=collect_company,
             company_column_picker=llm.pick_company_name_column if collect_company else None,
+            collect_representative_enabled=collect_representative,
+            representative_column_picker=llm.pick_representative_column if collect_representative else None,
         )
     finally:
         llm.close()

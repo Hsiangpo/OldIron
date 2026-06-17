@@ -92,6 +92,14 @@ _COMPANY_HEADER_HINTS = {
 
 WebsiteColumnPicker = Callable[..., dict[str, object]]
 CompanyColumnPicker = Callable[..., dict[str, object]]
+RepresentativeColumnPicker = Callable[..., dict[str, object]]
+
+_REPRESENTATIVE_HEADER_HINTS = {
+    "representative", "representative name", "leader", "ceo", "president", "owner", "founder", "director",
+    "代表人", "代表者", "代表取締役", "社長", "責任者", "负责人", "法定代表人",
+    "responsável", "responsavel", "representante", "sócio", "socio", "diretor", "presidente",
+    "yetkili", "temsilci", "genel müdür", "genel mudur", "kurucu",
+}
 
 
 @dataclass
@@ -101,12 +109,14 @@ class ImportedWebsite:
     website: str
     dedupe_key: str
     company_name: str = ""
+    representative: str = ""
 
 
 @dataclass
 class _ImportedRawRow:
     raw_website: str
     company_name: str = ""
+    representative: str = ""
 
 
 @dataclass
@@ -194,6 +204,7 @@ def compute_rows_fingerprint(rows: list[ImportedWebsite]) -> str:
             "website": row.website,
             "dedupe_key": row.dedupe_key,
             "company_name": row.company_name,
+            "representative": row.representative,
         }
         for row in rows
     ]
@@ -206,6 +217,8 @@ def load_websites(
     website_column_picker: WebsiteColumnPicker | None = None,
     collect_company_name_enabled: bool = True,
     company_column_picker: CompanyColumnPicker | None = None,
+    collect_representative_enabled: bool = False,
+    representative_column_picker: RepresentativeColumnPicker | None = None,
 ) -> list[ImportedWebsite]:
     suffix = path.suffix.lower()
     if suffix == ".txt":
@@ -216,6 +229,8 @@ def load_websites(
             website_column_picker=website_column_picker,
             collect_company_name_enabled=collect_company_name_enabled,
             company_column_picker=company_column_picker,
+            collect_representative_enabled=collect_representative_enabled,
+            representative_column_picker=representative_column_picker,
         )
     elif suffix == ".xlsx":
         rows = _load_from_xlsx(
@@ -223,6 +238,8 @@ def load_websites(
             website_column_picker=website_column_picker,
             collect_company_name_enabled=collect_company_name_enabled,
             company_column_picker=company_column_picker,
+            collect_representative_enabled=collect_representative_enabled,
+            representative_column_picker=representative_column_picker,
         )
     else:
         raise RuntimeError(f"不支持的文件类型: {path.suffix}")
@@ -244,6 +261,8 @@ def _load_from_csv(
     website_column_picker: WebsiteColumnPicker | None = None,
     collect_company_name_enabled: bool = True,
     company_column_picker: CompanyColumnPicker | None = None,
+    collect_representative_enabled: bool = False,
+    representative_column_picker: RepresentativeColumnPicker | None = None,
 ) -> list[_ImportedRawRow]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle)
@@ -254,6 +273,8 @@ def _load_from_csv(
         website_column_picker=website_column_picker,
         collect_company_name_enabled=collect_company_name_enabled,
         company_column_picker=company_column_picker,
+        collect_representative_enabled=collect_representative_enabled,
+        representative_column_picker=representative_column_picker,
     )
 
 
@@ -263,6 +284,8 @@ def _load_from_xlsx(
     website_column_picker: WebsiteColumnPicker | None = None,
     collect_company_name_enabled: bool = True,
     company_column_picker: CompanyColumnPicker | None = None,
+    collect_representative_enabled: bool = False,
+    representative_column_picker: RepresentativeColumnPicker | None = None,
 ) -> list[_ImportedRawRow]:
     workbook = load_workbook(filename=path, read_only=True, data_only=True)
     try:
@@ -278,6 +301,8 @@ def _load_from_xlsx(
                     website_column_picker=website_column_picker,
                     collect_company_name_enabled=collect_company_name_enabled,
                     company_column_picker=company_column_picker,
+                    collect_representative_enabled=collect_representative_enabled,
+                    representative_column_picker=representative_column_picker,
                 )
             )
     finally:
@@ -292,6 +317,8 @@ def _load_from_matrix(
     website_column_picker: WebsiteColumnPicker | None = None,
     collect_company_name_enabled: bool = True,
     company_column_picker: CompanyColumnPicker | None = None,
+    collect_representative_enabled: bool = False,
+    representative_column_picker: RepresentativeColumnPicker | None = None,
 ) -> list[_ImportedRawRow]:
     if not rows:
         return []
@@ -307,7 +334,21 @@ def _load_from_matrix(
             collect_company_name_enabled=collect_company_name_enabled,
             company_column_picker=company_column_picker,
         )
-        return _load_from_column(data_rows, selection.column_index, company_column=company_index)
+        representative_index = _resolve_representative_column(
+            rows,
+            source_name=source_name,
+            website_column=selection.column_index,
+            company_column=company_index,
+            skip_header=selection.skip_header,
+            collect_representative_enabled=collect_representative_enabled,
+            representative_column_picker=representative_column_picker,
+        )
+        return _load_from_column(
+            data_rows,
+            selection.column_index,
+            company_column=company_index,
+            representative_column=representative_index,
+        )
     header_index = _find_header_index(rows[0])
     if header_index is not None:
         company_index = _resolve_company_column(
@@ -318,7 +359,21 @@ def _load_from_matrix(
             collect_company_name_enabled=collect_company_name_enabled,
             company_column_picker=company_column_picker,
         )
-        return _load_from_column(rows[1:], header_index, company_column=company_index)
+        representative_index = _resolve_representative_column(
+            rows,
+            source_name=source_name,
+            website_column=header_index,
+            company_column=company_index,
+            skip_header=True,
+            collect_representative_enabled=collect_representative_enabled,
+            representative_column_picker=representative_column_picker,
+        )
+        return _load_from_column(
+            rows[1:],
+            header_index,
+            company_column=company_index,
+            representative_column=representative_index,
+        )
     guess_index = _find_first_website_like_column(rows)
     if guess_index is None:
         return []
@@ -343,6 +398,20 @@ def _find_company_header_index(first_row: list[object], *, website_column: int) 
     return None
 
 
+def _find_representative_header_index(
+    first_row: list[object],
+    *,
+    website_column: int,
+    company_column: int | None,
+) -> int | None:
+    for index, value in enumerate(first_row):
+        if index == website_column or index == company_column:
+            continue
+        if _looks_like_representative_header(str(value or "")):
+            return index
+    return None
+
+
 def _resolve_company_column(
     rows: list[list[object]],
     *,
@@ -362,6 +431,34 @@ def _resolve_company_column(
         source_name=source_name,
         website_column=website_column,
         company_column_picker=company_column_picker,
+    )
+
+
+def _resolve_representative_column(
+    rows: list[list[object]],
+    *,
+    source_name: str,
+    website_column: int,
+    company_column: int | None,
+    skip_header: bool,
+    collect_representative_enabled: bool,
+    representative_column_picker: RepresentativeColumnPicker | None,
+) -> int | None:
+    if not collect_representative_enabled or not skip_header:
+        return None
+    representative_index = _find_representative_header_index(
+        rows[0],
+        website_column=website_column,
+        company_column=company_column,
+    )
+    if representative_index is not None:
+        return representative_index
+    return _pick_representative_column(
+        rows,
+        source_name=source_name,
+        website_column=website_column,
+        company_column=company_column,
+        representative_column_picker=representative_column_picker,
     )
 
 
@@ -391,6 +488,35 @@ def _pick_company_column(
     return selected.index
 
 
+def _pick_representative_column(
+    rows: list[list[object]],
+    *,
+    source_name: str,
+    website_column: int,
+    company_column: int | None,
+    representative_column_picker: RepresentativeColumnPicker | None,
+) -> int | None:
+    summaries, has_header = _summarize_columns(rows)
+    if not has_header or not summaries:
+        return None
+    llm_result = _call_representative_column_picker(
+        source_name=source_name,
+        summaries=summaries,
+        website_column=website_column,
+        representative_column_picker=representative_column_picker,
+    )
+    selected_index = _coerce_int(llm_result.get("selected_index"))
+    confidence = str(llm_result.get("confidence", "") or "").strip().lower()
+    if selected_index is None or selected_index in {website_column, company_column}:
+        return None
+    if confidence not in {"high", "medium"}:
+        return None
+    selected = next((summary for summary in summaries if summary.index == selected_index), None)
+    if selected is None or not _looks_like_representative_column(selected):
+        return None
+    return selected.index
+
+
 def _call_company_column_picker(
     *,
     source_name: str,
@@ -416,6 +542,31 @@ def _call_company_column_picker(
     return result if isinstance(result, dict) else {}
 
 
+def _call_representative_column_picker(
+    *,
+    source_name: str,
+    summaries: list[WebsiteColumnSummary],
+    website_column: int,
+    representative_column_picker: RepresentativeColumnPicker | None,
+) -> dict[str, object]:
+    if representative_column_picker is None or len(summaries) < 2:
+        return {}
+    columns: list[dict[str, object]] = []
+    for summary in summaries:
+        payload = summary.to_llm_payload()
+        payload["is_selected_website_column"] = summary.index == website_column
+        columns.append(payload)
+    try:
+        result = representative_column_picker(
+            source_name=source_name,
+            columns=columns,
+            website_column_index=website_column,
+        )
+    except Exception:
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
 def _looks_like_company_column(summary: WebsiteColumnSummary) -> bool:
     if summary.non_empty_count <= 0:
         return False
@@ -423,6 +574,26 @@ def _looks_like_company_column(summary: WebsiteColumnSummary) -> bool:
         return False
     lowered = str(summary.header or "").strip().lower()
     return not any(hint in lowered for hint in ("website", "url", "domain", "email", "phone", "address"))
+
+
+def _looks_like_representative_column(summary: WebsiteColumnSummary) -> bool:
+    if summary.non_empty_count <= 0:
+        return False
+    if summary.website_count > 0 or summary.social_count > 0 or summary.email_count > 0:
+        return False
+    lowered = str(summary.header or "").strip().lower()
+    blocked = ("website", "url", "domain", "email", "phone", "address", "company website")
+    if any(hint in lowered for hint in blocked):
+        return False
+    samples = [str(value or "").strip() for value in summary.sample_values if str(value or "").strip()]
+    return any(0 < len(value) <= 80 for value in samples)
+
+
+def _looks_like_representative_header(value: str) -> bool:
+    lowered = str(value or "").strip().lower()
+    if not lowered:
+        return False
+    return any(hint in lowered for hint in _REPRESENTATIVE_HEADER_HINTS)
 
 
 def _find_first_website_like_column(rows: list[list[object]]) -> int | None:
@@ -447,6 +618,7 @@ def _load_from_column(
     column: int,
     *,
     company_column: int | None = None,
+    representative_column: int | None = None,
 ) -> list[_ImportedRawRow]:
     result: list[_ImportedRawRow] = []
     for row in rows:
@@ -457,7 +629,16 @@ def _load_from_column(
             company_name = ""
             if company_column is not None and company_column < len(row):
                 company_name = str(row[company_column] or "").strip()
-            result.append(_ImportedRawRow(raw_website=text, company_name=company_name))
+            representative = ""
+            if representative_column is not None and representative_column < len(row):
+                representative = str(row[representative_column] or "").strip()
+            result.append(
+                _ImportedRawRow(
+                    raw_website=text,
+                    company_name=company_name,
+                    representative=representative,
+                )
+            )
     return result
 
 
@@ -763,6 +944,7 @@ def _dedupe_websites(rows: list[_ImportedRawRow]) -> list[ImportedWebsite]:
                 website=website,
                 dedupe_key=dedupe_key,
                 company_name=str(row.company_name or "").strip(),
+                representative=str(row.representative or "").strip(),
             )
         )
     return results

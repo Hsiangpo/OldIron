@@ -16,6 +16,7 @@ class SiteTask:
     dedupe_key: str
     retry_count: int
     company_name: str = ""
+    representative: str = ""
 
 
 @dataclass
@@ -110,6 +111,7 @@ class RuntimeStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     input_index INTEGER NOT NULL,
                     input_company_name TEXT NOT NULL DEFAULT '',
+                    input_representative TEXT NOT NULL DEFAULT '',
                     raw_website TEXT NOT NULL,
                     website TEXT NOT NULL,
                     dedupe_key TEXT NOT NULL UNIQUE,
@@ -200,6 +202,7 @@ class RuntimeStore:
         }
         additions = {
             "input_company_name": "ALTER TABLE sites ADD COLUMN input_company_name TEXT NOT NULL DEFAULT ''",
+            "input_representative": "ALTER TABLE sites ADD COLUMN input_representative TEXT NOT NULL DEFAULT ''",
             "searched_representative": "ALTER TABLE sites ADD COLUMN searched_representative TEXT NOT NULL DEFAULT ''",
             "searched_representative_evidence_url": (
                 "ALTER TABLE sites ADD COLUMN searched_representative_evidence_url TEXT NOT NULL DEFAULT ''"
@@ -242,11 +245,27 @@ class RuntimeStore:
             )
             conn.executemany(
                 """
-                INSERT INTO sites(input_index, input_company_name, raw_website, website, dedupe_key)
-                VALUES(?, ?, ?, ?, ?)
+                INSERT INTO sites(
+                    input_index,
+                    input_company_name,
+                    input_representative,
+                    raw_website,
+                    website,
+                    dedupe_key,
+                    representative
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    (row.input_index, row.company_name, row.raw_website, row.website, row.dedupe_key)
+                    (
+                        row.input_index,
+                        row.company_name,
+                        row.representative,
+                        row.raw_website,
+                        row.website,
+                        row.dedupe_key,
+                        row.representative,
+                    )
                     for row in rows
                 ],
             )
@@ -296,7 +315,7 @@ class RuntimeStore:
                     retry_count = 0,
                     last_error = '',
                     company_name = '',
-                    representative = '',
+                    representative = input_representative,
                     emails = '',
                     phones = '',
                     searched_representative = '',
@@ -389,7 +408,7 @@ class RuntimeStore:
                         retry_count = 0,
                         last_error = '',
                         company_name = '',
-                        representative = '',
+                        representative = input_representative,
                         emails = '',
                         phones = '',
                         searched_representative = '',
@@ -481,7 +500,13 @@ class RuntimeStore:
         with self._write_lock, self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, input_index, input_company_name, website, dedupe_key, retry_count
+                SELECT id,
+                       input_index,
+                       input_company_name,
+                       input_representative,
+                       website,
+                       dedupe_key,
+                       retry_count
                 FROM sites
                 WHERE status IN ('pending', 'failed_temp')
                 ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, input_index ASC
@@ -521,6 +546,7 @@ class RuntimeStore:
                 dedupe_key=str(row["dedupe_key"]),
                 retry_count=int(row["retry_count"] or 0),
                 company_name=str(row["input_company_name"] or ""),
+                representative=str(row["input_representative"] or ""),
             )
 
     def mark_done(self, site_id: int, result: SiteResult) -> bool:

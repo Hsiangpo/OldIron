@@ -107,6 +107,7 @@ class SiteProfileService:
         website: str,
         *,
         input_company_name: str = "",
+        input_representative: str = "",
         deadline_monotonic: float | None = None,
     ) -> SiteProcessingResult:
         metrics = SiteStageMetrics()
@@ -114,11 +115,10 @@ class SiteProfileService:
         collect_phone_enabled = bool(getattr(self._config, "collect_phone_enabled", True))
         collect_company_name_enabled = bool(getattr(self._config, "collect_company_name_enabled", True))
         extract_rep_enabled = bool(getattr(self._config, "extract_representative_enabled", True))
-        input_company = str(input_company_name or "").strip()
-        has_input_company = collect_company_name_enabled and bool(input_company)
-        # AI 网页提取只在「需要补公司名」或「要提代表人」时才跑；
-        # 表里已带公司名且关闭提取代表人时，这段 LLM 整体跳过。
-        need_llm_extract = extract_rep_enabled or (collect_company_name_enabled and not has_input_company)
+        input_company, input_rep = str(input_company_name or "").strip(), str(input_representative or "").strip()
+        has_input_company, has_input_rep = collect_company_name_enabled and bool(input_company), extract_rep_enabled and bool(input_rep)
+        # 表格已给出公司名或代表人时，跳过对应的 AI 网页提取。
+        need_llm_extract = (extract_rep_enabled and not has_input_rep) or (collect_company_name_enabled and not has_input_company)
         need_contact_extract = collect_email_enabled or collect_phone_enabled
         rep_target_count = _get_rep_page_limit(self._config) if need_llm_extract else 0
         search_started = time.monotonic()
@@ -265,9 +265,9 @@ class SiteProfileService:
             )
             self._store.update_stage_metrics(site_id, metrics)
             # 关闭「提取代表人」时，丢弃 AI 抽到的代表人及其证据，只保留公司名。
-            effective_representative = str(llm_result.representative or "").strip() if extract_rep_enabled else ""
-            effective_evidence_url = str(llm_result.evidence_url or "").strip() if extract_rep_enabled else ""
-            effective_evidence_quote = str(llm_result.evidence_quote or "").strip() if extract_rep_enabled else ""
+            effective_representative = _resolve_effective_representative(input_rep, str(llm_result.representative or "").strip(), extract_enabled=extract_rep_enabled)
+            effective_evidence_url = "" if has_input_rep else (str(llm_result.evidence_url or "").strip() if extract_rep_enabled else "")
+            effective_evidence_quote = "" if has_input_rep else (str(llm_result.evidence_quote or "").strip() if extract_rep_enabled else "")
             learning_feedback = build_learning_feedback(
                 representative=effective_representative,
                 evidence_url=effective_evidence_url,
@@ -619,6 +619,16 @@ def _start_active_representative_search(
         )
     except Exception:  # noqa: BLE001
         return None
+
+
+def _resolve_effective_representative(input_representative: str, llm_representative: str, *, extract_enabled: bool) -> str:
+    if not extract_enabled:
+        return ""
+    input_rep = str(input_representative or "").strip()
+    if input_rep:
+        return input_rep
+    return str(llm_representative or "").strip()
+
 
 def _finish_active_representative_search(
     future: Future | None,

@@ -326,6 +326,75 @@ def test_xlsx_loader_uses_llm_company_column_when_company_collection_enabled(tmp
     ]
 
 
+def test_xlsx_loader_uses_local_representative_column_when_enabled(tmp_path: Path) -> None:
+    path = tmp_path / "representatives.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["company_name", "representative", "website"])
+    ws.append(["Acme Ltd", "Alice Smith", "https://acme.com"])
+    ws.append(["Beta Ltd", "Bob Jones", "https://beta.co.uk"])
+    wb.save(path)
+
+    rows = load_websites(
+        path,
+        collect_company_name_enabled=True,
+        collect_representative_enabled=True,
+    )
+
+    assert [(row.company_name, row.representative, row.website) for row in rows] == [
+        ("Acme Ltd", "Alice Smith", "https://acme.com"),
+        ("Beta Ltd", "Bob Jones", "https://beta.co.uk"),
+    ]
+
+
+def test_xlsx_loader_uses_llm_representative_column_when_enabled(tmp_path: Path) -> None:
+    path = tmp_path / "representatives.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["company_name", "Main Person", "Homepage"])
+    ws.append(["Acme Ltd", "Alice Smith", "https://acme.com"])
+    ws.append(["Beta Ltd", "Bob Jones", "https://beta.co.uk"])
+    wb.save(path)
+
+    calls = 0
+
+    def fake_rep_picker(*, source_name: str, columns: list[dict[str, object]], website_column_index: int):
+        nonlocal calls
+        calls += 1
+        assert source_name.startswith("representatives.xlsx")
+        assert website_column_index == 2
+        assert any(str(column.get("header") or "") == "Main Person" for column in columns)
+        return {"selected_index": 1, "confidence": "high", "reason": "leader names"}
+
+    rows = load_websites(
+        path,
+        collect_company_name_enabled=True,
+        collect_representative_enabled=True,
+        representative_column_picker=fake_rep_picker,
+    )
+
+    assert calls == 1
+    assert [(row.company_name, row.representative, row.website) for row in rows] == [
+        ("Acme Ltd", "Alice Smith", "https://acme.com"),
+        ("Beta Ltd", "Bob Jones", "https://beta.co.uk"),
+    ]
+
+
+def test_xlsx_loader_ignores_representative_column_when_disabled(tmp_path: Path) -> None:
+    path = tmp_path / "representatives.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["company_name", "representative", "website"])
+    ws.append(["Acme Ltd", "Alice Smith", "https://acme.com"])
+    wb.save(path)
+
+    rows = load_websites(path, collect_company_name_enabled=True, collect_representative_enabled=False)
+
+    assert [(row.company_name, row.representative, row.website) for row in rows] == [
+        ("Acme Ltd", "", "https://acme.com"),
+    ]
+
+
 def test_xlsx_loader_keeps_first_data_row_when_sheet_has_no_header(tmp_path: Path) -> None:
     path = tmp_path / "headerless.xlsx"
     wb = Workbook()
@@ -366,6 +435,28 @@ def test_rows_fingerprint_uses_normalized_rows() -> None:
     right = compute_rows_fingerprint(list(rows))
 
     assert left == right
+
+
+def test_store_preserves_input_representative_on_claim(tmp_path: Path) -> None:
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    rows = [
+        ImportedWebsite(
+            input_index=1,
+            raw_website="a.com",
+            website="https://a.com",
+            dedupe_key="a.com",
+            company_name="Acme Ltd",
+            representative="Alice Smith",
+        )
+    ]
+
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    task = store.claim_next_site()
+
+    assert task is not None
+    assert task.company_name == "Acme Ltd"
+    assert task.representative == "Alice Smith"
+    store.close()
 
 
 def test_store_failed_temp_goes_queue_tail_then_drops(tmp_path: Path) -> None:
@@ -886,6 +977,90 @@ def test_site_profile_email_only_skips_representative_pages_when_company_name_gi
     assert result.result.emails == "info@acme.com"
     assert "https://acme.com/contact" in fetched_urls
     assert "https://acme.com/team" not in fetched_urls
+    store.close()
+
+
+def test_site_profile_uses_input_representative_without_rep_llm(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = RuntimeStore(tmp_path / "runtime.sqlite3")
+    rows = [
+        ImportedWebsite(
+            input_index=1,
+            raw_website="acme.com",
+            website="https://acme.com",
+            dedupe_key="acme.com",
+            representative="Alice Smith",
+        )
+    ]
+    store.prepare_job(input_name="sites.txt", fingerprint="abc", rows=rows)
+    task = store.claim_next_site()
+
+    class FakeProtocol:
+        def close(self) -> None:
+            return None
+
+    class FakeLlm:
+        def pick_representative_urls(self, **_kwargs):
+            raise AssertionError("representative page LLM should not run when input representative exists")
+
+        def extract_company_and_representative(self, **_kwargs):
+            raise AssertionError("representative extraction LLM should not run when input representative exists")
+
+    assert task is not None
+    monkeypatch.setattr("oldironcrawler.extractor.service.SiteProtocolClient", lambda _config: FakeProtocol())
+    monkeypatch.setattr(
+        "oldironcrawler.extractor.service._discover_value_snapshot",
+        lambda *_args, **_kwargs: DiscoverySnapshot(
+            urls=["https://acme.com"],
+            candidates=[],
+            rep_urls=["https://acme.com/team"],
+            teacher_pool=["https://acme.com/leadership"],
+            email_urls=[],
+            homepage_html="<html>Home</html>",
+        ),
+    )
+
+    service = SiteProfileService(
+        SimpleNamespace(
+            request_timeout_seconds=10.0,
+            proxy_url="",
+            capsolver_api_key="",
+            capsolver_api_base_url="",
+            capsolver_proxy="",
+            capsolver_poll_seconds=1.0,
+            capsolver_max_wait_seconds=5.0,
+            cloudflare_proxy_url="",
+            page_worker_count=1,
+            page_host_limit=1,
+            page_concurrency=1,
+            total_wait_seconds=180.0,
+            rep_page_limit=5,
+            email_page_soft_limit=8,
+            email_page_hard_limit=16,
+            page_total_hard_limit=20,
+            email_stop_same_domain_count=2,
+            collect_email_enabled=False,
+            collect_phone_enabled=False,
+            collect_company_name_enabled=False,
+            extract_representative_enabled=True,
+            search_representative_enabled=False,
+        ),
+        store,
+        GlobalLearningStore(tmp_path / "learning.sqlite3"),
+        FakeLlm(),
+        page_pool=None,
+    )
+
+    result = service.process(
+        task.id,
+        task.website,
+        input_company_name=task.company_name,
+        input_representative=task.representative,
+    )
+
+    assert result.result.representative == "Alice Smith"
     store.close()
 
 

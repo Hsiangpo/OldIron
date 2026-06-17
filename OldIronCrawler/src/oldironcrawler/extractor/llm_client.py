@@ -202,6 +202,19 @@ class WebsiteLlmClient:
         )
         return self._call_json(prompt, deadline_monotonic=deadline_monotonic)
 
+    def pick_representative_column(self, *, source_name: str, columns: list[dict[str, Any]], website_column_index: int, deadline_monotonic: float | None = None) -> dict[str, Any]:
+        prompt = (
+            "You are a table column classifier. Find the column containing the company's representative or top "
+            "leader name. Prefer representative/owner/founder/CEO/president/director/代表人/代表者/代表取締役/"
+            "社長/responsável/representante/yetkili. Exclude website/url/domain, social, email, phone, address, "
+            "company name and notes columns. If there is no reliable person-name column, return -1 with low "
+            "confidence.\n"
+            'Return JSON: {"selected_index":0,"confidence":"high|medium|low","reason":""}\n\n'
+            f"Source file: {source_name}\nSelected website column index: {website_column_index}\n"
+            f"Column summaries JSON: {json.dumps(columns, ensure_ascii=False)}"
+        )
+        return self._call_json(prompt, deadline_monotonic=deadline_monotonic)
+
     def pick_representative_urls(
         self,
         *,
