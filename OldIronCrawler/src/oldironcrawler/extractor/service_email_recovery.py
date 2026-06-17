@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import html
 import httpx
+import re
 import time
 from types import SimpleNamespace
+from urllib.parse import urljoin
 from urllib.parse import urlparse
 
 from oldironcrawler.extractor.discovery_fallback import _select_common_email_probe_urls
@@ -10,6 +13,7 @@ from oldironcrawler.extractor.email_rules import (
     collect_emails_for_pages,
     extract_frontend_email_asset_urls,
     extract_frontend_lazy_asset_urls,
+    extract_registrable_domain,
 )
 from oldironcrawler.extractor.page_pool import PageFetchPool
 from oldironcrawler.extractor.protocol.httpx_client import build_httpx_client_kwargs
@@ -34,6 +38,44 @@ _FRONTEND_ASSET_INITIAL_LIMIT = 3
 _FRONTEND_ASSET_TOTAL_LIMIT = 6
 _FRONTEND_ASSET_TIMEOUT_SECONDS = 4.0
 _FRONTEND_ASSET_MAX_CHARS = 600000
+_PDF_EMAIL_ASSET_INITIAL_LIMIT = 2
+_PDF_EMAIL_ASSET_TOTAL_LIMIT = 4
+_PDF_EMAIL_ASSET_TIMEOUT_SECONDS = 4.0
+_PDF_EMAIL_ASSET_MAX_BYTES = 1500000
+_PDF_EMAIL_ASSET_TEXT_LIMIT = 600000
+_PDF_EMAIL_ASSET_MIN_SCORE = 2
+_PDF_SOURCE_PAGE_FETCH_LIMIT = 2
+_PDF_LINK_RE = re.compile(r"""(?is)(?:href|src)\s*=\s*["']([^"']+\.pdf(?:\?[^"']*)?)["']""")
+_PDF_SOURCE_HINT_WEIGHTS = {
+    "canal": 2,
+    "codigo": 2,
+    "compliance": 4,
+    "conduta": 4,
+    "contato": 2,
+    "etica": 4,
+    "ethic": 4,
+    "governanca": 2,
+    "governance": 2,
+    "igualdade": 1,
+    "lgpd": 4,
+    "ouvidoria": 3,
+    "politica": 2,
+    "privacidade": 4,
+    "privacy": 4,
+}
+_PDF_URL_HINT_WEIGHTS = {
+    "canal": 2,
+    "codigo": 2,
+    "compliance": 5,
+    "conduta": 5,
+    "etica": 5,
+    "ethic": 5,
+    "lgpd": 4,
+    "ouvidoria": 3,
+    "politica": 2,
+    "privacidade": 4,
+    "privacy": 4,
+}
 
 
 def fetch_fast_common_email_pages_if_needed(
@@ -227,6 +269,36 @@ def recover_email_pages_if_needed(
     )
     if emails:
         return emails, email_sources, phones, email_rule_pages
+    emails, email_sources, email_rule_pages = recover_pdf_asset_emails_if_needed(
+        protocol,
+        website,
+        page_map,
+        metrics,
+        email_rule_pages,
+    )
+    if emails:
+        return emails, email_sources, phones, email_rule_pages
+    pdf_source_pages, pdf_source_fetch_ms = _fetch_pdf_source_pages_if_needed(
+        protocol,
+        website,
+        discovered_urls,
+        page_map,
+        page_concurrency=page_concurrency,
+        page_pool=page_pool,
+    )
+    if pdf_source_pages:
+        metrics.fetch_pages_ms += pdf_source_fetch_ms
+        _merge_pages_into_map(page_map, pdf_source_pages)
+        metrics.fetched_page_count = len(page_map)
+        emails, email_sources, email_rule_pages = recover_pdf_asset_emails_if_needed(
+            protocol,
+            website,
+            page_map,
+            metrics,
+            email_rule_pages,
+        )
+        if emails:
+            return emails, email_sources, phones, email_rule_pages
     if _should_try_common_recovery_first(website):
         return emails, email_sources, phones, email_rule_pages
     return _recover_from_common_probe_pages(
@@ -267,6 +339,34 @@ def recover_frontend_asset_emails_if_needed(
     return emails, sources, [*email_rule_pages, *recovered_pages]
 
 
+def recover_pdf_asset_emails_if_needed(
+    protocol: SiteProtocolClient,
+    website: str,
+    page_map: dict[str, object],
+    metrics: SiteStageMetrics,
+    email_rule_pages: list[tuple[str, str]],
+    *,
+    fetch_bytes_func=None,
+) -> tuple[list[str], dict[str, list[str]], list[tuple[str, str]]]:
+    started_fetch = time.monotonic()
+    pdf_pages = _fetch_pdf_email_asset_pages(
+        protocol,
+        website,
+        list(page_map.values()),
+        fetch_bytes_func=fetch_bytes_func,
+    )
+    metrics.fetch_pages_ms += int(round((time.monotonic() - started_fetch) * 1000))
+    if not pdf_pages:
+        return [], {}, email_rule_pages
+    recovered_pages = [(page.url, page.html) for page in pdf_pages]
+    started_rule = time.monotonic()
+    emails, sources = collect_emails_for_pages(website, recovered_pages)
+    metrics.email_rule_ms += int(round((time.monotonic() - started_rule) * 1000))
+    if not emails:
+        return [], {}, email_rule_pages
+    return emails, sources, [*email_rule_pages, *recovered_pages]
+
+
 def _fetch_frontend_email_asset_pages(
     protocol: SiteProtocolClient,
     source_pages: list[object],
@@ -298,6 +398,52 @@ def _fetch_frontend_email_asset_pages(
     return pages
 
 
+def _fetch_pdf_email_asset_pages(
+    protocol: SiteProtocolClient,
+    website: str,
+    source_pages: list[object],
+    *,
+    fetch_bytes_func=None,
+) -> list[HtmlPage]:
+    fetch_bytes = fetch_bytes_func or (lambda url: _fetch_pdf_asset_bytes(protocol, url))
+    pages: list[HtmlPage] = []
+    for url in _select_pdf_email_asset_urls(website, source_pages):
+        data = fetch_bytes(url)
+        if not data:
+            continue
+        text = _decode_pdf_asset_bytes(data)
+        if not text:
+            continue
+        pages.append(HtmlPage(url=url, html=text))
+    return pages
+
+
+def _fetch_pdf_source_pages_if_needed(
+    protocol: SiteProtocolClient,
+    website: str,
+    discovered_urls: list[str],
+    page_map: dict[str, object],
+    *,
+    page_concurrency: int,
+    page_pool: PageFetchPool | None,
+) -> tuple[list[HtmlPage], int]:
+    source_urls = _select_pdf_source_recovery_urls(website, discovered_urls, page_map)
+    if not source_urls:
+        return [], 0
+    started = time.monotonic()
+    try:
+        pages = protocol.fetch_pages(
+            source_urls,
+            max_workers=max(min(len(source_urls), page_concurrency, _PDF_SOURCE_PAGE_FETCH_LIMIT), 1),
+            page_pool=page_pool,
+        )
+    except Exception:  # noqa: BLE001
+        pages = []
+    elapsed_ms = int(round((time.monotonic() - started) * 1000))
+    filtered = [page for page in pages if str(getattr(page, "html", "") or "").strip()]
+    return filtered, elapsed_ms
+
+
 def _select_initial_frontend_asset_urls(source_pages: list[object]) -> list[str]:
     selected: list[str] = []
     seen: set[str] = set()
@@ -316,6 +462,61 @@ def _select_initial_frontend_asset_urls(source_pages: list[object]) -> list[str]
             if len(selected) >= _FRONTEND_ASSET_INITIAL_LIMIT:
                 return selected
     return selected
+
+
+def _select_pdf_email_asset_urls(website: str, source_pages: list[object]) -> list[str]:
+    candidates: list[tuple[int, int, str]] = []
+    seen: set[str] = set()
+    for order, page in enumerate(source_pages):
+        page_url = str(getattr(page, "url", "") or "")
+        html_text = str(getattr(page, "html", "") or "")
+        if not page_url or not html_text:
+            continue
+        source_score = _score_pdf_email_source(page_url, html_text)
+        if source_score <= 0 and ".pdf" not in html_text.lower():
+            continue
+        for raw_url in _PDF_LINK_RE.findall(html_text):
+            absolute = _normalize_pdf_asset_url(page_url, raw_url)
+            if not absolute or absolute in seen:
+                continue
+            if not _pdf_asset_matches_website(website, absolute):
+                continue
+            seen.add(absolute)
+            score = source_score + _score_pdf_email_asset_url(absolute)
+            candidates.append((score, -order, absolute))
+    candidates.sort(reverse=True)
+    selected: list[str] = []
+    for score, _order, url in candidates:
+        if score < _PDF_EMAIL_ASSET_MIN_SCORE:
+            continue
+        selected.append(url)
+        if len(selected) >= _PDF_EMAIL_ASSET_TOTAL_LIMIT:
+            break
+    return selected[:_PDF_EMAIL_ASSET_INITIAL_LIMIT] if selected else []
+
+
+def _select_pdf_source_recovery_urls(
+    website: str,
+    discovered_urls: list[str],
+    page_map: dict[str, object],
+) -> list[str]:
+    fetched_urls = {
+        _normalize_pdf_source_page_url(str(getattr(page, "url", "") or ""))
+        for page in page_map.values()
+    }
+    candidates: list[tuple[int, int, str]] = []
+    for order, url in enumerate(discovered_urls):
+        normalized = _normalize_pdf_source_page_url(url)
+        if not normalized or normalized in fetched_urls:
+            continue
+        if not _pdf_asset_matches_website(website, normalized):
+            continue
+        score = _score_pdf_email_asset_url(normalized)
+        if score < _PDF_EMAIL_ASSET_MIN_SCORE:
+            continue
+        candidates.append((score, -order, normalized))
+    candidates.sort(reverse=True)
+    return [url for _score, _order, url in candidates[:_PDF_SOURCE_PAGE_FETCH_LIMIT]]
 
 
 def _fetch_frontend_asset_text(protocol: SiteProtocolClient, url: str) -> str:
@@ -341,6 +542,96 @@ def _fetch_frontend_asset_text(protocol: SiteProtocolClient, url: str) -> str:
     if content_type and not any(token in content_type for token in ("javascript", "ecmascript", "text/plain")):
         return ""
     return str(response.text or "")[:_FRONTEND_ASSET_MAX_CHARS]
+
+
+def _fetch_pdf_asset_bytes(protocol: SiteProtocolClient, url: str) -> bytes:
+    config = getattr(protocol, "_config", None)
+    timeout_seconds = min(float(getattr(config, "timeout_seconds", 10.0) or 10.0), _PDF_EMAIL_ASSET_TIMEOUT_SECONDS)
+    default_headers = dict(getattr(config, "default_headers", {}) or {})
+    default_headers["Range"] = f"bytes=0-{_PDF_EMAIL_ASSET_MAX_BYTES - 1}"
+    proxy_url = str(getattr(config, "proxy_url", "") or "")
+    client_kwargs = build_httpx_client_kwargs(default_headers, proxy_url, timeout_seconds)
+    data = _stream_pdf_asset_bytes(client_kwargs, url, timeout_seconds)
+    if data:
+        return data
+    client_kwargs["verify"] = False
+    return _stream_pdf_asset_bytes(client_kwargs, url, timeout_seconds)
+
+
+def _stream_pdf_asset_bytes(client_kwargs: dict, url: str, timeout_seconds: float) -> bytes:
+    try:
+        with httpx.Client(**client_kwargs) as client:
+            with client.stream("GET", url, timeout=timeout_seconds) as response:
+                status_code = int(getattr(response, "status_code", 0) or 0)
+                if status_code not in {200, 206}:
+                    return b""
+                content_type = str(response.headers.get("Content-Type", "") or "").lower()
+                if "pdf" not in content_type and ".pdf" not in str(url or "").lower():
+                    return b""
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    if not chunk:
+                        continue
+                    remaining = _PDF_EMAIL_ASSET_MAX_BYTES - total
+                    if remaining <= 0:
+                        break
+                    piece = chunk[:remaining]
+                    chunks.append(piece)
+                    total += len(piece)
+                    if total >= _PDF_EMAIL_ASSET_MAX_BYTES:
+                        break
+                return b"".join(chunks)
+    except Exception:  # noqa: BLE001
+        return b""
+
+
+def _decode_pdf_asset_bytes(data: bytes) -> str:
+    if not data:
+        return ""
+    return data.decode("latin1", errors="ignore")[:_PDF_EMAIL_ASSET_TEXT_LIMIT]
+
+
+def _score_pdf_email_source(page_url: str, html_text: str) -> int:
+    combined = f"{page_url}\n{html.unescape(html_text)}".lower()
+    return _score_text_by_hint_weights(combined, _PDF_SOURCE_HINT_WEIGHTS)
+
+
+def _score_pdf_email_asset_url(url: str) -> int:
+    return _score_text_by_hint_weights(str(url or "").lower(), _PDF_URL_HINT_WEIGHTS)
+
+
+def _score_text_by_hint_weights(text: str, weights: dict[str, int]) -> int:
+    score = 0
+    lowered = str(text or "").lower()
+    for token, weight in weights.items():
+        if token in lowered:
+            score += weight
+    return score
+
+
+def _normalize_pdf_asset_url(base_url: str, raw_url: str) -> str:
+    value = html.unescape(str(raw_url or "").strip())
+    if not value or value.startswith(("data:", "javascript:", "mailto:", "tel:")):
+        return ""
+    absolute = urljoin(base_url, value)
+    parsed = urlparse(absolute)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    return parsed._replace(fragment="").geturl()
+
+
+def _normalize_pdf_source_page_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return parsed._replace(fragment="", query="").geturl()
+
+
+def _pdf_asset_matches_website(website: str, asset_url: str) -> bool:
+    site_domain = extract_registrable_domain(website)
+    asset_domain = extract_registrable_domain(asset_url)
+    return bool(site_domain and asset_domain and site_domain == asset_domain)
 
 
 def _should_try_common_recovery_first(website: str) -> bool:

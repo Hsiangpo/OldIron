@@ -3920,6 +3920,156 @@ def test_frontend_asset_recovery_fetches_lazy_js_chunks() -> None:
     )
 
 
+def test_pdf_asset_recovery_extracts_same_site_email_from_pdf_bytes() -> None:
+    page_map = {
+        "https://tutiplast.com.br/conduta-e-etica/": HtmlPage(
+            url="https://tutiplast.com.br/conduta-e-etica/",
+            html=(
+                '<html><body><a href="/wp-content/uploads/2026/03/'
+                'CE-TUTIPLAST-5.1-01-Conduta-Etica-Tutiplast-rev-12.pdf">'
+                "Codigo de etica</a></body></html>"
+            ),
+        )
+    }
+    pdf_url = (
+        "https://tutiplast.com.br/wp-content/uploads/2026/03/"
+        "CE-TUTIPLAST-5.1-01-Conduta-Etica-Tutiplast-rev-12.pdf"
+    )
+    metrics = SiteStageMetrics()
+
+    emails, sources, recovered_pages = service_email_recovery_module.recover_pdf_asset_emails_if_needed(
+        SimpleNamespace(),
+        "https://tutiplast.com.br",
+        page_map,
+        metrics,
+        [],
+        fetch_bytes_func=lambda url: (
+            b"Canal de conduta compliance@tutiplast.com.br" if url == pdf_url else b""
+        ),
+    )
+
+    assert emails == ["compliance@tutiplast.com.br"]
+    assert sources == {pdf_url: ["compliance@tutiplast.com.br"]}
+    assert recovered_pages[-1] == (pdf_url, "Canal de conduta compliance@tutiplast.com.br")
+
+
+def test_pdf_asset_recovery_ignores_offsite_pdf_links() -> None:
+    page_map = {
+        "https://tutiplast.com.br/conduta-e-etica/": HtmlPage(
+            url="https://tutiplast.com.br/conduta-e-etica/",
+            html='<html><body><a href="https://cdn.example.com/compliance.pdf">PDF</a></body></html>',
+        )
+    }
+    metrics = SiteStageMetrics()
+
+    emails, sources, recovered_pages = service_email_recovery_module.recover_pdf_asset_emails_if_needed(
+        SimpleNamespace(),
+        "https://tutiplast.com.br",
+        page_map,
+        metrics,
+        [],
+        fetch_bytes_func=lambda _url: b"partner@example.com",
+    )
+
+    assert emails == []
+    assert sources == {}
+    assert recovered_pages == []
+
+
+def test_pdf_asset_selection_skips_low_signal_report_pdfs() -> None:
+    page = HtmlPage(
+        url="https://tutiplast.com.br/esg/",
+        html='<a href="/wp-content/uploads/2026/03/relatorio-2026-igualdade-salarial.pdf">relatorio</a>',
+    )
+
+    selected = service_email_recovery_module._select_pdf_email_asset_urls(
+        "https://tutiplast.com.br",
+        [page],
+    )
+
+    assert selected == []
+
+
+def test_recover_email_pages_fetches_pdf_source_pages_before_pdf_recovery(monkeypatch) -> None:
+    conduta_url = "https://tutiplast.com.br/conduta-e-etica/"
+    page_map = {
+        "https://tutiplast.com.br/": HtmlPage(
+            url="https://tutiplast.com.br/",
+            html="<html><body>home</body></html>",
+        ),
+        "https://tutiplast.com.br/esg/": HtmlPage(
+            url="https://tutiplast.com.br/esg/",
+            html='<a href="/wp-content/uploads/2026/03/relatorio-2026-igualdade-salarial.pdf">relatorio</a>',
+        ),
+    }
+    metrics = SiteStageMetrics(fetch_pages_ms=120)
+
+    monkeypatch.setattr(
+        service_email_recovery_module,
+        "_should_try_common_recovery_first",
+        lambda _website: False,
+    )
+    monkeypatch.setattr(
+        service_email_recovery_module,
+        "_fetch_email_recovery_pages",
+        lambda *_args, **_kwargs: ([], 0),
+    )
+    monkeypatch.setattr(
+        service_email_recovery_module,
+        "recover_frontend_asset_emails_if_needed",
+        lambda _protocol, _website, _page_map, _metrics, email_rule_pages, **_kwargs: ([], {}, email_rule_pages),
+    )
+
+    def fake_fetch_pages(urls, *, max_workers, page_pool=None):
+        assert urls == [conduta_url]
+        assert max_workers == 1
+        return [HtmlPage(url=conduta_url, html='<a href="/files/conduta.pdf">pdf</a>')]
+
+    def fake_recover_pdf_asset_emails_if_needed(
+        _protocol,
+        _website,
+        current_page_map,
+        _metrics,
+        email_rule_pages,
+        **_kwargs,
+    ):
+        if conduta_url not in current_page_map:
+            return [], {}, email_rule_pages
+        return (
+            ["compliance@tutiplast.com.br"],
+            {conduta_url: ["compliance@tutiplast.com.br"]},
+            [*email_rule_pages, (conduta_url, '<a href="/files/conduta.pdf">pdf</a>')],
+        )
+
+    monkeypatch.setattr(
+        service_email_recovery_module,
+        "recover_pdf_asset_emails_if_needed",
+        fake_recover_pdf_asset_emails_if_needed,
+    )
+
+    emails, sources, phones, recovered_pages = service_email_recovery_module.recover_email_pages_if_needed(
+        SimpleNamespace(fetch_pages=fake_fetch_pages),
+        "https://tutiplast.com.br",
+        [conduta_url],
+        {"all_primary_urls": [], "email_primary_urls": [], "email_overflow_urls": [], "rep_urls": []},
+        page_map,
+        metrics,
+        [],
+        {},
+        [],
+        [],
+        page_concurrency=4,
+        page_pool=None,
+        collect_email_enabled=True,
+        collect_phone_enabled=False,
+    )
+
+    assert emails == ["compliance@tutiplast.com.br"]
+    assert sources == {conduta_url: ["compliance@tutiplast.com.br"]}
+    assert phones == []
+    assert recovered_pages[-1] == (conduta_url, '<a href="/files/conduta.pdf">pdf</a>')
+
+
 def test_email_rules_drop_site_typo_domain_and_obfuscated_noise() -> None:
     emails, _page_hits = collect_emails_for_pages(
         "https://fglp.co.uk",
