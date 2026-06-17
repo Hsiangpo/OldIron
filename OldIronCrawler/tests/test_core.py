@@ -2047,6 +2047,45 @@ def test_remaining_primary_failure_keeps_existing_open_page() -> None:
     assert elapsed_ms >= 0
 
 
+def test_remaining_primary_failure_retries_japan_email_pages_without_page_pool() -> None:
+    website = "https://www.clea-japan.com"
+    contact_url = "https://www.clea-japan.com/contact"
+    calls: list[tuple[list[str], object]] = []
+
+    class FakeProtocol:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            calls.append((list(urls), page_pool))
+            if page_pool is not None:
+                raise ProtocolTemporaryError("empty_page_batch: " + ", ".join(urls))
+            return [HtmlPage(url=contact_url, html="<html>inquiry@clea-japan.com</html>")]
+
+    service = object.__new__(SiteProfileService)
+    service._config = SimpleNamespace(page_concurrency=4, email_stop_same_domain_count=2)
+    service._page_pool = object()
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": [website],
+        "email_primary_urls": [website, contact_url],
+        "email_overflow_urls": [],
+        "all_primary_urls": [website, contact_url],
+    }
+    page_map = {
+        website: HtmlPage(url=website, html="<html>opened</html>"),
+    }
+
+    pages, elapsed_ms = service._fetch_remaining_primary_pages_if_needed(
+        FakeProtocol(),
+        website,
+        fetch_plan,
+        page_map,
+        cascade_email_primary=True,
+    )
+
+    assert [page.url for page in pages] == [contact_url]
+    assert calls == [([contact_url], service._page_pool), ([contact_url], None)]
+    assert elapsed_ms >= 0
+
+
 def test_discovery_snapshot_probes_common_paths_when_email_targets_missing() -> None:
     class FakeProtocol:
         def __init__(self) -> None:
@@ -4263,6 +4302,132 @@ def test_japan_email_recovery_fetches_news_other_page_after_slow_primary_fetch()
     assert [page.url for page in pages] == [news_url]
 
 
+def test_japan_email_recovery_fetches_shop_order_page_on_neutral_domain_after_slow_primary_fetch() -> None:
+    website = "https://www.fukujuen.com"
+    home_url = f"{website}/shop/default.aspx"
+    contact_url = f"{website}/shop/contact/contact.aspx"
+    order_url = f"{website}/shop/pages/order.aspx"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocol:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            return [
+                HtmlPage(url=order_url, html="<html>メールアドレス onlineshop@fukujuen.com</html>")
+                for url in urls
+                if url == order_url
+            ]
+
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": [home_url],
+        "email_primary_urls": [contact_url],
+        "email_overflow_urls": [],
+        "all_primary_urls": [home_url, contact_url],
+    }
+    page_map = {
+        home_url: HtmlPage(url=home_url, html="<html>home</html>"),
+        contact_url: HtmlPage(url=contact_url, html="<html>contact form</html>"),
+    }
+
+    pages, _elapsed_ms = service_discovery_module._fetch_email_recovery_pages(
+        FakeProtocol(),
+        website,
+        [home_url, contact_url, order_url],
+        fetch_plan,
+        page_map,
+        page_concurrency=4,
+        page_pool=None,
+        primary_fetch_ms=21_000,
+    )
+
+    assert fetch_calls == [[order_url]]
+    assert [page.url for page in pages] == [order_url]
+
+
+def test_japan_email_recovery_retries_selected_shop_order_page_when_not_fetched() -> None:
+    website = "https://www.fukujuen.com"
+    home_url = f"{website}/shop/default.aspx"
+    contact_url = f"{website}/shop/contact/contact.aspx"
+    order_url = f"{website}/shop/pages/order.aspx"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocol:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            return [
+                HtmlPage(url=order_url, html="<html>メールアドレス onlineshop@fukujuen.com</html>")
+                for url in urls
+                if url == order_url
+            ]
+
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": [home_url],
+        "email_primary_urls": [contact_url, order_url],
+        "email_overflow_urls": [],
+        "all_primary_urls": [home_url, contact_url, order_url],
+    }
+    page_map = {
+        home_url: HtmlPage(url=home_url, html="<html>home</html>"),
+        contact_url: HtmlPage(url=contact_url, html="<html>contact form</html>"),
+    }
+
+    pages, _elapsed_ms = service_discovery_module._fetch_email_recovery_pages(
+        FakeProtocol(),
+        website,
+        [home_url, contact_url, order_url],
+        fetch_plan,
+        page_map,
+        page_concurrency=4,
+        page_pool=None,
+        primary_fetch_ms=21_000,
+    )
+
+    assert fetch_calls == [[order_url]]
+    assert [page.url for page in pages] == [order_url]
+
+
+def test_japan_email_recovery_fetches_official_shop_pro_page_after_slow_primary_fetch() -> None:
+    website = "https://www.yokoo.co.jp"
+    shop_url = "https://mitsuse.shop-pro.jp/?mode=sk"
+    fetch_calls: list[list[str]] = []
+
+    class FakeProtocol:
+        def fetch_pages(self, urls: list[str], *, max_workers: int, page_pool=None):
+            fetch_calls.append(list(urls))
+            return [
+                HtmlPage(url=shop_url, html="<html>特定商取引法に基づく表記 shop_mituse@yokoo.co.jp</html>")
+                for url in urls
+                if url == shop_url
+            ]
+
+    fetch_plan = {
+        "rep_urls": [],
+        "homepage_primary_urls": [website],
+        "email_primary_urls": [],
+        "email_overflow_urls": [],
+        "all_primary_urls": [website],
+    }
+    page_map = {
+        website: HtmlPage(url=website, html="<html>公式オンラインショップ</html>"),
+    }
+
+    pages, _elapsed_ms = service_discovery_module._fetch_email_recovery_pages(
+        FakeProtocol(),
+        website,
+        [website, shop_url],
+        fetch_plan,
+        page_map,
+        page_concurrency=4,
+        page_pool=None,
+        primary_fetch_ms=18_000,
+    )
+
+    assert fetch_calls == [[shop_url]]
+    assert [page.url for page in pages] == [shop_url]
+
+
 def test_value_rules_split_representative_and_email_targets() -> None:
     discovered = [
         "https://example.com/about",
@@ -4638,6 +4803,16 @@ def test_japan_email_recovery_probe_includes_https_www_contact_variants_for_http
     assert "https://www.example.co.jp/contact" in japan_urls
     assert "https://www.example.co.jp/contact-company" in japan_urls
     assert "https://example.co.jp/contact" in www_input_urls
+
+
+def test_common_email_probe_prioritizes_japanese_shop_order_page_on_neutral_domain() -> None:
+    urls = discovery_fallback_module._select_common_email_probe_urls(
+        "http://www.fukujuen.com",
+        SimpleNamespace(urls=[]),
+        limit=4,
+    )
+
+    assert any("/shop/pages/order.aspx" in url for url in urls[:2])
 
 
 def test_brazil_common_probe_prioritizes_root_contato_in_first_batch() -> None:

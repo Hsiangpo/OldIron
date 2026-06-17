@@ -73,12 +73,29 @@ _JAPAN_EMAIL_RECOVERY_PHRASES = (
     ("/inquiry", 130),
     ("/mailform", 125),
     ("/site/", 120),
+    ("/shop/pages/order.aspx", 150),
+    ("/order.aspx", 140),
+    ("/tokutei", 130),
+    ("mode=sk", 145),
     ("/form", 105),
     ("/support", 70),
     ("/recruit", 55),
     ("/info/important/", 120),
     ("/info/news", 65),
     ("/news/other/", 115),
+)
+_JAPAN_NEUTRAL_EMAIL_RECOVERY_PHRASES = (
+    "/shop/pages/order.aspx",
+    "/order.aspx",
+    "/tokutei",
+    "mode=sk",
+    "/contact-company",
+    "/contact-recruit",
+    "/mailform",
+    "/otoiawase",
+    "/toiawase",
+    "/info/important/",
+    "/news/other/",
 )
 _DISCOVERY_REP_STRONG_TOKENS = {
     "board",
@@ -381,7 +398,7 @@ def _select_email_recovery_urls(
         value = str(url or "").strip()
         if not value or canonicalize_target_url(value) in blocked:
             continue
-        if not _is_same_registrable_site(website, value):
+        if not _is_recoverable_email_site(website, value):
             continue
         score = _score_email_recovery_url(website, value)
         if score > 0:
@@ -398,12 +415,7 @@ def _select_email_recovery_urls(
 
 
 def _selected_fetch_keys(fetch_plan: dict[str, list[str]], page_map: dict[str, object]) -> set[str]:
-    selected_urls = [
-        *fetch_plan["all_primary_urls"],
-        *fetch_plan["email_overflow_urls"],
-        *list(page_map.keys()),
-    ]
-    return {canonicalize_target_url(str(url or "").strip()) for url in selected_urls if str(url or "").strip()}
+    return {canonicalize_target_url(str(url or "").strip()) for url in page_map if str(url or "").strip()}
 
 
 def _is_email_recovery_scope(website: str, discovered_urls: list[str]) -> bool:
@@ -412,6 +424,8 @@ def _is_email_recovery_scope(website: str, discovered_urls: list[str]) -> bool:
         return True
     if site_domain.endswith(".jp"):
         return any(_score_japan_email_recovery_url(url) > 0 for url in discovered_urls)
+    if _has_japan_neutral_email_recovery_signal(discovered_urls):
+        return True
     return any(_score_brazil_email_recovery_url(url) > 0 for url in discovered_urls)
 
 
@@ -419,6 +433,22 @@ def _is_same_registrable_site(website: str, url: str) -> bool:
     site_domain = extract_registrable_domain(website)
     url_domain = extract_registrable_domain(url)
     return bool(site_domain and url_domain and site_domain == url_domain)
+
+
+def _is_recoverable_email_site(website: str, url: str) -> bool:
+    if _is_same_registrable_site(website, url):
+        return True
+    return _is_japan_official_shop_recovery_url(website, url)
+
+
+def _is_japan_official_shop_recovery_url(website: str, url: str) -> bool:
+    site_domain = extract_registrable_domain(website)
+    if not site_domain.endswith(".jp"):
+        return False
+    host = (urlparse(str(url or "").strip()).netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host == "shop-pro.jp" or host.endswith(".shop-pro.jp")
 
 
 def _score_brazil_email_recovery_url(url: str) -> int:
@@ -438,6 +468,8 @@ def _score_email_recovery_url(website: str, url: str) -> int:
         return _score_brazil_email_recovery_url(url)
     if site_domain.endswith(".jp"):
         return _score_japan_email_recovery_url(url)
+    if _has_japan_neutral_email_recovery_signal([url]):
+        return _score_japan_email_recovery_url(url)
     return _score_brazil_email_recovery_url(url)
 
 
@@ -453,6 +485,14 @@ def _score_japan_email_recovery_url(url: str) -> int:
         if phrase in lowered:
             score += value
     return score
+
+
+def _has_japan_neutral_email_recovery_signal(urls: list[str]) -> bool:
+    for url in urls:
+        lowered = str(url or "").strip().lower()
+        if any(phrase in lowered for phrase in _JAPAN_NEUTRAL_EMAIL_RECOVERY_PHRASES):
+            return True
+    return False
 
 
 def _is_fetchable_recovery_url(url: str) -> bool:

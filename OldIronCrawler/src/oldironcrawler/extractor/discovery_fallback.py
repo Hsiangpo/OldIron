@@ -64,6 +64,7 @@ def _select_common_email_probe_urls(website: str, snapshot: Any, *, limit: int =
     candidates = build_candidates(website, _build_common_email_probe_candidates(website, snapshot.urls), {}, {})
     ordered_urls = [
         *_build_country_root_priority_email_probe_urls(website),
+        *_build_neutral_japan_shop_priority_email_probe_urls(website),
         *_build_locale_priority_email_probe_urls(website, snapshot.urls),
         *_prioritize_discovered_locale_probe_urls(select_email_urls(candidates), snapshot.urls),
     ]
@@ -130,6 +131,32 @@ def _build_country_root_priority_email_probe_urls(website: str) -> list[str]:
         for path in paths
         for scheme, origin_host in _build_country_probe_origins(parsed.scheme, host)
     ]
+
+
+def _build_neutral_japan_shop_priority_email_probe_urls(website: str) -> list[str]:
+    parsed = urlparse(str(website or "").strip())
+    host = (parsed.netloc or "").strip().lower()
+    if not parsed.scheme or not host or _is_country_specific_probe_host(host):
+        return []
+    paths = ("/shop/pages/order.aspx", "/order.aspx", "/tokutei", "/tokutei.html")
+    origins = _build_country_probe_origins(parsed.scheme, host)
+    return [
+        parsed._replace(scheme=scheme, netloc=origin_host, path=path, query="", fragment="").geturl()
+        for path in paths
+        for scheme, origin_host in origins
+    ]
+
+
+def _is_country_specific_probe_host(host: str) -> bool:
+    clean = str(host or "").strip().lower()
+    return (
+        clean.endswith(".jp")
+        or ".co.jp" in clean
+        or clean.endswith(".br")
+        or ".com.br" in clean
+        or clean.endswith(".tr")
+        or ".com.tr" in clean
+    )
 
 
 def _build_country_probe_origins(scheme: str, host: str) -> list[tuple[str, str]]:

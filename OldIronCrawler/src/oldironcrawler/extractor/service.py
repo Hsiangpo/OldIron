@@ -4,6 +4,7 @@ from concurrent.futures import Future, TimeoutError as FutureTimeoutError, wait 
 from dataclasses import dataclass
 import threading
 import time
+from urllib.parse import urlparse
 from oldironcrawler.config import AppConfig
 from oldironcrawler.extractor.company_rules import clean_company_name_candidate, extract_company_name_fallback
 from oldironcrawler.extractor.discovery_fallback import has_non_homepage_email_target
@@ -71,6 +72,7 @@ _AI_EMAIL_SEMAPHORE_LIMIT = 0
 _AI_EMAIL_EXECUTOR_LOCK = threading.Lock()
 _AI_EMAIL_EXECUTOR: DaemonProbeExecutor | None = None
 _AI_EMAIL_EXECUTOR_LIMIT = 0
+_JAPAN_REMAINING_PRIMARY_RETRY_LIMIT = 3
 @dataclass
 class SiteProcessingResult:
     result: SiteResult
@@ -579,9 +581,15 @@ class SiteProfileService:
                 page_pool=self._page_pool,
             )
         except Exception:  # noqa: BLE001
+            elapsed_ms = int(round((time.monotonic() - started) * 1000))
             if page_map:
-                elapsed_ms = int(round((time.monotonic() - started) * 1000))
-                return [], elapsed_ms
+                retry_pages, retry_ms = _fetch_japan_remaining_primary_retry_pages(
+                    protocol,
+                    website,
+                    remaining_urls,
+                    page_concurrency=self._config.page_concurrency,
+                )
+                return retry_pages, elapsed_ms + retry_ms
             raise
 
     def _time_call(self, metrics: SiteStageMetrics, field_name: str, func):
@@ -642,6 +650,72 @@ def _remaining_deadline_seconds(deadline_monotonic: float | None) -> float | Non
     if deadline_monotonic is None:
         return None
     return max(deadline_monotonic - time.monotonic(), 0.0)
+
+
+def _fetch_japan_remaining_primary_retry_pages(
+    protocol: SiteProtocolClient,
+    website: str,
+    remaining_urls: list[str],
+    *,
+    page_concurrency: int,
+) -> tuple[list, int]:
+    retry_urls = _select_japan_remaining_primary_retry_urls(website, remaining_urls)
+    if not retry_urls:
+        return [], 0
+    started = time.monotonic()
+    try:
+        pages = protocol.fetch_pages(
+            retry_urls,
+            max_workers=min(max(page_concurrency, 1), len(retry_urls), _JAPAN_REMAINING_PRIMARY_RETRY_LIMIT),
+            page_pool=None,
+        )
+    except Exception:  # noqa: BLE001
+        return [], int(round((time.monotonic() - started) * 1000))
+    elapsed_ms = int(round((time.monotonic() - started) * 1000))
+    return [page for page in pages if str(getattr(page, "html", "") or "").strip()], elapsed_ms
+
+
+def _select_japan_remaining_primary_retry_urls(website: str, remaining_urls: list[str]) -> list[str]:
+    if not _is_japan_remaining_retry_scope(website, remaining_urls):
+        return []
+    selected: list[str] = []
+    seen: set[str] = set()
+    for url in remaining_urls:
+        value = str(url or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        selected.append(value)
+        if len(selected) >= _JAPAN_REMAINING_PRIMARY_RETRY_LIMIT:
+            break
+    return selected
+
+
+def _is_japan_website(website: str) -> bool:
+    host = (urlparse(str(website or "").strip()).netloc or "").lower()
+    return host.endswith(".jp") or ".co.jp" in host
+
+
+def _is_japan_remaining_retry_scope(website: str, remaining_urls: list[str]) -> bool:
+    if _is_japan_website(website):
+        return True
+    host = (urlparse(str(website or "").strip()).netloc or "").lower()
+    if "japan" in host or "nihon" in host or "nippon" in host:
+        return True
+    lowered_urls = " ".join(str(url or "").lower() for url in remaining_urls)
+    return any(
+        phrase in lowered_urls
+        for phrase in (
+            "/shop/pages/order.aspx",
+            "/order.aspx",
+            "/tokutei",
+            "mode=sk",
+            "/mailform",
+            "/otoiawase",
+            "/toiawase",
+        )
+    )
+
 
 def _collect_contact_details(
     website: str,
