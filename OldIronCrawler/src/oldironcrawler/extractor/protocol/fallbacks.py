@@ -43,6 +43,8 @@ def should_try_httpx_fallback(lowered_error: str) -> bool:
 def should_try_httpx_status_fallback(url: str, status_code: int, response_text: str) -> bool:
     if status_code == 202:
         return True
+    if status_code == 403:
+        return True
     if status_code != 404:
         return False
     if _is_root_like_url(url):

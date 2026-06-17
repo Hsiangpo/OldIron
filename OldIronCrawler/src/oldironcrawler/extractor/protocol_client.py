@@ -307,6 +307,16 @@ class SiteProtocolClient:
                     _raise_if_challenge_page(url, challenge_text)
                     if original_kind and challenge_text.strip():
                         return challenge_text
+                    if allow_httpx_fallback:
+                        httpx_html = self._try_httpx_status_fallback(
+                            url,
+                            status_code=status,
+                            response_text=challenge_text or original_text,
+                            timeout_seconds=request_timeout,
+                            request_deadline_monotonic=request_deadline_monotonic,
+                        )
+                        if httpx_html is not None:
+                            return httpx_html
                     raise ProtocolPermanentError(f"http_403: {url}")
                 if status in {202, 404} and allow_httpx_fallback:
                     response_text = _truncate_html(_decode_response_text(response), self._config.max_html_chars)

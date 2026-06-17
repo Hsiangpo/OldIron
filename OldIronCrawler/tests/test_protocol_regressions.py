@@ -156,6 +156,36 @@ def test_protocol_fetch_html_uses_httpx_fallback_when_curl_returns_false_404(mon
     client.close()
 
 
+def test_protocol_fetch_html_uses_httpx_fallback_when_curl_returns_false_403(monkeypatch) -> None:
+    client = SiteProtocolClient(SiteProtocolConfig())
+
+    class FakeResponse:
+        def __init__(self, status_code: int, html_text: str, content_type: str = "text/html") -> None:
+            self.status_code = status_code
+            self.headers = {"Content-Type": content_type}
+            self.text = html_text
+            self.content = html_text.encode("utf-8")
+
+        def close(self) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, _url, timeout):
+            assert timeout == 10.0
+            return FakeResponse(403, "<html><body>Forbidden</body></html>")
+
+    monkeypatch.setattr(
+        client,
+        "_fetch_httpx_snapshot",
+        lambda *_args, **_kwargs: (200, "text/html", "<html><body>real contact sales@example.com</body></html>"),
+    )
+
+    html = client._fetch_html(FakeSession(), "https://example.com/contact", required=False)
+
+    assert "real contact" in html
+    client.close()
+
+
 def test_protocol_fetch_html_follows_same_site_meta_refresh() -> None:
     client = SiteProtocolClient(SiteProtocolConfig())
     calls: list[str] = []
@@ -340,6 +370,11 @@ def test_protocol_fetch_html_marks_plain_403_as_blocked(monkeypatch) -> None:
             return FakeResponse()
 
     monkeypatch.setattr(client, "_maybe_challenge_fallback", lambda *_args, **_kwargs: "<html><body>Access denied</body></html>")
+    monkeypatch.setattr(
+        client,
+        "_fetch_httpx_snapshot",
+        lambda *_args, **_kwargs: (403, "text/html", "<html><body>Access denied</body></html>"),
+    )
 
     with pytest.raises(ProtocolPermanentError, match="http_403"):
         client._fetch_html(FakeSession(), "https://example.com", required=False)
